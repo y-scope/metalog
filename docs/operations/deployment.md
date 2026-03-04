@@ -17,7 +17,7 @@ All components run in one JVM. Suitable for development, testing, and small sing
 ./docker/start.sh -d
 
 # Or run the JVM directly against the running infrastructure
-java -jar grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar config/node.yaml
+java -jar grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar config/node.yaml
 ```
 
 In `node.yaml`:
@@ -52,7 +52,7 @@ Set `worker.numWorkers: 0` on coordinator nodes to disable in-process workers.
 The query API server runs as a separate JVM process, connecting to **read replicas** for scalability:
 
 ```bash
-java -cp "grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar:grpc-server/target/lib/*" \
+java -cp "grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar:grpc-server/target/lib/*" \
   com.yscope.metalog.query.api.server.vertx.VertxApiServer
 ```
 

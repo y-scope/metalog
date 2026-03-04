@@ -34,7 +34,7 @@ All services should report healthy status.
 mvn clean package -DskipTests
 ```
 
-Produces `grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar` (thin JAR) and all dependency JARs in `grpc-server/target/lib/`.
+Produces `grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar` (thin JAR) and all dependency JARs in `grpc-server/target/lib/`.
 
 ### 3. Run the Node (Coordinator + Workers)
 
@@ -42,10 +42,10 @@ Produces `grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar` (thin JAR) an
 
 ```bash
 # Run with default config path (/etc/clp/node.yaml)
-java -jar grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar
+java -jar grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar
 
 # Or specify a config file
-java -jar grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar config/node.yaml
+java -jar grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar config/node.yaml
 ```
 
 Expected output:
@@ -64,7 +64,7 @@ INFO  Node - Node started with 2 units
 The API server provides gRPC access to metadata.
 
 ```bash
-java -cp "grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar:grpc-server/target/lib/*" \
+java -cp "grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar:grpc-server/target/lib/*" \
   com.yscope.metalog.query.api.server.vertx.VertxApiServer
 ```
 

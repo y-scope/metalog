@@ -68,10 +68,10 @@ Prerequisites: Docker, JDK 17+, Maven 3.9+
 mvn clean package -DskipTests
 
 # Run the node (coordinator + workers in one JVM)
-java -jar grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar
+java -jar grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar
 
 # Or specify a config file
-java -jar grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar config/node.yaml
+java -jar grpc-server/target/metalog-grpc-server-0.1.0-SNAPSHOT.jar config/node.yaml
 ```
 
 See [Quickstart](docs/getting-started/quickstart.md) for detailed setup, validation, and an end-to-end tutorial.
