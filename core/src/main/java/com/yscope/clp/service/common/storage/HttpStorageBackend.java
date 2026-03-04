@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
  * use DELETE. Useful for storage systems that expose an HTTP interface (e.g., WebDAV, custom REST
  * APIs, or presigned URL endpoints).
  */
-@StorageBackendType("http")
+@StorageBackendType(value = "http", requiresBucket = false)
 public class HttpStorageBackend implements StorageBackend {
   private static final Logger logger = LoggerFactory.getLogger(HttpStorageBackend.class);
 

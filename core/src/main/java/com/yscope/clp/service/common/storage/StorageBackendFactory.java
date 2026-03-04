@@ -79,7 +79,7 @@ public class StorageBackendFactory {
                 (Class<? extends StorageBackend>) classInfo.loadClass();
 
             StorageBackendType annotation = clazz.getAnnotation(StorageBackendType.class);
-            String typeName = annotation.value().toLowerCase();
+            String typeName = annotation.value();
 
             REGISTRY.put(typeName, clazz);
             logger.debug(
@@ -264,7 +264,7 @@ public class StorageBackendFactory {
    * @return constructed StorageBackend
    */
   public static StorageBackend create(String name, String type, Map<String, Object> config) {
-    Class<? extends StorageBackend> clazz = REGISTRY.get(type.toLowerCase());
+    Class<? extends StorageBackend> clazz = REGISTRY.get(type);
     if (clazz == null) {
       throw new IllegalArgumentException(
           "Unknown backend type: '" + type + "' for " + name + ". Available: " + REGISTRY.keySet());
@@ -299,7 +299,7 @@ public class StorageBackendFactory {
    */
   static ObjectStorageBackend createObjectBackend(
       String name, S3AsyncClient client, String bucket, boolean ownsClient) {
-    Class<? extends StorageBackend> clazz = REGISTRY.get(name.toLowerCase());
+    Class<? extends StorageBackend> clazz = REGISTRY.get(name);
 
     if (clazz != null && ObjectStorageBackend.class.isAssignableFrom(clazz)) {
       try {
@@ -316,6 +316,16 @@ public class StorageBackendFactory {
 
     // Fall back to base ObjectStorageBackend for unrecognized names
     return new ObjectStorageBackend(name, client, bucket, ownsClient);
+  }
+
+  /**
+   * Look up the backend class for a given type name.
+   *
+   * @param type backend type name (case-sensitive)
+   * @return the registered class, or {@code null} if unknown
+   */
+  public static Class<? extends StorageBackend> getBackendClass(String type) {
+    return REGISTRY.get(type);
   }
 
   /** Get all registered storage backend type names. */

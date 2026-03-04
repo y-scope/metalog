@@ -30,6 +30,16 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 public @interface StorageBackendType {
-  /** The backend type name used in configuration. Case-insensitive during lookup. */
+  /** The backend type name used in configuration. Case-sensitive during lookup. */
   String value();
+
+  /**
+   * Whether this backend requires a bucket for storage operations.
+   *
+   * <p>Object-storage backends (S3, GCS, Minio) require buckets, while URL-based or filesystem
+   * backends do not. The metastore validator uses this to decide whether a null bucket is an error.
+   *
+   * <p>Defaults to {@code true} so existing object-storage backends need no change.
+   */
+  boolean requiresBucket() default true;
 }

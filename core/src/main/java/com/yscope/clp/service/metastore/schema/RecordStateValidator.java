@@ -1,6 +1,9 @@
 package com.yscope.clp.service.metastore.schema;
 
 import com.yscope.clp.service.common.Timestamps;
+import com.yscope.clp.service.common.storage.StorageBackend;
+import com.yscope.clp.service.common.storage.StorageBackendFactory;
+import com.yscope.clp.service.common.storage.StorageBackendType;
 import com.yscope.clp.service.metastore.Columns;
 import com.yscope.clp.service.metastore.model.FileRecord;
 import com.yscope.clp.service.metastore.model.FileState;
@@ -227,13 +230,8 @@ public class RecordStateValidator {
     if (isEmpty(file.getIrStorageBackend())) {
       result.addError("ir_storage_backend is required for IR states");
     }
-    // ir_bucket is required unless storage backend is "http" or "local" where bucket
-    // concept doesn't apply
-    if (isEmpty(file.getIrBucket())
-        && !"http".equals(file.getIrStorageBackend())
-        && !"local".equals(file.getIrStorageBackend())) {
-      result.addError(
-          "ir_bucket is required for IR states (except for 'http' and 'local' backends)");
+    if (isEmpty(file.getIrBucket()) && backendRequiresBucket(file.getIrStorageBackend())) {
+      result.addError("ir_bucket is required for backends that use buckets");
     } else if (!isEmpty(file.getIrBucket())) {
       validateBucketName(file.getIrBucket(), "ir_bucket", result);
     }
@@ -249,10 +247,8 @@ public class RecordStateValidator {
       result.addError("archive_storage_backend is required for Archive states");
     }
     if (isEmpty(file.getArchiveBucket())
-        && !"http".equals(file.getArchiveStorageBackend())
-        && !"local".equals(file.getArchiveStorageBackend())) {
-      result.addError(
-          "archive_bucket is required for Archive states (except for 'http' and 'local' backends)");
+        && backendRequiresBucket(file.getArchiveStorageBackend())) {
+      result.addError("archive_bucket is required for backends that use buckets");
     } else if (!isEmpty(file.getArchiveBucket())) {
       validateBucketName(file.getArchiveBucket(), "archive_bucket", result);
     }
@@ -627,6 +623,25 @@ public class RecordStateValidator {
   // ========================================================================
   // Helpers
   // ========================================================================
+
+  /**
+   * Check whether the given backend type requires a bucket.
+   *
+   * <p>Reads {@link StorageBackendType#requiresBucket()} from the annotation on the registered
+   * backend class. Unknown backend types are treated leniently (returns {@code false}) so that
+   * unregistered or third-party backends don't block ingestion.
+   */
+  private boolean backendRequiresBucket(String backendType) {
+    if (backendType == null) {
+      return true;
+    }
+    Class<? extends StorageBackend> clazz = StorageBackendFactory.getBackendClass(backendType);
+    if (clazz == null) {
+      return false;
+    }
+    StorageBackendType ann = clazz.getAnnotation(StorageBackendType.class);
+    return ann == null || ann.requiresBucket();
+  }
 
   private boolean isEmpty(String value) {
     return value == null || value.isEmpty();

@@ -21,4 +21,25 @@ class StorageBackendFactoryTest {
     assertTrue(types.contains("http"), "should contain http");
     assertEquals(5, types.size(), "should have exactly 5 built-in types");
   }
+
+  @Test
+  @DisplayName("getBackendClass returns correct class for known type")
+  void testGetBackendClass_knownType() {
+    assertEquals(HttpStorageBackend.class, StorageBackendFactory.getBackendClass("http"));
+    assertEquals(FilesystemStorageBackend.class, StorageBackendFactory.getBackendClass("local"));
+    assertEquals(S3StorageBackend.class, StorageBackendFactory.getBackendClass("s3"));
+  }
+
+  @Test
+  @DisplayName("getBackendClass returns null for unknown type")
+  void testGetBackendClass_unknownType() {
+    assertNull(StorageBackendFactory.getBackendClass("unknown"));
+  }
+
+  @Test
+  @DisplayName("getBackendClass is case-sensitive")
+  void testGetBackendClass_caseSensitive() {
+    assertNull(StorageBackendFactory.getBackendClass("HTTP"));
+    assertNull(StorageBackendFactory.getBackendClass("Local"));
+  }
 }

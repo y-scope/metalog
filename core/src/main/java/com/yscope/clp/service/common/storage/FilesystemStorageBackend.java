@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
  * <p>Maps object keys to files under a base directory. The base path serves as the namespace
  * (analogous to a bucket in object storage).
  */
-@StorageBackendType("local")
+@StorageBackendType(value = "local", requiresBucket = false)
 public class FilesystemStorageBackend implements StorageBackend {
   private static final Logger logger = LoggerFactory.getLogger(FilesystemStorageBackend.class);
 

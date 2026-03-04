@@ -915,6 +915,62 @@ class RecordStateValidatorTest {
   @DisplayName("Backend Exemptions")
   class BackendExemptions {
 
+    @Test
+    @DisplayName("http backend with empty ir_bucket passes (annotation-driven)")
+    void httpBackend_emptyIrBucket_passes() {
+      FileRecord file = createValidIrClosedFile();
+      file.setIrStorageBackend("http");
+      file.setIrBucket(null);
+
+      ValidationResult result = validator.validate(file);
+      assertTrue(result.isValid(), "Expected valid but got: " + result);
+    }
+
+    @Test
+    @DisplayName("local backend with empty ir_bucket passes (annotation-driven)")
+    void localBackend_emptyIrBucket_passes() {
+      FileRecord file = createValidIrClosedFile();
+      file.setIrStorageBackend("local");
+      file.setIrBucket(null);
+
+      ValidationResult result = validator.validate(file);
+      assertTrue(result.isValid(), "Expected valid but got: " + result);
+    }
+
+    @Test
+    @DisplayName("s3 backend with empty bucket fails")
+    void s3Backend_emptyBucket_fails() {
+      FileRecord file = createValidIrClosedFile();
+      file.setIrStorageBackend("s3");
+      file.setIrBucket(null);
+
+      ValidationResult result = validator.validate(file);
+      assertFalse(result.isValid());
+      assertTrue(
+          result.getErrors().stream().anyMatch(e -> e.contains("ir_bucket is required")));
+    }
+
+    @Test
+    @DisplayName("unknown backend with empty bucket passes (lenient)")
+    void unknownBackend_emptyBucket_passes() {
+      FileRecord file = createValidIrClosedFile();
+      file.setIrStorageBackend("unknown-future-backend");
+      file.setIrBucket(null);
+
+      ValidationResult result = validator.validate(file);
+      assertTrue(result.isValid(), "Expected valid but got: " + result);
+    }
+
+    @Test
+    @DisplayName("http archive backend with empty bucket passes")
+    void httpArchiveBackend_emptyBucket_passes() {
+      FileRecord file = createValidArchiveClosedFile();
+      file.setArchiveStorageBackend("http");
+      file.setArchiveBucket(null);
+
+      ValidationResult result = validator.validate(file);
+      assertTrue(result.isValid(), "Expected valid but got: " + result);
+    }
   }
 
   // ========================================================================
