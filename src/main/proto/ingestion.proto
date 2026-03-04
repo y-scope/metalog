@@ -1,0 +1,173 @@
+syntax = "proto3";
+package com.yscope.clp.service.coordinator.grpc;
+option java_multiple_files = true;
+option java_package = "com.yscope.clp.service.coordinator.grpc.proto";
+
+// ---------------------------------------------------------------------------
+// Dimension types
+// ---------------------------------------------------------------------------
+
+// A string dimension value with a maximum column width hint.
+//
+// max_length tells the coordinator the maximum number of characters this field
+// will ever contain. The coordinator uses this to size the VARCHAR column
+// (e.g. max_length=64 → VARCHAR(64)). Values exceeding 255 characters trigger
+// a rate-limited warning and are silently truncated. Expanding beyond 255
+// requires a table-rebuild via the promotion API.
+//
+// If max_length is 0 (unset), the coordinator defaults to 255.
+message StringDimension {
+  string value      = 1;
+  int32  max_length = 2;
+}
+
+// Typed value for a single dimension entry.
+message DimensionValue {
+  oneof value {
+    StringDimension str       = 1;  // VARCHAR(N) ascii_bin — faster index scans
+    StringDimension str_utf8  = 2;  // VARCHAR(N) utf8mb4_bin — use when Unicode is needed
+    int64           int_val   = 3;
+    bool            bool_val  = 4;
+    double          float_val = 5;
+  }
+}
+
+// A single dimension (grouping / filtering column).
+message DimEntry {
+  string         key   = 1;
+  DimensionValue value = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation types
+// ---------------------------------------------------------------------------
+
+// Predicate applied when updating an aggregate column.
+// EQ (0) is the proto3 default — suitable for storing an exact scalar value.
+enum AggType {
+  EQ  = 0;
+  GTE = 1;
+  GT  = 2;
+  LTE = 3;
+  LT  = 4;
+  SUM = 5;
+  AVG = 6;
+  MIN = 7;
+  MAX = 8;
+}
+
+// A single aggregation entry.
+//
+// field and qualifier together identify the logical metric — the coordinator
+// maps them to a physical column via the agg registry. The producer never
+// needs to know the database column name.
+//
+// Example — log-level counts:
+//   field="level", qualifier="debug", agg_type=GTE, int_val=N
+//   → "N records at log level debug or above"
+message AggEntry {
+  string  field     = 1;
+  string  qualifier = 2;
+  AggType agg_type  = 3;
+  oneof value {
+    int64  int_val   = 4;
+    double float_val = 5;
+  }
+  // If set, this agg maps to an existing physical column rather than allocating
+  // a new placeholder. The coordinator calls registerAggAlias() on first receipt,
+  // writing to the column directly (e.g., alias_column="record_count").
+  string alias_column = 6;
+}
+
+// ---------------------------------------------------------------------------
+// File fields
+// ---------------------------------------------------------------------------
+
+// IR file storage location. Absent (null message) = archive-only entry.
+message IrFileInfo {
+  string clp_ir_storage_backend = 1;
+  string clp_ir_bucket          = 2;
+  string clp_ir_path            = 3;
+  int64  clp_ir_size_bytes      = 4;
+}
+
+// Archive file storage location. Absent (null message) = not yet consolidated.
+message ArchiveFileInfo {
+  string clp_archive_storage_backend = 1;
+  string clp_archive_bucket          = 2;
+  string clp_archive_path            = 3;
+  int64  clp_archive_created_at      = 4;  // Epoch nanoseconds
+  int64  clp_archive_size_bytes      = 5;
+}
+
+// Core fixed fields that every metadata record carries.
+// Timestamps are epoch nanoseconds (not seconds).
+message FileFields {
+  string          state          = 1;
+  int64           min_timestamp  = 2;  // Earliest event epoch nanoseconds
+  int64           max_timestamp  = 3;  // Latest event epoch nanoseconds
+  int64           raw_size_bytes = 4;
+  int32           record_count   = 5;
+  IrFileInfo      ir             = 6;  // Absent = archive-only entry
+  ArchiveFileInfo archive        = 7;  // Absent = not yet consolidated
+  int32           retention_days = 8;
+  int64           expires_at     = 9;  // Expiry epoch nanoseconds
+}
+
+// ---------------------------------------------------------------------------
+// Self-describing key-value escape hatch
+// ---------------------------------------------------------------------------
+
+// A key-value pair where the key encodes field type and metadata. Use for
+// producers that cannot use the structured dim / agg fields. New producers
+// should prefer dim and agg.
+//
+// KEY CONVENTIONS  (separator is "/"; field names must not contain "/")
+// ─────────────────────────────────────────────────────────────────────
+// Dimension keys  (value is the field value as a string):
+//   dim/str{N}/{field}       — ASCII  VARCHAR(N)  e.g. dim/str64/application_id
+//   dim/str{N}utf8/{field}   — UTF-8  VARCHAR(N)  e.g. dim/str128utf8/user_name
+//   dim/int/{field}          — int64              e.g. dim/int/shard_id
+//   dim/bool/{field}         — boolean            e.g. dim/bool/is_retry
+//   dim/float/{field}        — float64            e.g. dim/float/sample_rate
+//
+// Aggregation keys  (value is a numeric string):
+//   agg_int/{agg_type}/{field}              — int64, no qualifier
+//   agg_int/{agg_type}/{field}/{qualifier}  — int64, with qualifier
+//   agg_float/{agg_type}/{field}            — float64, no qualifier
+//   agg_float/{agg_type}/{field}/{qualifier} — float64, with qualifier
+//   agg_type is one of: eq gte gt lte lt sum avg min max  (lowercase)
+//
+//   e.g. agg_int/eq/record_count
+//        agg_int/gte/level/debug
+//        agg_float/avg/latency/p99
+message SelfDescribingEntry {
+  string key   = 1;
+  string value = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Top-level record and RPC messages
+// ---------------------------------------------------------------------------
+
+// A single metadata record describing one IR or archive file.
+message MetadataRecord {
+  FileFields                   file               = 1;
+  repeated AggEntry            agg                = 2;
+  repeated DimEntry            dim                = 3;
+  repeated SelfDescribingEntry self_describing_kv = 4;
+}
+
+message IngestRequest {
+  string         table_name = 1;
+  MetadataRecord record     = 2;
+}
+
+message IngestResponse {
+  bool   accepted = 1;
+  string error    = 2;
+}
+
+service MetadataIngestionService {
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+}

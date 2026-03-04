@@ -1,0 +1,5 @@
+target/
+tools/bin/
+dependency-reduced-pom.xml
+*.deb
+.env

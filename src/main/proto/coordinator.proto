@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package com.yscope.clp.service.coordinator.grpc;
+
+option java_package = "com.yscope.clp.service.coordinator.grpc.proto";
+option java_multiple_files = true;
+
+// Coordinator management service.
+//
+// Allows operators to register new Kafka-ingested tables at runtime without
+// editing node.yaml or restarting the node. All RPCs are idempotent.
+service CoordinatorService {
+  rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+}
+
+message KafkaConfig {
+  string topic             = 1; // required
+  string bootstrap_servers = 2; // required
+  string record_transformer = 3; // optional — empty means "default"
+}
+
+message RegisterTableRequest {
+  string      table_name              = 1; // required
+  string      display_name            = 2; // optional — defaults to table_name
+  KafkaConfig kafka                   = 3; // required
+  optional bool  kafka_poller_enabled     = 4;
+  optional bool  consolidation_enabled    = 5;
+  optional bool  schema_evolution_enabled = 6;
+  optional int32 loop_interval_ms         = 7;
+}
+
+message RegisterTableResponse {
+  string table_name = 1;
+  bool   created    = 2; // true = newly provisioned; false = already existed (idempotent)
+}

@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package com.yscope.clp.service.query.api.proto.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.yscope.clp.service.query.api.proto.grpc";
+option java_outer_classname = "ClpMetadataSchemaProto";
+
+import "splits.proto";
+
+// Schema introspection service.
+//
+// Allows clients to discover available tables, dimensions, aggregates, and sketches
+// without prior knowledge of the schema. All responses use resolved logical names
+// (e.g., "service", "host", "level") — internal placeholder columns are never exposed.
+service MetadataService {
+
+    // List all metadata tables.
+    rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+
+    // List active dimension fields for a table.
+    rpc ListDimensions(ListDimensionsRequest) returns (ListDimensionsResponse);
+
+    // List active aggregate fields for a table.
+    rpc ListAggs(ListAggsRequest) returns (ListAggsResponse);
+
+    // List active sketch fields for a table.
+    rpc ListSketches(ListSketchesRequest) returns (ListSketchesResponse);
+}
+
+// --- ListTables ---
+
+message ListTablesRequest {}
+
+message ListTablesResponse {
+    repeated string tables = 1;
+}
+
+// --- ListDimensions ---
+
+message ListDimensionsRequest {
+    string table = 1;
+}
+
+message ListDimensionsResponse {
+    repeated DimensionInfo dimensions = 1;
+}
+
+// Dimension field metadata.
+message DimensionInfo {
+    // Logical field name (e.g., "service", "host")
+    string name = 1;
+
+    // Base type: str, str_utf8, bool, int, float
+    string type = 2;
+
+    // VARCHAR width (string types only, 0 for non-string types)
+    int32 width = 3;
+
+    // If non-empty, this dim aliases an existing column (e.g., "clp_ir_storage_backend")
+    string alias_column = 4;
+}
+
+// --- ListAggs ---
+
+message ListAggsRequest {
+    string table = 1;
+}
+
+message ListAggsResponse {
+    repeated AggInfo aggs = 1;
+}
+
+// AggregationType is defined in splits.proto (shared enum).
+
+enum AggValueType {
+    AGG_VALUE_TYPE_UNSPECIFIED = 0;  // proto3 default
+    AGG_VALUE_TYPE_INT   = 1;
+    AGG_VALUE_TYPE_FLOAT = 2;
+}
+
+// Aggregate field metadata.
+message AggInfo {
+    // Aggregate key (e.g., "level")
+    string name = 1;
+
+    // Value qualifier (e.g., "warn", "error", "fatal")
+    string value = 2;
+
+    // Aggregation type (EQ, GTE, GT, LTE, LT, SUM, AVG, MIN, MAX)
+    AggregationType aggregation_type = 3;
+
+    // Value type (INT or FLOAT)
+    AggValueType value_type = 4;
+
+    // If non-empty, this agg aliases an existing column (e.g., "record_count")
+    string alias_column = 5;
+}
+
+// --- ListSketches ---
+
+message ListSketchesRequest {
+    string table = 1;
+}
+
+message ListSketchesResponse {
+    repeated SketchInfo sketches = 1;
+}
+
+// Sketch field metadata.
+message SketchInfo {
+    // Logical field name (e.g., "user_id", "trace_id")
+    string name = 1;
+}
