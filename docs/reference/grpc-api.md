@@ -306,6 +306,7 @@ Expressions are validated against a whitelist:
 - Range: `BETWEEN x AND y`
 - Set: `IN (v1, v2, ...)`
 - Null: `IS NULL`, `IS NOT NULL`
+- Pattern: `LIKE`, `NOT LIKE`
 - Grouping: `(...)`
 
 Semicolons are rejected. Unknown column names cause `INVALID_ARGUMENT`.

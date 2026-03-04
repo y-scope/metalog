@@ -214,7 +214,7 @@ mvn test -Dtest=SparkJobPolicyTest
 | Module | Description |
 |--------|-------------|
 | `core` | Server logic — metastore, coordinator, query engine, worker, storage |
-| `grpc-server` | gRPC entry point and shaded fat JAR for standalone deployment |
+| `grpc-server` | gRPC entry point; thin JAR deployed alongside `lib/` directory |
 | `kafka-ingestion` | Kafka consumer for metadata ingestion |
 | `benchmarks` | Performance benchmarks |
 
@@ -254,7 +254,7 @@ If the host application has its own gRPC server, depend on `metalog-core` direct
 
 ### Shaded dependencies
 
-The shaded jar relocates jOOQ, JSqlParser, and javax.xml.bind under `com.yscope.metalog.shaded.*` to avoid classpath conflicts with host application versions. All other dependencies (Kafka, Protobuf, gRPC, Jackson, SLF4J, Netty, AWS SDK, etc.) are not relocated and use the host's versions.
+The `metalog-core` artifact shades and relocates jOOQ, JSqlParser, and javax.xml.bind under `com.yscope.metalog.shaded.*` to avoid classpath conflicts with host application versions. All other dependencies (Kafka, Protobuf, gRPC, Jackson, SLF4J, Netty, AWS SDK, etc.) are not relocated and use the host's versions.
 
 ## License
 

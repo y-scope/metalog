@@ -71,7 +71,7 @@ services:
     command:
       - java
       - -cp
-      - /app/metalog.jar
+      - /app/metalog.jar:/app/lib/*
       - com.yscope.metalog.query.api.server.vertx.VertxApiServer
     ports:
       - "50051:50051"

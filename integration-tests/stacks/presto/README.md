@@ -88,7 +88,7 @@ grpcurl -plaintext \
   -d '{
     "table": "clp_cockroachdb",
     "order_by": [{"column": "max_timestamp", "order": "DESC"}],
-    "filter_expression": "__DIMENSION.zone = '\''us-east-1a'\''"
+    "filter_expression": "__DIM.zone = '\''us-east-1a'\''"
   }' \
   localhost:50051 \
   com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits

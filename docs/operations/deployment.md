@@ -52,7 +52,7 @@ Set `worker.numWorkers: 0` on coordinator nodes to disable in-process workers.
 The query API server runs as a separate JVM process, connecting to **read replicas** for scalability:
 
 ```bash
-java -cp grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar \
+java -cp "grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar:grpc-server/target/lib/*" \
   com.yscope.metalog.query.api.server.vertx.VertxApiServer
 ```
 
@@ -200,7 +200,7 @@ services:
 
   api-server:
     image: metalog:latest
-    entrypoint: ["java", "-cp", "/app/metalog.jar",
+    entrypoint: ["java", "-cp", "/app/metalog.jar:/app/lib/*",
                  "com.yscope.metalog.query.api.server.vertx.VertxApiServer"]
     environment:
       API_GRPC_PORT: "9090"
@@ -210,7 +210,7 @@ services:
 
   worker:
     image: metalog:latest
-    entrypoint: ["java", "-cp", "/app/metalog.jar",
+    entrypoint: ["java", "-cp", "/app/metalog.jar:/app/lib/*",
                  "com.yscope.metalog.worker.Worker"]
     environment:
       DB_HOST: mariadb
