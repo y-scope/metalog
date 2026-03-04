@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN pip install --no-cache-dir grpcio grpcio-tools
+COPY core/src/main/proto/ingestion.proto /app/proto/
+RUN mkdir -p /app/generated && \
+    python -m grpc_tools.protoc -I/app/proto --python_out=/app/generated \
+      --grpc_python_out=/app/generated ingestion.proto
+COPY integration-tests/stacks/presto/scripts/load_test_data.py /app/
+ENV PYTHONPATH=/app/generated
+CMD ["python", "/app/load_test_data.py"]
