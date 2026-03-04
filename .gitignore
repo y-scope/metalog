@@ -1,0 +1,20 @@
+# Go
+bin/
+/metalog-server
+/metalog-worker
+/metalog-apiserver
+/benchmark-*
+*.exe
+
+# Java (legacy)
+target/
+dependency-reduced-pom.xml
+
+# Build
+*.deb
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
