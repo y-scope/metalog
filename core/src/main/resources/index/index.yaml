@@ -1,0 +1,58 @@
+# Dynamic Index Configuration
+# Hot-reload supported: Changes to this file are automatically detected and applied.
+#
+# Index creation uses online DDL (ALGORITHM=INPLACE, LOCK=NONE) for minimal disruption.
+# Protected indexes (PRIMARY, idx_consolidation, idx_expiration) cannot be dropped.
+#
+# Index Types:
+#   - BTREE (default): General-purpose, good for equality and range queries
+#   - HASH: Fast equality lookups only
+#   - FULLTEXT: For text search (not commonly used in this schema)
+
+indexes:
+  # Index on application_id for Spark job queries
+  # Disabled by default - enable after ColumnRegistry creates the column
+  - name: idx_dim_application_id
+    columns:
+      - dim/str128/application_id
+    enabled: false
+    unique: false
+    type: BTREE
+
+  # Index on service_name for microservices queries
+  # Disabled by default - enable if using TimeWindowPolicy with service grouping
+  - name: idx_dim_service_name
+    columns:
+      - dim/str128/service_name
+    enabled: false
+    unique: false
+    type: BTREE
+
+  # Composite index for time-range queries on specific applications
+  # Useful for querying files by app within a time range
+  - name: idx_app_time_range
+    columns:
+      - dim/str128/application_id
+      - min_timestamp
+    enabled: false
+    unique: false
+    type: BTREE
+
+  # Index on host for host-based queries
+  # Disabled by default - enable if querying by host frequently
+  - name: idx_dim_host
+    columns:
+      - dim/str128/host
+    enabled: false
+    unique: false
+    type: BTREE
+
+  # Composite index for state + timestamp queries
+  # Useful for finding pending files in time order
+  - name: idx_state_timestamp
+    columns:
+      - state
+      - min_timestamp
+    enabled: false
+    unique: false
+    type: BTREE

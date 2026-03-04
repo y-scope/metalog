@@ -1,0 +1,107 @@
+# Node configuration
+#
+# This file contains node-level settings: identity, database connection,
+# and storage client. Coordinator and worker configuration lives in the
+# database (coordinator and coordinator_assignment tables).
+#
+# See README.md for setup instructions.
+
+node:
+  # Node display name (for logging)
+  name: coordinator-node-1
+
+  # Environment variable to read for node_id (used in _table_assignment.node_id).
+  # Default: HOSTNAME (set automatically in Docker containers).
+  # Override for your platform, e.g. UBER_INSTANCE_ID.
+  nodeIdEnvVar: HOSTNAME
+
+  # Shared database connection pool
+  # All units share this pool to minimize database connections
+  database:
+    host: localhost
+    port: 3306
+    database: metalog_metastore
+    user: root
+    password: ""
+    poolSize: 20        # Total connections shared across all units
+    poolMinIdle: 5
+    connectionTimeout: 30000
+    idleTimeout: 600000
+
+  # Shared storage client
+  # Thread-safe S3 client used by all units
+  storage:
+    defaultBackend: minio
+    backends:
+      minio:
+        endpoint: http://localhost:9000
+        accessKey: minioadmin
+        secretKey: minioadmin
+        forcePathStyle: true
+
+  # HA strategy: "heartbeat" (default) or "lease"
+  # - heartbeat: Separate _node_registry heartbeat; peers detect dead nodes.
+  # - lease: Per-table lease_expiry on _table_assignment; self-expiring ownership.
+  # coordinatorHaStrategy: heartbeat
+  # leaseTtlSeconds: 180
+  # leaseRenewalIntervalSeconds: 30
+
+  # Ingestion batching settings (per path).
+  # Each path has its own BatchingWriter with independent queue and flush settings.
+  # ingestion:
+  #   kafka:
+  #     recordsPerBatch: 500     # records per submit (batch size from Kafka poll)
+  #     maxQueuedRecords: 5000   # max records buffered per table
+  #     flushTimeoutMs: 1000     # flush partial batch after this many ms
+  #   grpc:
+  #     recordsPerBatch: 1       # one record per gRPC request
+  #     maxQueuedRecords: 5000
+  #     flushTimeoutMs: 1000
+
+  # Health check HTTP server
+  health:
+    enabled: true
+    port: 8081
+
+  # Unified gRPC server configuration (used by ServerMain in grpc-server module).
+  # NodeMain (headless) ignores this — it runs no gRPC servers.
+  # grpc:
+  #   enabled: true
+  #   port: 9090
+  #   services:
+  #     ingestion: true   # MetadataIngestionService — receive metadata from Spark/producers
+  #     query: true       # QuerySplitsService — stream file splits with filtering
+  #     catalog: true     # MetadataService — list tables, dimensions, aggregations
+  #     admin: true       # CoordinatorService — runtime table registration
+
+# Declarative table registration (optional).
+# Tables listed here are auto-UPSERTed on startup. Only specified fields
+# are updated; omitted fields keep their DB defaults or existing values.
+# tables:
+#   - name: clp_spark                  # required
+#     displayName: Spark Logs           # optional, defaults to name
+#     kafka:                            # optional — omit for gRPC-only tables
+#       topic: spark-ir                 # required
+#       bootstrapServers: kafka:29092   # optional, DB default: localhost:9092
+#       recordTransformer: spark        # optional
+#     # All feature flags below are optional. Omitted = use DB default.
+#     # kafkaPollerEnabled: true
+#     # consolidationEnabled: true
+#     # schemaEvolutionEnabled: false
+#     # loopIntervalMs: 5000
+
+# Shared worker pool configuration
+# Workers claim tasks from _task_queue across all tables
+worker:
+  numWorkers: 0    # 0 = no workers (coordinator-only node)
+  # prefetchQueueSize: 5    # tasks held in-memory; one DB batch-claim per refill (default: 5)
+  # Optional: separate database for workers (e.g., read replica).
+  # If omitted, workers use node.database.
+  # database:
+  #   host: replica-db
+  #   port: 3306
+  #   database: metalog_metastore
+  #   user: reader
+  #   password: reader-secret
+  #   poolSize: 10
+  #   poolMinIdle: 2
