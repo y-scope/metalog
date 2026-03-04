@@ -150,7 +150,7 @@ For the full system design — data lifecycle, end-to-end data flow, and deploym
 - **Daily partitioning** — automatic partition creation/merge with configurable lookahead
 - **Pluggable record transformers** — normalize different Kafka producer schemas at ingestion time
 - **Multi-backend storage** — MinIO/S3-compatible object storage with configurable backends
-- **Declarative table registration** — define tables in YAML, auto-UPSERTed to the registry on startup
+- **Declarative table registration** — define tables in YAML, auto-UPSERTed to the registry on startup and hot-reloaded on config file change
 
 ## Documentation
 
@@ -194,7 +194,7 @@ For the full system design — data lifecycle, end-to-end data flow, and deploym
 
 ## Configuration
 
-Configuration is split between `node.yaml` (node-level settings) and the database (per-table config). Tables can be declared in YAML for automatic registration on startup. See [Configuration Reference](docs/reference/configuration.md) for the full reference.
+Configuration is split between `node.yaml` (node-level settings) and the database (per-table config). Tables can be declared in YAML for automatic registration on startup and hot-reloaded when the config file changes. See [Configuration Reference](docs/reference/configuration.md) for the full reference.
 
 ## Building & Testing
 

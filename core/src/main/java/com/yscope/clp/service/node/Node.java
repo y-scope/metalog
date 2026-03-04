@@ -451,6 +451,7 @@ public class Node implements AutoCloseable {
     startReconciliationThread();
     startPartitionMaintenanceThread();
     startWatchdogThread();
+    startConfigWatcher();
 
     // Start health check server (if enabled)
     NodeConfig.HealthConfig healthConfig = config.getNode().getHealth();
@@ -670,6 +671,26 @@ public class Node implements AutoCloseable {
    *   <li>If stalled again within recurrence window: releases the assignment
    * </ol>
    */
+  private void startConfigWatcher() {
+    if (yamlConfig == null) {
+      logger.debug("No YamlConfigLoader available, config hot-reload disabled");
+      return;
+    }
+    yamlConfig.startWatching((oldConfig, newConfig) -> {
+      List<NodeConfig.TableDefinition> newTables = newConfig.getTables();
+      if (newTables == null || newTables.isEmpty()) {
+        logger.info("Config reloaded but no tables defined, skipping upsert");
+        return;
+      }
+      try {
+        CoordinatorRegistry.upsertTables(sharedResources.getDataSource(), newTables);
+        logger.info("Hot-reloaded {} table definition(s) from config", newTables.size());
+      } catch (Exception e) {
+        logger.error("Failed to upsert tables from reloaded config", e);
+      }
+    });
+  }
+
   private void startWatchdogThread() {
     watchdogExecutor =
         Executors.newSingleThreadScheduledExecutor(
