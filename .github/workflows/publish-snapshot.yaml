@@ -39,5 +39,5 @@ jobs:
       - name: "Publish SNAPSHOT to Sonatype"
         run: "mvn --batch-mode deploy -DskipTests"
         env:
-          MAVEN_USERNAME: "${{secrets.OSSRH_USERNAME}}"
-          MAVEN_PASSWORD: "${{secrets.OSSRH_TOKEN}}"
+          MAVEN_USERNAME: "${{secrets.SONATYPE_USERNAME}}"
+          MAVEN_PASSWORD: "${{secrets.SONATYPE_TOKEN}}"
