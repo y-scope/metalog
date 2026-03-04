@@ -1,0 +1,72 @@
+# Aggregation Policy Configuration
+# Hot-reload supported: Changes to this file are automatically detected and applied.
+#
+# Policy Types:
+#   - spark: Groups by application_id, triggers on job completion or timeout
+#   - timeWindow: Groups by dimension + time bucket, triggers on window close
+#   - audit: No grouping, triggers on size threshold or timeout (immutable compression)
+#
+# Archive Path Patterns:
+#   - spark: /clp-archives/spark/YYYY-MM-DD/{app-id}[-partN].clp
+#   - timeWindow: /clp-archives/{dim-value}/YYYY-MM-DD/HH-mm[-partN].clp
+#   - audit: /clp-archives/audit/YYYY-MM-DD/{timestamp}-{uuid}[-partN].clp
+
+policies:
+  # Spark Job Policy - Primary policy for Spark workloads
+  - name: spark-jobs
+    type: spark
+    enabled: true
+    groupingKey: dim/str128/application_id
+    triggers:
+      # Trigger when job appears complete (minimum files from executors)
+      jobComplete:
+        minFiles: 3
+      # Fallback trigger if job completion is not detected
+      timeout:
+        hours: 4
+    archiveSize:
+      targetMb: 64
+      maxMb: 128
+    compressionRatio:
+      initial: 3.0
+      learningRate: 0.1
+
+  # Time Window Policy - For microservices logs
+  # Disabled by default - enable if needed
+  - name: microservices
+    type: timeWindow
+    enabled: false
+    groupingKey: dim/str128/service_name
+    triggers:
+      timeWindow:
+        intervalMinutes: 15
+        alignToWallClock: true
+      timeout:
+        hours: 1
+    archiveSize:
+      targetMb: 64
+      maxMb: 128
+    compressionRatio:
+      initial: 3.0
+      learningRate: 0.1
+
+  # Audit Policy - For security/compliance logs
+  # Disabled by default - enable if needed
+  - name: audit-logs
+    type: audit
+    enabled: false
+    triggers:
+      # Trigger when accumulated size exceeds threshold
+      sizeThreshold:
+        minBytes: 10485760  # 10MB
+      # Fallback trigger for low-volume periods
+      timeout:
+        hours: 24
+    archiveSize:
+      targetMb: 64
+      maxMb: 128
+    compressionRatio:
+      # Immutable ratio - no learning for audit logs
+      initial: 3.0
+      learningRate: 0.0
+    immutable: true
