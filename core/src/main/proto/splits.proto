@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+package com.yscope.clp.service.query.api.proto.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.yscope.clp.service.query.api.proto.grpc";
+option java_outer_classname = "ClpMetadataProto";
+
+// Sort direction for a single ORDER BY field.
+enum Order {
+    ORDER_UNSPECIFIED = 0;  // proto3 default — rejected at the service layer
+    ORDER_ASC  = 1;
+    ORDER_DESC = 2;
+}
+
+// A single column + direction in an ORDER BY clause.
+message OrderBy {
+    // Column name (e.g., "max_timestamp", "record_count", "min_timestamp").
+    // "id" is not allowed — it is always appended as the implicit final tiebreaker (ORDER_ASC).
+    string column = 1;
+    Order  order  = 2;
+}
+
+// A typed value in a keyset pagination cursor. Exactly one of the fields must be set.
+message CursorValue {
+    oneof value {
+        int64  int_val   = 1;
+        double float_val = 2;
+        string str_val   = 3;
+    }
+}
+
+// Query Service with streaming support.
+//
+// Results are streamed as they become available, allowing clients to:
+// - Receive results incrementally without waiting for full query completion
+// - Cancel the stream when sufficient results are received
+// - Handle backpressure naturally via gRPC flow control
+service QuerySplitsService {
+
+    // Stream split results from the database.
+    //
+    // Each row is streamed to the client as it is read. The stream completes when:
+    // - N results have been streamed (limit reached)
+    // - All matching splits have been scanned
+    // - Client cancels the stream
+    rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse);
+}
+
+// Streaming query request with keyset pagination.
+// See docs/architecture/pk-keyset-pagination.md for design rationale.
+message StreamSplitsRequest {
+    // Target table name (e.g., "clp_spark")
+    string table = 1;
+
+    // Maximum number of results to return to the client.
+    // 0 (default): stream all matching results (until client cancels or data exhausted).
+    // N > 0: return at most N results, then complete.
+    int32 limit = 2;
+
+    // Columns to select from the metadata table. Empty list = all columns (default).
+    //
+    // Each entry is a projection term. Multiple terms are unioned together:
+    //   "*"                  — all columns (explicit wildcard)
+    //   "__FILE.*"           — all file-level scalar columns
+    //   "__FILE.<col>"       — one specific file column (e.g., "__FILE.min_timestamp")
+    //   "__DIM.*"            — all registered dimension columns
+    //   "__DIM.<key>"        — one specific dimension (e.g., "__DIM.service.name")
+    //   "__AGG.*"            — all registered aggregate columns
+    //   "__AGG_<TYPE>.*"     — all aggregates of the given type (EQ, GTE, GT, LTE, LT, SUM, AVG, MIN, MAX)
+    //   "__AGG_<TYPE>.<key>" — one specific aggregate without value qualifier
+    //   "__AGG_<TYPE>.<key>.<value>" — one specific aggregate with value qualifier
+    //
+    // When a wildcard and a specific term appear for the same group (e.g., ["__DIM.*", "__DIM.zone"]),
+    // the wildcard wins silently. Unrecognised terms return INVALID_ARGUMENT.
+    repeated string projection = 4;
+
+    // State filter values (e.g., "IR_ARCHIVE_BUFFERING")
+    repeated string state_filter = 11;
+
+    // WHERE clause predicate for split pruning and dimension filtering.
+    // (e.g., "min_ts <= 1679976000 AND max_ts >= 1679711330")
+    // Empty string means no additional filtering.
+    // Validated via JSqlParser AST whitelist before SQL concatenation.
+    string filter_expression = 12;
+
+    // Optional continuation token from a previous stream.
+    // If provided, iteration resumes from the position after this cursor.
+    // cursor.values must have the same number of entries as order_by.
+    KeysetCursor cursor = 13;
+
+    // Required. Sort order for results. Must have at least one entry.
+    // "id" must not appear — it is always the implicit final tiebreaker (ORDER_ASC).
+    // Example: [{column: "max_timestamp", order: ORDER_DESC}]
+    repeated OrderBy order_by = 14;
+
+    // If true, each streamed response includes a continuation cursor.
+    // Default false — cursors are omitted to reduce per-row overhead.
+    bool include_cursor = 15;
+
+    // Maximum time (ms) the server will wait for the client's receive buffer to
+    // drain when it is full (i.e. when gRPC flow control signals not-ready).
+    // This is NOT a total request timeout — a slow-but-steady consumer never
+    // triggers it. It only fires if the client is completely stuck (frozen,
+    // crashed, or network-partitioned) for this duration continuously.
+    // 0 (default): use the server-configured default.
+    int64 stream_idle_timeout_ms = 16;
+
+    // If true, allow sorting on columns that have no dedicated index (e.g., record_count,
+    // dimension columns, agg columns). Causes a full table scan on every paginated batch.
+    // Default false — the server rejects unindexed sort columns to prevent accidental scans.
+    // Indexed columns: min_timestamp (PRIMARY KEY forward scan), max_timestamp (idx_max_timestamp).
+    bool allow_unindexed_sort = 17;
+}
+
+// Single result streamed to client.
+message StreamSplitsResponse {
+    // The split/file metadata
+    Split split = 1;
+
+    // Sequence number (1-based, for ordering verification)
+    int32 sequence = 2;
+
+    // Current execution stats (updated periodically)
+    QueryStats stats = 3;
+
+    // True if this is the last message in the stream
+    bool done = 4;
+
+    // Continuation token for this row.
+    // Only present when include_cursor=true was set in the request.
+    // Pass this back in a new request's cursor field to resume iteration from this point.
+    KeysetCursor cursor = 5;
+}
+
+// Split/file metadata.
+message Split {
+    // Unique identifier
+    int64 id = 1;
+
+    // Path to CLP IR file in object storage
+    string clp_ir_path = 2;
+
+    // Path to CLP archive (empty if not yet consolidated)
+    string clp_archive_path = 3;
+
+    // Minimum timestamp in the split (epoch nanoseconds)
+    int64 min_timestamp = 4;
+
+    // Maximum timestamp in the split (epoch nanoseconds)
+    int64 max_timestamp = 5;
+
+    // Lifecycle state (e.g., "IR_ARCHIVE_BUFFERING", "ARCHIVE_CLOSED")
+    string state = 6;
+
+    // Dimension values
+    map<string, string> dimensions = 7;
+
+    // Pre-computed aggregate values
+    repeated AggEntry aggs = 8;
+
+    // Number of log records in the split
+    int64 record_count = 9;
+
+    // Size of CLP IR file in bytes
+    int64 size_bytes = 10;
+
+    // Storage backend for CLP IR file (e.g., "s3")
+    string clp_ir_storage_backend = 11;
+
+    // Bucket/container for CLP IR file
+    string clp_ir_bucket = 12;
+
+    // Storage backend for CLP archive (e.g., "s3")
+    string clp_archive_storage_backend = 13;
+
+    // Bucket/container for CLP archive
+    string clp_archive_bucket = 14;
+}
+
+// Keyset pagination cursor.
+// Encodes the position of a row in the sort order so iteration can resume from there.
+message KeysetCursor {
+    // One typed value per order_by field, in the same order as order_by.
+    // "id" is NOT included here — it is always the final tiebreaker.
+    repeated CursorValue values = 1;
+
+    // Row id — always the final tiebreaker.
+    int64 id = 2;
+}
+
+enum AggregationType {
+    AGGREGATION_TYPE_UNSPECIFIED = 0;  // proto3 requires first value for default
+    AGGREGATION_TYPE_EQ  = 1;
+    AGGREGATION_TYPE_GTE = 2;
+    AGGREGATION_TYPE_GT  = 3;
+    AGGREGATION_TYPE_LTE = 4;
+    AGGREGATION_TYPE_LT  = 5;
+    AGGREGATION_TYPE_SUM = 6;
+    AGGREGATION_TYPE_AVG = 7;
+    AGGREGATION_TYPE_MIN = 8;
+    AGGREGATION_TYPE_MAX = 9;
+}
+
+// A single pre-computed aggregate entry with its metadata.
+message AggEntry {
+    // Aggregate key (e.g., "level")
+    string key = 1;
+
+    // Value qualifier (e.g., "warn", "error", "fatal"); empty if no qualifier
+    string value = 2;
+
+    // Aggregation type (EQ, GTE, GT, LTE, LT, SUM, AVG, MIN, MAX)
+    AggregationType aggregation_type = 3;
+
+    // The aggregate result — int or float depending on the agg's value type
+    oneof result {
+        int64  int_value   = 4;
+        double float_value = 5;
+    }
+}
+
+// Query execution statistics.
+message QueryStats {
+    // Total splits examined from database
+    int64 splits_scanned = 1;
+
+    // Splits that matched filters
+    int64 splits_matched = 2;
+}
