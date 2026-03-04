@@ -1,0 +1,70 @@
+# Coordinator node configuration for docker-compose.
+#
+# nodeId is resolved from the HOSTNAME env var (set automatically by Docker
+# to the container ID). Override nodeIdEnvVar for other platforms.
+# Database host uses the 'db' network alias — both MySQL and MariaDB register this alias.
+
+node:
+  name: coordinator-node
+
+  # Environment variable to read for node_id (used in _table_assignment.node_id).
+  # Default: HOSTNAME (set automatically in Docker containers).
+  nodeIdEnvVar: HOSTNAME
+
+  database:
+    host: db
+    port: 3306
+    database: clp_metastore
+    user: root
+    password: password
+    poolSize: 20
+    poolMinIdle: 5
+
+  storage:
+    irBucket: logs
+    archiveBucket: logs
+    clpBinaryPath: /usr/bin/clp-s
+    clpProcessTimeoutSeconds: 300
+    defaultBackend: minio
+    backends:
+      minio:
+        endpoint: http://minio:9000
+        accessKey: minioadmin
+        secretKey: minioadmin
+        forcePathStyle: true
+
+  health:
+    enabled: true
+    port: 8081
+
+  # How often to check for new/unassigned tables (seconds).
+  # Default: 60. Set lower for faster testing.
+  reconciliationIntervalSeconds: 5
+
+  # gRPC ingestion endpoint (concurrent with Kafka).
+  # grpcIngestion:
+  #   enabled: false
+  #   port: 9091
+
+# Declarative table registration.
+# Tables listed here are auto-UPSERTed on startup. Only specified fields
+# are updated; omitted fields keep their DB defaults or existing values.
+tables:
+  - name: clp_spark
+    displayName: Spark Logs
+    kafka:
+      topic: spark-ir
+      bootstrapServers: kafka:29092
+
+worker:
+  numWorkers: 4
+  # Optional: separate database for workers (e.g., read replica).
+  # If omitted, workers use node.database.
+  # database:
+  #   host: replica-db
+  #   port: 3306
+  #   database: clp_metastore
+  #   user: reader
+  #   password: reader-secret
+  #   poolSize: 10
+  #   poolMinIdle: 2
