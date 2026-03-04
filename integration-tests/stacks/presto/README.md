@@ -69,19 +69,19 @@ grpcurl -plaintext localhost:50051 list
 
 # List available tables
 grpcurl -plaintext localhost:50051 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListTables
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListTables
 
 # List dimensions for the test table
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb"}' \
   localhost:50051 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListDimensions
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListDimensions
 
 # Stream all splits, newest first
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb", "order_by": [{"column": "max_timestamp", "order": "DESC"}]}' \
   localhost:50051 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 
 # Filter by zone dimension
 grpcurl -plaintext \
@@ -91,7 +91,7 @@ grpcurl -plaintext \
     "filter_expression": "__DIMENSION.zone = '\''us-east-1a'\''"
   }' \
   localhost:50051 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 The final message in each stream has `done: true` and a `stats` field with

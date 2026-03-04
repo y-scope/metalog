@@ -16,7 +16,7 @@ grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "kafka": {"topic": "spark-ir", "bootstrap_servers": "kafka:29092"}
 }' localhost:9090 \
-  com.yscope.clp.service.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
 
 # Second call — idempotent
@@ -42,7 +42,7 @@ grpcurl -plaintext -d '{
   "schema_evolution_enabled": true,
   "loop_interval_ms": 5000
 }' localhost:9090 \
-  com.yscope.clp.service.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 ```
 
 > **Note:** `deletion_enabled` and `retention_cleanup_enabled` are not exposed by the `RegisterTable` RPC and must be set directly via SQL on `_table_config` if needed.

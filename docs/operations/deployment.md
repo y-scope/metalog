@@ -53,7 +53,7 @@ The query API server runs as a separate JVM process, connecting to **read replic
 
 ```bash
 java -cp grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar \
-  com.yscope.clp.service.query.api.server.vertx.VertxApiServer
+  com.yscope.metalog.query.api.server.vertx.VertxApiServer
 ```
 
 Configure via environment variables (see [Configuration Reference](../reference/configuration.md#api-server-configuration)):
@@ -201,7 +201,7 @@ services:
   api-server:
     image: metalog:latest
     entrypoint: ["java", "-cp", "/app/metalog.jar",
-                 "com.yscope.clp.service.query.api.server.vertx.VertxApiServer"]
+                 "com.yscope.metalog.query.api.server.vertx.VertxApiServer"]
     environment:
       API_GRPC_PORT: "9090"
       DB_JDBC_URL: "jdbc:mariadb://mariadb:3306/metalog_metastore"
@@ -211,7 +211,7 @@ services:
   worker:
     image: metalog:latest
     entrypoint: ["java", "-cp", "/app/metalog.jar",
-                 "com.yscope.clp.service.worker.Worker"]
+                 "com.yscope.metalog.worker.Worker"]
     environment:
       DB_HOST: mariadb
       WORKER_TABLE_NAME: clp_spark

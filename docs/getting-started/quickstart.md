@@ -65,7 +65,7 @@ The API server provides gRPC access to metadata.
 
 ```bash
 java -cp grpc-server/target/metalog-grpc-server-1.0-SNAPSHOT.jar \
-  com.yscope.clp.service.query.api.server.vertx.VertxApiServer
+  com.yscope.metalog.query.api.server.vertx.VertxApiServer
 ```
 
 Expected output:

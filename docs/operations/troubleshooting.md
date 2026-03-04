@@ -292,7 +292,7 @@ The daily partition for the file's `min_timestamp` does not exist. Causes:
 
 ```bash
 grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListDimensions
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListDimensions
 ```
 
 ### `RuntimeException: Query failed: Lock wait timeout exceeded`

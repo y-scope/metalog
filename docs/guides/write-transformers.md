@@ -80,16 +80,16 @@ tables:
 Extend `AbstractRecordTransformer` and override `transform()`. The base class provides typed helpers for dimensions and aggregations. For legacy format support with a conforming-first fast path:
 
 ```java
-package com.yscope.clp.service.coordinator.ingestion.record.transformers;
+package com.yscope.metalog.coordinator.ingestion.record.transformers;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.yscope.clp.service.coordinator.ingestion.record.AbstractRecordTransformer;
-import com.yscope.clp.service.coordinator.ingestion.record.RecordTransformer;
-import com.yscope.clp.service.coordinator.ingestion.record.TransformerName;
-import com.yscope.clp.service.metastore.model.FileRecord;
-import com.yscope.clp.service.metastore.model.FileState;
+import com.yscope.metalog.coordinator.ingestion.record.AbstractRecordTransformer;
+import com.yscope.metalog.coordinator.ingestion.record.RecordTransformer;
+import com.yscope.metalog.coordinator.ingestion.record.TransformerName;
+import com.yscope.metalog.metastore.model.FileRecord;
+import com.yscope.metalog.metastore.model.FileState;
 
 @TransformerName("my-source")
 public class MySourceRecordTransformer extends AbstractRecordTransformer {

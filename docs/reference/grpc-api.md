@@ -47,10 +47,10 @@ All protocols share the same Query Service — each is a thin adapter over Vert.
 
 | Service | Proto File | Package | Default Port | Purpose |
 |---------|-----------|---------|:---:|---------|
-| `QuerySplitsService` | `splits.proto` | `com.yscope.clp.service.query.api.proto.grpc` | 9090 | Stream split metadata with keyset pagination |
-| `MetadataService` | `metadata.proto` | `com.yscope.clp.service.query.api.proto.grpc` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
-| `MetadataIngestionService` | `ingestion.proto` | `com.yscope.clp.service.coordinator.grpc` | 9091 | Ingest metadata records via gRPC (alternative to Kafka; disabled by default) |
-| `CoordinatorService` | `coordinator.proto` | `com.yscope.clp.service.coordinator.grpc` | 9090 | Runtime table registration (no restart required) |
+| `QuerySplitsService` | `splits.proto` | `com.yscope.metalog.query.api.proto.grpc` | 9090 | Stream split metadata with keyset pagination |
+| `MetadataService` | `metadata.proto` | `com.yscope.metalog.query.api.proto.grpc` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
+| `MetadataIngestionService` | `ingestion.proto` | `com.yscope.metalog.coordinator.grpc` | 9091 | Ingest metadata records via gRPC (alternative to Kafka; disabled by default) |
+| `CoordinatorService` | `coordinator.proto` | `com.yscope.metalog.coordinator.grpc` | 9090 | Runtime table registration (no restart required) |
 
 ### Proto Definitions
 
@@ -366,7 +366,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.*"]
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 
 # Only timestamps
 grpcurl -plaintext -d '{
@@ -374,7 +374,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.min_timestamp", "__FILE.max_timestamp"]
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 
 # All dims plus timestamps
 grpcurl -plaintext -d '{
@@ -382,7 +382,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.min_timestamp", "__FILE.max_timestamp", "__DIM.*"]
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 
 # Only MAX aggregates
 grpcurl -plaintext -d '{
@@ -390,7 +390,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__AGG_MAX.*"]
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ---
@@ -450,7 +450,7 @@ grpcurl -plaintext -d '{
   "state_filter": ["ARCHIVE_CLOSED"],
   "order_by": [{"column": "max_timestamp", "order": "DESC"}]
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ### Resume from a cursor (next page)
@@ -463,7 +463,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "cursor": {"values": [{"int_val": 1704067200}], "id": 42}
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ### Filter by time range and dimension
@@ -474,7 +474,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "filter_expression": "min_timestamp <= 1679976000 AND max_timestamp >= 1679711330 AND __DIM.zone = '\''us-east-1a'\''"
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ### Filter by aggregate threshold
@@ -485,7 +485,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "filter_expression": "__AGG_GTE.level.warn > 1000"
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ### Stream from oldest to newest with cursor enabled
@@ -497,7 +497,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "min_timestamp", "order": "ASC"}],
   "include_cursor": true
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ### Multi-column unindexed sort (allow_unindexed_sort required)
@@ -512,7 +512,7 @@ grpcurl -plaintext -d '{
   ],
   "allow_unindexed_sort": true
 }' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
 ```
 
 ---
@@ -526,19 +526,19 @@ responses use resolved logical names; physical placeholder column names (`dim_f0
 ```bash
 # List tables
 grpcurl -plaintext -d '{}' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListTables
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListTables
 
 # List dimensions for a table
 grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListDimensions
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListDimensions
 
 # List aggregates for a table
 grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListAggs
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListAggs
 
 # List sketch fields for a table
 grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
-  com.yscope.clp.service.query.api.proto.grpc.MetadataService/ListSketches
+  com.yscope.metalog.query.api.proto.grpc.MetadataService/ListSketches
 ```
 
 ---
@@ -609,7 +609,7 @@ grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "kafka": {"topic": "spark-ir", "bootstrap_servers": "kafka:29092"}
 }' localhost:9090 \
-  com.yscope.clp.service.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
 
 # Second call — idempotent
@@ -628,7 +628,7 @@ grpcurl -plaintext -d '{
   "schema_evolution_enabled": true,
   "loop_interval_ms": 5000
 }' localhost:9090 \
-  com.yscope.clp.service.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 ```
 
 #### Error codes
@@ -661,7 +661,7 @@ See [Configuration Reference: API Server Configuration](configuration.md#api-ser
 ```
 src/
 ├── main/
-│   ├── java/com/yscope/clp/service/query/
+│   ├── java/com/yscope/metalog/query/
 │   │   ├── api/
 │   │   │   ├── ApiServerConfig.java       — env-var based config
 │   │   │   └── server/vertx/

@@ -352,7 +352,7 @@ worker:
     env["TABLE_NAME"] = "clp_spark"
     subprocess.run(
         ["java", "-cp", CLASSPATH,
-         "com.yscope.clp.service.tools.benchmark.GrpcBenchmarkProducer",
+         "com.yscope.metalog.tools.benchmark.GrpcBenchmarkProducer",
          "--records", str(args.records),
          "--apps", str(args.apps),
          "--concurrency", str(args.concurrency),

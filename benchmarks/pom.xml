@@ -42,6 +42,12 @@
             <artifactId>HikariCP</artifactId>
         </dependency>
 
+        <!-- jOOQ (optional in core, needed here for DSLContextFactory in TaskQueueBenchmark) -->
+        <dependency>
+            <groupId>org.jooq</groupId>
+            <artifactId>jooq</artifactId>
+        </dependency>
+
         <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>

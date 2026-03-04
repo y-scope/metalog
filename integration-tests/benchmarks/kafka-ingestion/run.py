@@ -371,7 +371,7 @@ worker:
     env["KAFKA_BOOTSTRAP_SERVERS"] = f"localhost:{kafka_port}"
     subprocess.run(
         ["java", "-cp", CLASSPATH,
-         "com.yscope.clp.service.tools.benchmark.BenchmarkProducer",
+         "com.yscope.metalog.tools.benchmark.BenchmarkProducer",
          "--records", str(args.records),
          "--apps", str(args.apps),
          "--batch-size", "1000",

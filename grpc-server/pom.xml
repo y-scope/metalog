@@ -92,47 +92,35 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
             </plugin>
 
-            <!-- Shaded JAR with all dependencies -->
+            <!-- Thin JAR: set Main-Class and Class-Path in the manifest -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.yscope.metalog.node.ServerMain</mainClass>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+
+            <!-- Copy runtime dependencies into target/lib/ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
                 <executions>
                     <execution>
+                        <id>copy-dependencies</id>
                         <phase>package</phase>
                         <goals>
-                            <goal>shade</goal>
+                            <goal>copy-dependencies</goal>
                         </goals>
                         <configuration>
-                            <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>com.yscope.clp.service.node.ServerMain</mainClass>
-                                </transformer>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                            </transformers>
-                            <relocations>
-                                <relocation>
-                                    <pattern>org.jooq</pattern>
-                                    <shadedPattern>com.yscope.metalog.shaded.org.jooq</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>javax.xml.bind</pattern>
-                                    <shadedPattern>com.yscope.metalog.shaded.javax.xml.bind</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>net.sf.jsqlparser</pattern>
-                                    <shadedPattern>com.yscope.metalog.shaded.net.sf.jsqlparser</shadedPattern>
-                                </relocation>
-                            </relocations>
-                            <filters>
-                                <filter>
-                                    <artifact>*:*</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
                         </configuration>
                     </execution>
                 </executions>

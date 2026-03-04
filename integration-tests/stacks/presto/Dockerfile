@@ -15,3 +15,4 @@ RUN mvn clean package -DskipTests -pl grpc-server -am
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /build/grpc-server/target/metalog-grpc-server-*.jar /app/metalog.jar
+COPY --from=build /build/grpc-server/target/lib/ /app/lib/

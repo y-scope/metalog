@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package com.yscope.clp.service.query.api.proto.grpc;
+package com.yscope.metalog.query.api.proto.grpc;
 
 option java_multiple_files = true;
-option java_package = "com.yscope.clp.service.query.api.proto.grpc";
+option java_package = "com.yscope.metalog.query.api.proto.grpc";
 option java_outer_classname = "ClpMetadataProto";
 
 // Sort direction for a single ORDER BY field.

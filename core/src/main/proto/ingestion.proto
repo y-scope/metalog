@@ -1,7 +1,7 @@
 syntax = "proto3";
-package com.yscope.clp.service.coordinator.grpc;
+package com.yscope.metalog.coordinator.grpc;
 option java_multiple_files = true;
-option java_package = "com.yscope.clp.service.coordinator.grpc.proto";
+option java_package = "com.yscope.metalog.coordinator.grpc.proto";
 
 // ---------------------------------------------------------------------------
 // Dimension types

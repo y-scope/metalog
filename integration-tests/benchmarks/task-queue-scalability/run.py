@@ -203,7 +203,7 @@ def main():
             f"-Dtables={args.tables}",
             f"-DjitterMaxMs={args.jitter}",
             "-cp", CLASSPATH,
-            "com.yscope.clp.service.tools.benchmark.TaskQueueScalabilityBenchmark",
+            "com.yscope.metalog.tools.benchmark.TaskQueueScalabilityBenchmark",
         ],
         env=env,
     )

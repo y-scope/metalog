@@ -31,8 +31,9 @@ RUN apt-get update \
 # Create staging/output dirs for CLP compression
 RUN mkdir -p /tmp/clp-staging /tmp/clp-output
 
-# Copy fat JAR from build stage
+# Copy thin JAR and dependency libraries from build stage
 COPY --from=build /build/grpc-server/target/metalog-grpc-server-*.jar /app/metalog.jar
+COPY --from=build /build/grpc-server/target/lib/ /app/lib/
 
 # Default config path (mount or override via CLI arg)
 ENTRYPOINT ["java", "-jar", "/app/metalog.jar"]
