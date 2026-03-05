@@ -1,5 +1,6 @@
 package com.yscope.metalog.grpc.server;
 
+import com.yscope.metalog.coordinator.TableRegistrationService;
 import com.yscope.metalog.coordinator.ingestion.IngestionService;
 import com.yscope.metalog.grpc.server.services.CoordinatorGrpcService;
 import com.yscope.metalog.grpc.server.services.IngestionGrpcService;
@@ -54,7 +55,7 @@ public class GrpcServer {
    *     disabled)
    * @param timeoutConfig timeout settings for streaming RPCs
    * @param streamingConfig streaming settings (page size, etc.)
-   * @param dataSource shared datasource for admin service
+   * @param registrationService table registration service (may be null if admin disabled)
    * @param ingestionService ingestion service (may be null if ingestion disabled)
    */
   public GrpcServer(
@@ -62,7 +63,7 @@ public class GrpcServer {
       QueryService queryService,
       ApiServerConfig.TimeoutConfig timeoutConfig,
       ApiServerConfig.StreamingConfig streamingConfig,
-      DataSource dataSource,
+      TableRegistrationService registrationService,
       IngestionService ingestionService) {
     this.port = grpcConfig.getPort();
 
@@ -93,8 +94,8 @@ public class GrpcServer {
     }
 
     // Admin service — runtime table registration
-    if (grpcConfig.isAdminEnabled()) {
-      builder.addService(new CoordinatorGrpcService(dataSource));
+    if (grpcConfig.isAdminEnabled() && registrationService != null) {
+      builder.addService(new CoordinatorGrpcService(registrationService));
       enabledServices.add("admin");
     }
 

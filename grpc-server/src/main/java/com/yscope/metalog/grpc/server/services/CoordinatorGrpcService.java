@@ -1,20 +1,15 @@
 package com.yscope.metalog.grpc.server.services;
 
+import com.yscope.metalog.coordinator.TableRegistrationService;
+import com.yscope.metalog.coordinator.TableRegistrationService.RegistrationResult;
 import com.yscope.metalog.coordinator.grpc.proto.CoordinatorServiceGrpc;
 import com.yscope.metalog.coordinator.grpc.proto.KafkaConfig;
 import com.yscope.metalog.coordinator.grpc.proto.RegisterTableRequest;
 import com.yscope.metalog.coordinator.grpc.proto.RegisterTableResponse;
-import com.yscope.metalog.metastore.schema.TableProvisioner;
-import com.yscope.metalog.node.CoordinatorRegistry;
 import com.yscope.metalog.node.NodeConfig;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.List;
-import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,17 +34,17 @@ public class CoordinatorGrpcService extends CoordinatorServiceGrpc.CoordinatorSe
 
   private static final Logger LOG = LoggerFactory.getLogger(CoordinatorGrpcService.class);
 
-  private final DataSource dataSource;
+  private final TableRegistrationService registrationService;
 
-  public CoordinatorGrpcService(DataSource dataSource) {
-    this.dataSource = dataSource;
+  public CoordinatorGrpcService(TableRegistrationService registrationService) {
+    this.registrationService = registrationService;
   }
 
   @Override
   public void registerTable(
       RegisterTableRequest request, StreamObserver<RegisterTableResponse> responseObserver) {
     try {
-      // 1. Validate
+      // Validate proto fields
       if (request.getTableName().isBlank()) {
         responseObserver.onError(
             Status.INVALID_ARGUMENT.withDescription("table_name is required").asRuntimeException());
@@ -78,25 +73,14 @@ public class CoordinatorGrpcService extends CoordinatorServiceGrpc.CoordinatorSe
         return;
       }
 
-      String tableName = request.getTableName();
-
-      // 2. Check pre-existence (before provisioning so `created` reflects true new-ness)
-      boolean alreadyExists = tableExists(tableName);
-
-      // 3. Convert proto → NodeConfig.TableDefinition
+      // Convert proto → domain, delegate to core service
       NodeConfig.TableDefinition def = toTableDefinition(request);
+      RegistrationResult result = registrationService.register(def);
 
-      // 4. Write registry rows (idempotent via INSERT IGNORE / ON DUPLICATE KEY UPDATE)
-      CoordinatorRegistry.upsertTables(dataSource, List.of(def));
-
-      // 5. Provision physical table (no-op if already exists)
-      TableProvisioner.ensureTable(dataSource, tableName);
-
-      // 6. Return response
       responseObserver.onNext(
           RegisterTableResponse.newBuilder()
-              .setTableName(tableName)
-              .setCreated(!alreadyExists)
+              .setTableName(result.tableName())
+              .setCreated(result.created())
               .build());
       responseObserver.onCompleted();
 
@@ -106,19 +90,6 @@ public class CoordinatorGrpcService extends CoordinatorServiceGrpc.CoordinatorSe
           Status.INTERNAL
               .withDescription("Database error: " + e.getMessage())
               .asRuntimeException());
-    }
-  }
-
-  private boolean tableExists(String tableName) throws SQLException {
-    String sql =
-        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES"
-            + " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, tableName);
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() && rs.getInt(1) > 0;
-      }
     }
   }
 

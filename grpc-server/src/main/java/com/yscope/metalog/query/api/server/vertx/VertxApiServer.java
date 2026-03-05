@@ -1,5 +1,6 @@
 package com.yscope.metalog.query.api.server.vertx;
 
+import com.yscope.metalog.coordinator.TableRegistrationService;
 import com.yscope.metalog.grpc.server.GrpcServer;
 import com.yscope.metalog.node.NodeConfig;
 import com.yscope.metalog.query.api.ApiServerConfig;
@@ -85,7 +86,7 @@ public class VertxApiServer extends AbstractVerticle {
               queryService,
               config.timeout(),
               config.streaming(),
-              coordinatorDataSource,
+              new TableRegistrationService(coordinatorDataSource),
               null);
       grpcServer.start();
       startPromise.complete();

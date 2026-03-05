@@ -1,6 +1,7 @@
 package com.yscope.metalog.node;
 
 import com.yscope.metalog.common.config.YamlConfigLoader;
+import com.yscope.metalog.coordinator.TableRegistrationService;
 import com.yscope.metalog.coordinator.ingestion.IngestionService;
 import com.yscope.metalog.coordinator.ingestion.KafkaMetadataPollerFactory;
 import com.yscope.metalog.coordinator.ingestion.server.IngestionServerFactory;
@@ -91,8 +92,10 @@ public class ServerMain {
         QueryService queryService = new QueryService(apiConfig.dataSource(), cacheService);
         queryServiceRef.set(queryService);
 
-        // Get ingestion service from the node for the ingestion gRPC service
+        // Get core services from the node for gRPC adapters
         IngestionService ingestionService = node.getIngestionService();
+        TableRegistrationService registrationService =
+            new TableRegistrationService(node.getSharedResources().getDataSource());
 
         GrpcServer grpcServer =
             new GrpcServer(
@@ -100,7 +103,7 @@ public class ServerMain {
                 queryService,
                 apiConfig.timeout(),
                 apiConfig.streaming(),
-                node.getSharedResources().getDataSource(),
+                registrationService,
                 ingestionService);
         grpcServerRef.set(grpcServer);
         grpcServer.start();
