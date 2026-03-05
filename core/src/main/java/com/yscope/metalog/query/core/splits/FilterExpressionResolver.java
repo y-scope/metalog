@@ -15,6 +15,7 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
@@ -275,6 +276,9 @@ public class FilterExpressionResolver {
       resolveExpressionStrict(between.getLeftExpression(), registry);
       resolveExpressionStrict(between.getBetweenExpressionStart(), registry);
       resolveExpressionStrict(between.getBetweenExpressionEnd(), registry);
+    } else if (expr instanceof LikeExpression like) {
+      resolveExpressionStrict(like.getLeftExpression(), registry);
+      resolveExpressionStrict(like.getRightExpression(), registry);
     } else if (expr instanceof Column col) {
       resolveColumnStrict(col, registry);
     }
@@ -429,6 +433,9 @@ public class FilterExpressionResolver {
       resolveExpression(between.getLeftExpression(), dimMap, aggMap);
       resolveExpression(between.getBetweenExpressionStart(), dimMap, aggMap);
       resolveExpression(between.getBetweenExpressionEnd(), dimMap, aggMap);
+    } else if (expr instanceof LikeExpression like) {
+      resolveExpression(like.getLeftExpression(), dimMap, aggMap);
+      resolveExpression(like.getRightExpression(), dimMap, aggMap);
     } else if (expr instanceof Column col) {
       resolveColumn(col, dimMap, aggMap);
     } else if (!(expr instanceof LongValue)
