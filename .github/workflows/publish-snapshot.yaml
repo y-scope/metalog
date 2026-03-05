@@ -42,21 +42,39 @@ jobs:
           MAVEN_USERNAME: "${{secrets.SONATYPE_USERNAME}}"
           MAVEN_PASSWORD: "${{secrets.SONATYPE_TOKEN}}"
 
-      - name: "Rename JARs with Maven-style timestamps"
+      - name: "Stage JARs with Maven-style timestamps"
         run: |
           timestamp="$(date -u +'%Y%m%d.%H%M%S')"
-          mkdir -p staging
-          find . -path '*/target/metalog-*.jar' -print0 | while IFS= read -r -d '' jar; do
-            filename="$(basename "${jar}")"
-            renamed="${filename/-SNAPSHOT/-"${timestamp}"-1}"
-            cp "${jar}" "staging/${renamed}"
+          for module_dir in core grpc-server kafka-ingestion; do
+            module_name="metalog-${module_dir}"
+            mkdir -p "staging/${module_name}"
+            find "${module_dir}/target" -maxdepth 1 -name 'metalog-*.jar' -print0 \
+              | while IFS= read -r -d '' jar; do
+                  filename="$(basename "${jar}")"
+                  renamed="${filename/-SNAPSHOT/-"${timestamp}"-1}"
+                  cp "${jar}" "staging/${module_name}/${renamed}"
+                done
           done
           echo "Staged artifacts:"
-          ls -l staging/
+          find staging -type f
 
-      - name: "Upload artifacts"
+      - name: "Upload metalog-core"
         uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"  # v4.6.2
         with:
-          name: "metalog-snapshot-jars"
-          path: "staging/*.jar"
+          name: "metalog-core"
+          path: "staging/metalog-core/*"
+          if-no-files-found: "error"
+
+      - name: "Upload metalog-grpc-server"
+        uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"  # v4.6.2
+        with:
+          name: "metalog-grpc-server"
+          path: "staging/metalog-grpc-server/*"
+          if-no-files-found: "error"
+
+      - name: "Upload metalog-kafka-ingestion"
+        uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"  # v4.6.2
+        with:
+          name: "metalog-kafka-ingestion"
+          path: "staging/metalog-kafka-ingestion/*"
           if-no-files-found: "error"
