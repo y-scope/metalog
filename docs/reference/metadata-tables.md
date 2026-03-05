@@ -293,7 +293,7 @@ Each indexed dimension adds ~39 bytes/row.
 
 | Database | Version | Compression | Partitioning | Tested |
 |----------|---------|-------------|--------------|--------|
-| MariaDB | 10.6+ | LZ4 | Yes | Integration tests |
+| MariaDB | 10.4+ | LZ4 | Yes | Integration tests |
 | MySQL | 8.0+ | LZ4 | Yes | Integration tests |
 | Aurora | 8.0+ | LZ4 | Yes | Production |
 | TiDB | 5.0+ | None | Yes | Manual |

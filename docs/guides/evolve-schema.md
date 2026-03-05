@@ -169,7 +169,7 @@ String sql = "ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + co
            + ", ALGORITHM=INPLACE, LOCK=" + lockMode;
 ```
 
-### MariaDB 10.6+: `LOCK=SHARED`
+### MariaDB 10.4+: `LOCK=SHARED`
 
 - Concurrent reads (SELECT)
 - Blocks concurrent writes (INSERT, UPDATE) for the duration of the ALTER
@@ -190,7 +190,7 @@ MySQL 8.0 supports `LOCK=NONE` even with indexed virtual columns, giving zero-im
 
 ### Comparison
 
-| | MariaDB 10.6 | MySQL 8.0+ |
+| | MariaDB 10.4+ | MySQL 8.0+ |
 |---|---|---|
 | `LOCK=NONE` with virtual columns | Not supported | Supported |
 | `LOCK=SHARED` | Required | Supported |

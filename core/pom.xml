@@ -194,6 +194,11 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <!-- Attach as classifier so the original unshaded JAR is preserved.
+                                 Integration tests (failsafe) run after package and need the
+                                 original JAR to avoid NoSuchMethodError from relocated classes. -->
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>shaded</shadedClassifierName>
                             <relocations>
                                 <relocation>
                                     <pattern>org.jooq</pattern>

@@ -119,7 +119,7 @@ Read-only metadata access via gRPC (streaming with early termination), with REST
 
 ### Database
 
-MariaDB 10.6+ or MySQL 8.0+ (auto-detected). The single source of truth for all metadata and coordination: per-table daily-partitioned metadata tables, `_task_queue` for lock-free task distribution, and automatic schema evolution for new `dim_fNN` and `agg_fNN` columns via online DDL.
+MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all metadata and coordination: per-table daily-partitioned metadata tables, `_task_queue` for lock-free task distribution, and automatic schema evolution for new `dim_fNN` and `agg_fNN` columns via online DDL.
 
 - **[Metadata Schema](metadata-schema.md)** — entry types, lifecycle, denormalization rationale, partitioning
 - **[Metadata Tables](../reference/metadata-tables.md)** — DDL, column reference, index reference

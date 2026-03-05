@@ -593,7 +593,7 @@ Kafka consumer groups track committed offsets server-side (per group ID: `clp-co
 
 ## Appendix A: Database Compatibility
 
-This schema is compatible with **MariaDB 10.6+** and **MySQL 8.0+**.
+This schema is compatible with **MariaDB 10.4+** and **MySQL 8.0+**.
 
 | Feature | MariaDB | MySQL | Notes |
 |---------|---------|-------|-------|

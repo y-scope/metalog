@@ -31,7 +31,7 @@ public abstract class AbstractMariaDBTest {
 
   @Container
   static final MariaDBContainer<?> MARIADB =
-      new MariaDBContainer<>("mariadb:10.3.32")
+      new MariaDBContainer<>("mariadb:10.6")
           .withUsername("root")
           .withPassword("")  // Empty password with MARIADB_ALLOW_EMPTY_ROOT_PASSWORD
           .withEnv("MARIADB_ALLOW_EMPTY_ROOT_PASSWORD", "yes")  // Avoids entrypoint user creation bug

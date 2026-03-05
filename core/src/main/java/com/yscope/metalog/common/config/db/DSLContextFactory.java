@@ -43,9 +43,10 @@ public final class DSLContextFactory {
    * @return SQLDialect.MARIADB for MariaDB, SQLDialect.MYSQL for everything else
    */
   public static SQLDialect detectDialect(DataSource dataSource) {
-    // DatabaseTypeDetector.detect() returns UNKNOWN on failure, so no try-catch needed.
-    return DatabaseTypeDetector.detect(dataSource) == DatabaseTypeDetector.DatabaseType.MARIADB
-        ? SQLDialect.MARIADB
-        : SQLDialect.MYSQL;
+    DatabaseTypeDetector.DatabaseType type = DatabaseTypeDetector.detect(dataSource);
+    if (type == DatabaseTypeDetector.DatabaseType.MARIADB) {
+      return SQLDialect.MARIADB;
+    }
+    return SQLDialect.MYSQL;
   }
 }

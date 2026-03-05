@@ -118,7 +118,7 @@ Workers are I/O-bound on object storage. Scale horizontally until storage bandwi
 
 ### Requirements
 
-- MariaDB 10.6+ or MySQL 8.0+ (auto-detected at startup)
+- MariaDB 10.4+ or MySQL 8.0+ (auto-detected at startup)
 - Aurora MySQL 3.x, TiDB, and Vitess are also supported
 
 Schema creation is **automatic** — the service creates all tables, indexes, and partitions on startup. No manual DDL required.
