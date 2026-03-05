@@ -41,3 +41,22 @@ jobs:
         env:
           MAVEN_USERNAME: "${{secrets.SONATYPE_USERNAME}}"
           MAVEN_PASSWORD: "${{secrets.SONATYPE_TOKEN}}"
+
+      - name: "Rename JARs with Maven-style timestamps"
+        run: |
+          timestamp="$(date -u +'%Y%m%d.%H%M%S')"
+          mkdir -p staging
+          find . -path '*/target/metalog-*.jar' -print0 | while IFS= read -r -d '' jar; do
+            filename="$(basename "${jar}")"
+            renamed="${filename/-SNAPSHOT/-"${timestamp}"-1}"
+            cp "${jar}" "staging/${renamed}"
+          done
+          echo "Staged artifacts:"
+          ls -l staging/
+
+      - name: "Upload artifacts"
+        uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"  # v4.6.2
+        with:
+          name: "metalog-snapshot-jars"
+          path: "staging/*.jar"
+          if-no-files-found: "error"
