@@ -116,7 +116,7 @@ Pagination token used in `StreamSplits` RPC responses. Contains the values of th
 Server-side component that executes `StreamSplits` queries against the metadata database using keyset pagination. Fetches fixed-size pages, applies filter expressions, and feeds results into the prefetch queue. See [Keyset Pagination](../design/keyset-pagination.md).
 
 ### Prefetch Queue
-Bounded `ArrayBlockingQueue<SplitWithCursor>` used in `QuerySplitsGrpcService`. A background thread fetches DB pages and pushes splits (each paired with its keyset cursor) into the queue; the gRPC thread drains the queue and streams to the client. Overlaps DB fetch latency with gRPC send time, and releases DB connections between pages. See [gRPC API Reference](../reference/grpc-api.md).
+Bounded `ArrayBlockingQueue<SplitWithCursor>` used in `SplitQueryEngine.streamSplitsAsync()`. A background thread fetches DB pages and pushes splits (each paired with its keyset cursor) into the queue; the consumer callback drains the queue and sends results to the client. Overlaps DB fetch latency with network send time, and releases DB connections between pages. The gRPC service layer (`QuerySplitsGrpcService`) uses this via a consumer callback for streaming responses. See [gRPC API Reference](../reference/grpc-api.md).
 
 ---
 

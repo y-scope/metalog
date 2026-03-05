@@ -1,7 +1,10 @@
-package com.yscope.metalog.query.api.server.vertx.grpc;
+package com.yscope.metalog.grpc.server;
 
 import com.yscope.metalog.coordinator.ingestion.IngestionService;
-import com.yscope.metalog.coordinator.ingestion.server.grpc.IngestionGrpcService;
+import com.yscope.metalog.grpc.server.services.CoordinatorGrpcService;
+import com.yscope.metalog.grpc.server.services.IngestionGrpcService;
+import com.yscope.metalog.grpc.server.services.MetadataGrpcService;
+import com.yscope.metalog.grpc.server.services.QuerySplitsGrpcService;
 import com.yscope.metalog.node.NodeConfig;
 import com.yscope.metalog.query.api.ApiServerConfig;
 import com.yscope.metalog.query.core.QueryService;
@@ -122,9 +125,6 @@ public class GrpcServer {
 
   /** Stop the gRPC server gracefully. */
   public void stop() throws InterruptedException {
-    if (splitsService != null) {
-      splitsService.close();
-    }
     if (server != null) {
       server.shutdown();
       if (!server.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {

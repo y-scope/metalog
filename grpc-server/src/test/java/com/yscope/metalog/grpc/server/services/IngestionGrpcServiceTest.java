@@ -1,4 +1,4 @@
-package com.yscope.metalog.coordinator.ingestion.server.grpc;
+package com.yscope.metalog.grpc.server.services;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;

@@ -22,7 +22,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
+import javax.annotation.Nullable;
 import net.sf.jsqlparser.expression.Expression;
 import org.jooq.Condition;
 import org.jooq.DSLContext;
@@ -104,6 +109,32 @@ public class SplitQueryEngine {
    */
   public record PageFetchResult(
       List<SplitWithCursor> splits, long dbRowsScanned, KeysetCursor lastDbCursor) {}
+
+  /**
+   * Consumer callback for async streaming.
+   *
+   * <p>Called for each split during {@link #streamSplitsAsync}. The consumer can throw exceptions,
+   * which will be propagated to the caller.
+   */
+  @FunctionalInterface
+  public interface SplitConsumer {
+    /**
+     * Process a split.
+     *
+     * @param split the split with cursor
+     * @return true to continue streaming, false to stop
+     * @throws Exception if processing fails (propagated to caller)
+     */
+    boolean accept(SplitWithCursor split) throws Exception;
+  }
+
+  /**
+   * Result of an async streaming operation.
+   *
+   * @param splitsScanned total number of splits read from the database (before sketch filtering)
+   * @param splitsMatched total number of splits that passed filters and were sent to consumer
+   */
+  public record StreamingResult(long splitsScanned, long splitsMatched) {}
 
   /**
    * Parse, resolve, and validate a filter expression once, returning a reusable jOOQ Condition.
@@ -726,5 +757,178 @@ public class SplitQueryEngine {
     }
     long value = rs.getLong(column);
     return rs.wasNull() ? defaultValue : value;
+  }
+
+  /**
+   * Stream splits asynchronously with prefetch optimization.
+   *
+   * <p>Fetches pages from the database in a background thread and pushes splits into a bounded
+   * queue. The main thread drains the queue and calls the consumer for each split. DB connections
+   * are released after each page fetch, preventing idle connections during consumer processing.
+   * This overlaps DB I/O with consumer work for maximum throughput.
+   *
+   * <p>The background thread respects the cancellation token and stops fetching when cancelled.
+   * The consumer can also stop the stream early by returning false.
+   *
+   * <p><b>Prefetch queue capacity:</b> {@code 2 * pageSize} allows the producer to stay one page
+   * ahead of the consumer without blocking.
+   *
+   * <p><b>Error handling:</b> Exceptions thrown by the consumer are propagated to the caller.
+   * Exceptions in the background thread are captured and re-thrown after the consumer completes.
+   *
+   * @param table table name
+   * @param stateFilter state filter list (empty = no filter)
+   * @param filterCondition prepared filter condition from {@link #prepareFilterCondition}, or null
+   * @param orderBy ordering specification (resolved column names)
+   * @param initialCursor optional starting cursor for pagination (null = start from beginning)
+   * @param sketchPredicates sketch-based predicates for early filtering
+   * @param projection column projection
+   * @param pageSize number of splits to fetch per DB query
+   * @param limitCount maximum number of results to return (0 = unlimited)
+   * @param consumer callback invoked for each split; return false to stop streaming
+   * @param cancellation cancellation token checked frequently; set to true to stop streaming
+   * @return statistics (total scanned, total matched)
+   * @throws InterruptedException if interrupted while waiting on the queue
+   * @throws Exception if the consumer throws an exception or the background thread encounters an
+   *     error
+   */
+  public StreamingResult streamSplitsAsync(
+      String table,
+      List<String> stateFilter,
+      @Nullable PreparedFilter filterCondition,
+      List<OrderBySpec> orderBy,
+      @Nullable KeysetCursor initialCursor,
+      List<SketchPredicate> sketchPredicates,
+      ResolvedProjection projection,
+      int pageSize,
+      long limitCount,
+      SplitConsumer consumer,
+      AtomicBoolean cancellation)
+      throws InterruptedException, Exception {
+
+    // Prefetch queue: capacity 2 * pageSize allows producer to stay one page ahead
+    ArrayBlockingQueue<SplitWithCursor> splitQueue = new ArrayBlockingQueue<>(2 * pageSize);
+    AtomicLong totalScanned = new AtomicLong(0);
+    AtomicLong totalMatched = new AtomicLong(0);
+    AtomicBoolean producerDone = new AtomicBoolean(false);
+    AtomicReference<Exception> producerError = new AtomicReference<>();
+    AtomicLong remainingCount = new AtomicLong(limitCount); // 0 = unlimited
+
+    // Sentinel value to signal end of stream
+    SplitWithCursor SENTINEL = new SplitWithCursor(null, null);
+
+    // Background producer thread: fetches pages and pushes to queue
+    Thread producer =
+        new Thread(
+            () -> {
+              try {
+                KeysetCursor cursor = initialCursor;
+                while (!cancellation.get()) {
+                  long remaining = remainingCount.get();
+                  long effectivePageSize =
+                      (remaining > 0) ? Math.min(pageSize, remaining) : pageSize;
+
+                  PageFetchResult result =
+                      fetchPage(
+                          table,
+                          stateFilter,
+                          filterCondition,
+                          effectivePageSize,
+                          orderBy,
+                          cursor,
+                          sketchPredicates,
+                          projection);
+                  // DB connection released here
+
+                  totalScanned.addAndGet(result.dbRowsScanned());
+
+                  if (result.splits().isEmpty()) {
+                    // All rows were sketch-pruned, but the DB may have more pages.
+                    // Use lastDbCursor to advance past the pruned page.
+                    if (result.dbRowsScanned() >= effectivePageSize
+                        && result.lastDbCursor() != null) {
+                      cursor = result.lastDbCursor();
+                      continue;
+                    }
+                    break; // DB actually exhausted (fewer rows than page size)
+                  }
+
+                  for (SplitWithCursor item : result.splits()) {
+                    if (cancellation.get()) {
+                      break;
+                    }
+                    splitQueue.put(item);
+                    totalMatched.incrementAndGet();
+
+                    // Check limit
+                    if (remainingCount.get() > 0) {
+                      long newRemaining = remainingCount.decrementAndGet();
+                      if (newRemaining == 0) {
+                        break;
+                      }
+                    }
+                  }
+
+                  if (result.dbRowsScanned() < effectivePageSize) {
+                    break; // DB returned fewer rows than requested — data exhausted
+                  }
+
+                  cursor = result.splits().get(result.splits().size() - 1).cursor();
+
+                  // Stop if limit reached
+                  if (remainingCount.get() == 0 && limitCount > 0) {
+                    break;
+                  }
+                }
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              } catch (Exception e) {
+                if (!cancellation.get()) {
+                  producerError.set(e);
+                }
+              } finally {
+                producerDone.set(true);
+                // Push sentinel to unblock consumer
+                try {
+                  splitQueue.put(SENTINEL);
+                } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                }
+              }
+            },
+            "split-prefetch");
+
+    producer.setDaemon(true);
+    producer.start();
+
+    // Foreground consumer: drain queue and call consumer
+    try {
+      while (!cancellation.get()) {
+        SplitWithCursor item = splitQueue.take();
+
+        // Check for sentinel
+        if (item == SENTINEL) {
+          break;
+        }
+
+        // Call consumer
+        boolean continueStreaming = consumer.accept(item);
+        if (!continueStreaming) {
+          cancellation.set(true);
+          break;
+        }
+      }
+    } finally {
+      cancellation.set(true);
+      producer.interrupt();
+    }
+
+    // Check for producer error after consumer completes
+    Exception err = producerError.get();
+    if (err != null) {
+      throw err;
+    }
+
+    return new StreamingResult(totalScanned.get(), totalMatched.get());
   }
 }

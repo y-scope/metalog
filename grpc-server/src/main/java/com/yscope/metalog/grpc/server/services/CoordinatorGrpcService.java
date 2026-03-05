@@ -1,4 +1,4 @@
-package com.yscope.metalog.query.api.server.vertx.grpc;
+package com.yscope.metalog.grpc.server.services;
 
 import com.yscope.metalog.coordinator.grpc.proto.CoordinatorServiceGrpc;
 import com.yscope.metalog.coordinator.grpc.proto.KafkaConfig;

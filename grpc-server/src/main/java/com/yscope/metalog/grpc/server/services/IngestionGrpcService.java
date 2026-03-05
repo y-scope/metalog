@@ -1,4 +1,4 @@
-package com.yscope.metalog.coordinator.ingestion.server.grpc;
+package com.yscope.metalog.grpc.server.services;
 
 import com.yscope.metalog.coordinator.grpc.proto.IngestRequest;
 import com.yscope.metalog.coordinator.grpc.proto.IngestResponse;

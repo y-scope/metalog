@@ -662,22 +662,26 @@ See [Configuration Reference: API Server Configuration](configuration.md#api-ser
 ```
 src/
 ├── main/
-│   ├── java/com/yscope/metalog/query/
-│   │   ├── api/
-│   │   │   ├── ApiServerConfig.java       — env-var based config
-│   │   │   └── server/vertx/
-│   │   │       ├── VertxApiServer.java    — Vert.x + gRPC server lifecycle
-│   │   │       └── grpc/
-│   │   │           ├── GrpcServer.java
-│   │   │           ├── QuerySplitsGrpcService.java   — implements QuerySplitsService
-│   │   │           ├── MetadataGrpcService.java      — implements MetadataService
-│   │   │           └── CoordinatorGrpcService.java   — implements CoordinatorService
-│   │   └── core/
-│   │       ├── QueryService.java          — schema introspection
-│   │       ├── CacheService.java          — Caffeine-backed TTL cache
-│   │       └── splits/
-│   │           ├── SplitQueryEngine.java  — keyset-paginated split queries
-│   │           └── FilterExpressionValidator.java
+│   ├── java/com/yscope/metalog/
+│   │   ├── grpc/server/
+│   │   │   ├── GrpcServer.java            — unified gRPC server (all services on one port)
+│   │   │   └── services/
+│   │   │       ├── QuerySplitsGrpcService.java   — implements QuerySplitsService
+│   │   │       ├── MetadataGrpcService.java      — implements MetadataService
+│   │   │       ├── CoordinatorGrpcService.java   — implements CoordinatorService
+│   │   │       ├── IngestionGrpcService.java     — implements MetadataIngestionService
+│   │   │       └── GrpcConverters.java           — proto ↔ domain conversions
+│   │   └── query/
+│   │       ├── api/
+│   │       │   ├── ApiServerConfig.java   — env-var based config
+│   │       │   └── server/vertx/
+│   │       │       └── VertxApiServer.java    — Vert.x + gRPC server lifecycle
+│   │       └── core/
+│   │           ├── QueryService.java          — schema introspection
+│   │           ├── CacheService.java          — Caffeine-backed TTL cache
+│   │           └── splits/
+│   │               ├── SplitQueryEngine.java  — async streaming + keyset pagination
+│   │               └── FilterExpressionValidator.java
 │   └── proto/
 │       ├── splits.proto                   — QuerySplitsService + Split messages
 │       ├── metadata.proto                 — MetadataService messages

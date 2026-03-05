@@ -1,8 +1,8 @@
 package com.yscope.metalog.query.api.server.vertx;
 
+import com.yscope.metalog.grpc.server.GrpcServer;
 import com.yscope.metalog.node.NodeConfig;
 import com.yscope.metalog.query.api.ApiServerConfig;
-import com.yscope.metalog.query.api.server.vertx.grpc.GrpcServer;
 import com.yscope.metalog.query.core.CacheService;
 import com.yscope.metalog.query.core.QueryService;
 import com.zaxxer.hikari.HikariConfig;

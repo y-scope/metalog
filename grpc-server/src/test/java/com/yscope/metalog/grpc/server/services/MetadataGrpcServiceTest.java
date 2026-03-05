@@ -1,4 +1,4 @@
-package com.yscope.metalog.query.api.server.vertx.grpc;
+package com.yscope.metalog.grpc.server.services;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;

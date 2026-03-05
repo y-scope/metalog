@@ -1,4 +1,4 @@
-package com.yscope.metalog.query.api.server.vertx.grpc;
+package com.yscope.metalog.grpc.server.services;
 
 import com.yscope.metalog.metastore.model.AggValueType;
 import com.yscope.metalog.query.api.ApiServerConfig;
@@ -11,39 +11,30 @@ import com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse;
 import com.yscope.metalog.query.core.splits.KeysetCursor;
 import com.yscope.metalog.query.core.splits.Order;
 import com.yscope.metalog.query.core.splits.OrderBySpec;
+import com.yscope.metalog.query.core.splits.PreparedFilter;
 import com.yscope.metalog.query.core.splits.ResolvedProjection;
 import com.yscope.metalog.query.core.splits.SketchExtractionResult;
 import com.yscope.metalog.query.core.splits.SketchPredicate;
 import com.yscope.metalog.query.core.splits.Split;
 import com.yscope.metalog.query.core.splits.SplitQueryEngine;
-import com.yscope.metalog.query.core.splits.SplitQueryEngine.PageFetchResult;
-import com.yscope.metalog.query.core.splits.SplitWithCursor;
+import com.yscope.metalog.query.core.splits.SplitQueryEngine.StreamingResult;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import com.yscope.metalog.query.core.splits.PreparedFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * gRPC service implementation for split queries.
  *
- * <p>Uses a prefetch queue to overlap DB fetching with gRPC streaming. A background thread fetches
- * pages from the database and pushes rows into a bounded queue. The gRPC thread consumes rows from
- * the queue. This avoids holding DB connections idle during gRPC backpressure and overlaps DB
- * network I/O with client streaming.
+ * <p>Thin API layer that handles proto conversion and gRPC streaming mechanics. The heavy lifting
+ * (pagination, prefetching, backpressure) is done by {@link SplitQueryEngine#streamSplitsAsync}.
  */
 public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsServiceImplBase {
 
@@ -52,7 +43,6 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
   private final SplitQueryEngine queryEngine;
   private final long streamIdleTimeoutMs;
   private final int dbPageSize;
-  private final ExecutorService dbFetchExecutor;
 
   public QuerySplitsGrpcService(
       SplitQueryEngine queryEngine,
@@ -61,26 +51,13 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
     this.queryEngine = queryEngine;
     this.streamIdleTimeoutMs = timeoutConfig.streamIdleTimeoutMs();
     this.dbPageSize = streamingConfig.dbPageSize();
-    this.dbFetchExecutor =
-        Executors.newCachedThreadPool(
-            r -> {
-              Thread t = new Thread(r, "db-prefetch");
-              t.setDaemon(true);
-              return t;
-            });
-  }
-
-  /** Shuts down the background DB fetch thread pool. */
-  public void close() {
-    dbFetchExecutor.shutdownNow();
   }
 
   /**
-   * Stream split results from the database using a prefetch queue.
+   * Stream split results using async pagination from core.
    *
-   * <p>A background thread fetches pages from DB and pushes rows into a bounded queue. The gRPC
-   * thread consumes from the queue and streams to the client. DB connections are released after
-   * each page fetch.
+   * <p>This method handles proto conversion and gRPC backpressure. The business logic (pagination,
+   * prefetching) is in {@link SplitQueryEngine#streamSplitsAsync}.
    */
   @Override
   public void streamSplits(
@@ -114,6 +91,7 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
         });
 
     try {
+      // Prepare query parameters (proto → domain objects)
       List<OrderBySpec> orderBy =
           queryEngine.prepareOrderBy(request.getTable(), mapOrderBy(request.getOrderByList()));
       for (OrderBySpec spec : orderBy) {
@@ -131,6 +109,7 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
               spec.column());
         }
       }
+
       long effectiveIdleTimeoutMs =
           request.getStreamIdleTimeoutMs() > 0
               ? request.getStreamIdleTimeoutMs()
@@ -151,11 +130,10 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
         initialCursor = null;
       }
 
-      // Client result cap: 0 = unlimited, N > 0 = return at most N results
-      long clientLimit = request.getLimit();
+      long clientLimit = request.getLimit(); // 0 = unlimited
 
       LOG.debug(
-          "Starting prefetch stream: table={}, clientLimit={}, orderBy={}, cursor={}, "
+          "Starting split stream: table={}, clientLimit={}, orderBy={}, cursor={}, "
               + "stateFilter={}, dbPageSize={}",
           request.getTable(),
           clientLimit == 0 ? "unlimited" : clientLimit,
@@ -164,9 +142,7 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
           request.getStateFilterList(),
           dbPageSize);
 
-      // Resolve, validate, and translate the filter expression once before starting the producer.
-      // Doing this on the gRPC thread means invalid filters return INVALID_ARGUMENT immediately
-      // rather than surfacing as INTERNAL from the background producer thread.
+      // Resolve, validate, and translate the filter expression
       SketchExtractionResult sketchResult =
           queryEngine.prepareSketchPredicates(request.getFilterExpression());
       PreparedFilter filterCondition =
@@ -175,101 +151,53 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
       ResolvedProjection projection =
           queryEngine.prepareProjection(request.getTable(), request.getProjectionList());
 
-      AtomicLong remainingCount = new AtomicLong(clientLimit); // 0 = unlimited
-      AtomicLong totalScanned = new AtomicLong(0);
-      AtomicBoolean producerDone = new AtomicBoolean(false);
-      AtomicReference<Exception> producerError = new AtomicReference<>();
+      // Stream splits using core business logic
+      StreamingResult result =
+          queryEngine.streamSplitsAsync(
+              request.getTable(),
+              request.getStateFilterList(),
+              filterCondition,
+              orderBy,
+              initialCursor,
+              sketchPredicates,
+              projection,
+              dbPageSize,
+              clientLimit,
+              split -> {
+                // Wait for client to be ready (backpressure)
+                if (!waitForReady(serverObserver, cancelled, readyLock, effectiveIdleTimeoutMs)) {
+                  clientCancelled.set(true);
+                  return false;
+                }
 
-      // Prefetch queue: capacity 2 * dbPageSize allows the producer to stay one page ahead
-      ArrayBlockingQueue<SplitWithCursor> splitQueue = new ArrayBlockingQueue<>(2 * dbPageSize);
+                // Convert domain object → proto
+                StreamSplitsResponse.Builder responseBuilder =
+                    StreamSplitsResponse.newBuilder()
+                        .setSplit(convertSplit(split.split()))
+                        .setSequence(sequence.incrementAndGet())
+                        .setDone(false);
 
-      // Background DB fetcher: fetches pages and pushes rows into the queue
-      Future<?> fetcherFuture =
-          dbFetchExecutor.submit(
-              () ->
-                  runProducer(
-                      request.getTable(),
-                      request.getStateFilterList(),
-                      filterCondition,
-                      sketchPredicates,
-                      projection,
-                      orderBy,
-                      initialCursor,
-                      remainingCount,
-                      cancelled,
-                      splitQueue,
-                      totalScanned,
-                      producerDone,
-                      producerError));
+                if (request.getIncludeCursor()) {
+                  responseBuilder.setCursor(buildProtoCursor(split.cursor()));
+                }
 
-      // Foreground gRPC consumer: drain queue and stream to client
-      try {
-        while (!cancelled.get()) {
-          SplitWithCursor item;
-          try {
-            item = splitQueue.poll(100, TimeUnit.MILLISECONDS);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            break;
-          }
+                try {
+                  serverObserver.onNext(responseBuilder.build());
+                } catch (StatusRuntimeException e) {
+                  if (e.getStatus().getCode() == Status.Code.CANCELLED) {
+                    LOG.debug("Stream cancelled during onNext");
+                    clientCancelled.set(true);
+                    cancelled.set(true);
+                    return false;
+                  }
+                  throw e;
+                }
 
-          if (item == null) {
-            if (producerDone.get() && splitQueue.isEmpty()) {
-              break; // producer finished and queue drained
-            }
-            Exception err = producerError.get();
-            if (err != null) {
-              throw err;
-            }
-            continue; // poll timeout, retry
-          }
+                return !cancelled.get();
+              },
+              cancelled);
 
-          if (clientLimit > 0 && remainingCount.get() == 0) {
-            break;
-          }
-
-          if (!waitForReady(serverObserver, cancelled, readyLock, effectiveIdleTimeoutMs)) {
-            clientCancelled.set(true);
-            break;
-          }
-
-          StreamSplitsResponse.Builder responseBuilder =
-              StreamSplitsResponse.newBuilder()
-                  .setSplit(convertSplit(item.split()))
-                  .setSequence(sequence.incrementAndGet())
-                  .setDone(false);
-
-          if (request.getIncludeCursor()) {
-            responseBuilder.setCursor(buildProtoCursor(item.cursor()));
-          }
-
-          try {
-            serverObserver.onNext(responseBuilder.build());
-          } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() == Status.Code.CANCELLED) {
-              LOG.debug("Stream cancelled during onNext");
-              clientCancelled.set(true);
-              cancelled.set(true);
-              break;
-            }
-            throw e;
-          }
-
-          if (remainingCount.get() > 0) {
-            remainingCount.decrementAndGet();
-          }
-        }
-      } finally {
-        cancelled.set(true);
-        fetcherFuture.cancel(true);
-      }
-
-      // Check for producer error after consumer loop
-      Exception err = producerError.get();
-      if (err != null) {
-        throw err;
-      }
-
+      // Send final response with stats
       if (!clientCancelled.get()) {
         StreamSplitsResponse finalResponse =
             StreamSplitsResponse.newBuilder()
@@ -277,17 +205,17 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
                 .setDone(true)
                 .setStats(
                     QueryStats.newBuilder()
-                        .setSplitsScanned(totalScanned.get())
-                        .setSplitsMatched(sequence.get())
+                        .setSplitsScanned(result.splitsScanned())
+                        .setSplitsMatched(result.splitsMatched())
                         .build())
                 .build();
         serverObserver.onNext(finalResponse);
         serverObserver.onCompleted();
 
         LOG.debug(
-            "Prefetch stream completed: {} results, {} scanned, {} ms",
+            "Split stream completed: {} results, {} scanned, {} ms",
             sequence.get(),
-            totalScanned.get(),
+            result.splitsScanned(),
             System.currentTimeMillis() - startTime);
       }
 
@@ -302,77 +230,6 @@ public class QuerySplitsGrpcService extends QuerySplitsServiceGrpc.QuerySplitsSe
     }
   }
 
-  /**
-   * Background DB fetch producer. Fetches pages using keyset pagination and pushes rows into the
-   * queue. Uses blocking {@code put()} for natural backpressure when the queue fills.
-   */
-  private void runProducer(
-      String table,
-      List<String> stateFilter,
-      PreparedFilter filterCondition,
-      List<SketchPredicate> sketchPredicates,
-      ResolvedProjection projection,
-      List<OrderBySpec> orderBy,
-      KeysetCursor initialCursor,
-      AtomicLong remainingCount,
-      AtomicBoolean cancelled,
-      ArrayBlockingQueue<SplitWithCursor> splitQueue,
-      AtomicLong totalScanned,
-      AtomicBoolean producerDone,
-      AtomicReference<Exception> producerError) {
-    try {
-      KeysetCursor cursor = initialCursor;
-      while (!cancelled.get()) {
-        long remaining = remainingCount.get();
-        long pageSize = (remaining > 0) ? Math.min(dbPageSize, remaining) : dbPageSize;
-
-        PageFetchResult result =
-            queryEngine.fetchPage(
-                table,
-                stateFilter,
-                filterCondition,
-                pageSize,
-                orderBy,
-                cursor,
-                sketchPredicates,
-                projection);
-        // DB connection released here
-
-        totalScanned.addAndGet(result.dbRowsScanned());
-
-        if (result.splits().isEmpty()) {
-          // All rows were sketch-pruned, but the DB may have more pages.
-          // Use lastDbCursor to advance past the pruned page.
-          if (result.dbRowsScanned() >= pageSize && result.lastDbCursor() != null) {
-            cursor = result.lastDbCursor();
-            continue;
-          }
-          break; // DB actually exhausted (fewer rows than page size)
-        }
-
-        for (SplitWithCursor item : result.splits()) {
-          if (cancelled.get()) {
-            break;
-          }
-          splitQueue.put(item);
-        }
-
-        if (result.dbRowsScanned() < pageSize) {
-          break; // DB returned fewer rows than requested — data exhausted
-        }
-
-        cursor = result.splits().get(result.splits().size() - 1).cursor();
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    } catch (Exception e) {
-      if (!cancelled.get()) {
-        producerError.set(e);
-      }
-    } finally {
-      producerDone.set(true);
-    }
-  }
 
   // --- Proto mapping helpers ---
 
