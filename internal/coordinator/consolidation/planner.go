@@ -72,6 +72,11 @@ func (p *Planner) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := p.planOnce(ctx); err != nil {
+				// Suppress errors caused by context cancellation during shutdown.
+				if ctx.Err() != nil {
+					p.log.Info("planner stopped")
+					return
+				}
 				p.log.Warn("planning cycle failed", zap.Error(err))
 			}
 		}

@@ -170,6 +170,9 @@ func (u *CoordinatorUnit) runPartitionMaintenance() {
 			return
 		case <-ticker.C:
 			if err := u.partition.RunMaintenance(u.ctx); err != nil {
+				if u.ctx.Err() != nil {
+					return
+				}
 				u.log.Warn("partition maintenance failed", zap.Error(err))
 			}
 		}
