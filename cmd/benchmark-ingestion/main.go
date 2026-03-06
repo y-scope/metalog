@@ -90,7 +90,7 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 		accepted atomic.Int64
 		rejected atomic.Int64
 		wg       sync.WaitGroup
-		sem      = make(chan struct{}, concurrency)
+		work     = make(chan int, concurrency)
 	)
 
 	fmt.Printf("Sending %d records via gRPC (apps=%d, concurrency=%d) to table %q ...\n",
@@ -98,25 +98,31 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 
 	start := time.Now()
 
-	for i := range records {
+	// Fixed worker pool: spawn exactly `concurrency` goroutines.
+	for range concurrency {
 		wg.Add(1)
-		sem <- struct{}{}
-		go func(idx int) {
+		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-			req := buildIngestRequest(table, idx, apps)
-			resp, err := client.Ingest(context.Background(), req)
-			if err != nil {
-				rejected.Add(1)
-				return
+			for idx := range work {
+				req := buildIngestRequest(table, idx, apps)
+				resp, err := client.Ingest(context.Background(), req)
+				if err != nil {
+					rejected.Add(1)
+					continue
+				}
+				if resp.Accepted {
+					accepted.Add(1)
+				} else {
+					rejected.Add(1)
+				}
 			}
-			if resp.Accepted {
-				accepted.Add(1)
-			} else {
-				rejected.Add(1)
-			}
-		}(i)
+		}()
 	}
+
+	for i := range records {
+		work <- i
+	}
+	close(work)
 
 	wg.Wait()
 	elapsed := time.Since(start)
