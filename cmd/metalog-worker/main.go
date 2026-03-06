@@ -15,7 +15,7 @@ import (
 	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/health"
-	"github.com/y-scope/metalog/internal/storage"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/worker"
 )

@@ -10,7 +10,7 @@ import (
 
 	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/metastore"
-	"github.com/y-scope/metalog/internal/storage"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/timeutil"
 )

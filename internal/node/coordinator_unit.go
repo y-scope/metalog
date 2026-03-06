@@ -12,7 +12,7 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator"
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
-	kafkaconsumer "github.com/y-scope/metalog/internal/kafka"
+	kafkaconsumer "github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/internal/taskqueue"
 )

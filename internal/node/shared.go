@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/schema"
-	"github.com/y-scope/metalog/internal/storage"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/internal/taskqueue"
 )
 

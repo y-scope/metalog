@@ -13,7 +13,7 @@ import (
 	"github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/health"
 	"github.com/y-scope/metalog/internal/schema"
-	"github.com/y-scope/metalog/internal/storage"
+	"github.com/y-scope/metalog/storage"
 )
 
 // Node is the top-level orchestrator that manages coordinator and worker units.
