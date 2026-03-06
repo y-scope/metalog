@@ -25,7 +25,7 @@ A file-level metadata catalog that enables queries to skip millions of files and
 | Early termination | Scan all, sort, limit | Stop when enough results guaranteed |
 | Schema model | Required upfront | Schema-less content |
 
-**Performance:** ~14-19K rows/sec/table batch-UPSERT (single writer, batch size 500), 10-100ms time-range queries.
+**Performance:** ~20-22K rows/sec/table batch-UPSERT (single writer, batch size 5000), 10-100ms time-range queries.
 
 ---
 
@@ -98,7 +98,7 @@ Each metadata row is a **fact** — one CLP file — with content-derived attrib
 
 No table rebuild, no downtime, no bulk data migration. The entire slot lifecycle is online.
 
-*Update anomalies:* Rows are not fully immutable — file-level fields (`max_timestamp`, `raw_size_bytes`, `record_count`) are updated frequently during the active buffering window (15 min–1 hr after first ingest, a few to a dozen updates per file). The design handles this with efficient batched UPSERTs: ~14–19K ops/sec per writer goroutine (see [Scalability](../reference/metadata-tables.md#scalability)). After the buffering window, a few more updates occur for consolidation state transitions, then the row is stable. Dimension values almost never change after first write. The `sketches` SET column and `ext` MEDIUMBLOB may still be updated as sketches are refined. The alias mechanism (dim alias, agg alias) is the intentional blur point for exposing file-object properties in the user-facing namespace.
+*Update anomalies:* Rows are not fully immutable — file-level fields (`max_timestamp`, `raw_size_bytes`, `record_count`) are updated frequently during the active buffering window (15 min–1 hr after first ingest, a few to a dozen updates per file). The design handles this with efficient batched UPSERTs: ~20–22K ops/sec per writer goroutine (see [Scalability](../reference/metadata-tables.md#scalability)). After the buffering window, a few more updates occur for consolidation state transitions, then the row is stable. Dimension values almost never change after first write. The `sketches` SET column and `ext` MEDIUMBLOB may still be updated as sketches are refined. The alias mechanism (dim alias, agg alias) is the intentional blur point for exposing file-object properties in the user-facing namespace.
 
 ### Storage Access Patterns
 

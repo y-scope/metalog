@@ -90,7 +90,7 @@ Worst-case failover time with defaults: ~4 minutes (3 min dead threshold + up to
 | Disk | Minimal | 20 GB | Log files only; no data stored locally |
 | Network | 100 Mbps | 1 Gbps | Database writes, Kafka consumption |
 
-One coordinator handles ~15,000 records/sec sustained. For throughput above 50M records/hour, add coordinators (each owns independent tables). See [Performance Tuning](performance-tuning.md) for benchmarks.
+One coordinator handles ~21,000 records/sec sustained. For throughput above 75M records/hour, add coordinators (each owns independent tables). See [Performance Tuning](performance-tuning.md) for benchmarks.
 
 ### Worker Nodes
 

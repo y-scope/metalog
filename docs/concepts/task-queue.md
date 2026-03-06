@@ -404,7 +404,7 @@ One `Prefetcher` per node issues all DB claims; worker count no longer multiplie
 
 | Table | Throughput |
 |-------|------------|
-| Metadata table | 14-19K rows/sec (batch-UPSERT) |
+| Metadata table | 20-22K rows/sec (batch-UPSERT) |
 | Task queue | ~40 ops/sec |
 
 Task queue is ~250x lighter than metadata table.

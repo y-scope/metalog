@@ -246,7 +246,7 @@ Measured with a single writer goroutine, `interpolateParams=true`, 2 dimension c
 
 | Operation | MariaDB | MySQL |
 |-----------|---------|-------|
-| batch-UPSERT (500 rows/batch) | ~19K rows/sec | ~14K rows/sec |
+| batch-UPSERT (5000 rows/batch) | ~22K rows/sec | ~18K rows/sec |
 | Time-range + dimension query (30-day table, 5M rows) | 10-100 ms | 10-100 ms |
 | Point lookup (hash index) | <10 ms | <10 ms |
 

@@ -573,13 +573,13 @@ CLP:     Single GET, sequential stream = O(1) API call
 
 ### Requirements Mismatch
 
-Traditional metastores (Iceberg, Hive, Delta Lake) optimize for **features** (ACID, time travel, schema evolution). CLP's metastore optimizes for **performance** (14,000-19,000 ops/sec/table, frequent per-file lifecycle transitions, metadata-layer early termination).
+Traditional metastores (Iceberg, Hive, Delta Lake) optimize for **features** (ACID, time travel, schema evolution). CLP's metastore optimizes for **performance** (20,000-22,000 ops/sec/table, frequent per-file lifecycle transitions, metadata-layer early termination).
 
 A single CLP-IR file goes through **4-5+ metadata updates** during its lifecycle. At 5M files/day with 5 updates each = ~290 ops/sec average, with bursts much higher. Traditional metastores cannot sustain this because each "update" requires a full commit cycle with manifest rewrites.
 
 | Requirement | CLP Metastore | Table Format Metastore |
 |-------------|---------------|------------------------|
-| **Write pattern** | 14,000-19,000 UPSERT/UPDATE per sec per table | Batch commits (hundreds/sec max) |
+| **Write pattern** | 20,000-22,000 UPSERT/UPDATE per sec per table | Batch commits (hundreds/sec max) |
 | **Lifecycle states** | `BUFFERING` → `PENDING` → `ARCHIVE_CLOSED` → `PURGING` | Static file registration |
 | **Statistics** | `agg_*` + dimensions for early termination | Column min/max only |
 | **Real-time updates** | Direct row UPDATE | Full commit cycle with manifest rewrite |
@@ -589,11 +589,11 @@ A single CLP-IR file goes through **4-5+ metadata updates** during its lifecycle
 ```
 Iceberg commit (per file registration):
   Read manifest list → Create new manifest → Create new manifest list → Atomic commit
-  At 15,000 files/sec: 15,000 manifest rewrites/sec = unsustainable
+  At 21,000 files/sec: 21,000 manifest rewrites/sec = unsustainable
 
 CLP Metastore (per file UPSERT):
   INSERT ... ON DUPLICATE KEY UPDATE → Done
-  At 15,000 files/sec: standard database operation
+  At 21,000 files/sec: standard database operation
 ```
 
 ### Cost Efficiency
@@ -612,7 +612,7 @@ CLP scales via **independent topic/table pairs** within a shared database. Each 
 
 | Metastore | Why It Doesn't Fit |
 |-----------|-------------------|
-| **AWS Glue Catalog** | Per-request pricing unsustainable at 14-19k ops/sec; partition-oriented |
+| **AWS Glue Catalog** | Per-request pricing unsustainable at 20-22k ops/sec; partition-oriented |
 | **Databricks Unity** | Designed for Delta tables; vendor lock-in |
 | **Apache Polaris** | Inherits Iceberg's manifest-based limitations |
 | **Project Nessie** | Git-like versioning doesn't fit streaming lifecycle |

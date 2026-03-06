@@ -12,8 +12,8 @@ Rough measured characteristics on a local testcontainers-go setup:
 
 | Metric | Ballpark | Notes |
 |--------|----------|-------|
-| **batch-UPSERT** | 14,000–19,000 records/sec | Default mode (batch size 5000) |
-| **batch INSERT IGNORE** | 16,000–22,000 records/sec | Fast mode for bulk loading |
+| **batch-UPSERT** | 20,000–22,000 records/sec | Default mode (batch size 5000) |
+| **batch INSERT IGNORE** | 24,000–26,000 records/sec | Fast mode for bulk loading |
 | **Kafka Consumption** | 30,000+ msg/sec | Kafka path (bounded by DB write speed) |
 | **Query (Pending Files)** | < 50ms | With proper indexing |
 
@@ -36,9 +36,9 @@ In production, each file goes through multiple state transitions, requiring mult
 
 | Scenario | Upserts/File | Throughput | Effective Files/sec | 25M files/day Headroom |
 |----------|--------------|------------|---------------------|------------------------|
-| IR-Only Lifecycle | 3 | ~15,000 ups/sec | ~5,000 files/sec | **17x** |
-| Full Archive Lifecycle | 5 | ~14,000 ups/sec | ~2,800 files/sec | **9.7x** |
-| Mixed Workload | varies | ~18,000 ops/sec | — | — |
+| IR-Only Lifecycle | 3 | ~21,000 ups/sec | ~7,000 files/sec | **24x** |
+| Full Archive Lifecycle | 5 | ~20,000 ups/sec | ~4,000 files/sec | **13.8x** |
+| Mixed Workload | varies | ~22,000 ops/sec | — | — |
 
 ---
 
@@ -46,7 +46,7 @@ In production, each file goes through multiple state transitions, requiring mult
 
 ### Single Coordinator Constraints
 
-For the Kafka ingestion path, effective throughput is bounded by the slower stage: Kafka consumption (30K+ msg/sec) vs database batch-UPSERT (10-20K rec/sec). The bottleneck is database write throughput (index maintenance), giving an effective rate of ~10-20K records/sec per coordinator. Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each active table gets a dedicated `tableWriter` goroutine that batch-UPSERTs to the database.
+For the Kafka ingestion path, effective throughput is bounded by the slower stage: Kafka consumption (30K+ msg/sec) vs database batch-UPSERT (20-22K rec/sec). The bottleneck is database write throughput (index maintenance), giving an effective rate of ~20-22K records/sec per coordinator. Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each active table gets a dedicated `tableWriter` goroutine that batch-UPSERTs to the database.
 
 ### Goroutine Architecture Benefits
 
@@ -63,7 +63,7 @@ For the Kafka ingestion path, effective throughput is bounded by the slower stag
 
 | Goroutine | Purpose | Throughput Impact |
 |-----------|---------|-------------------|
-| **BatchingWriter** | 1 `tableWriter` goroutine per active table — batch-UPSERT to database | 10-20K upserts/sec per goroutine |
+| **BatchingWriter** | 1 `tableWriter` goroutine per active table — batch-UPSERT to database | 20-22K upserts/sec per goroutine |
 
 **Node-level HA & maintenance goroutines:**
 
@@ -83,8 +83,8 @@ Optimal batch sizes for database batch-UPSERT (with `interpolateParams=true` in 
 | 500 | ~14,500 rec/sec | ~35ms | Low latency |
 | 1,000 | ~8,000 rec/sec | 125ms | Moderate overhead |
 | 2,000 | ~12,000 rec/sec | 170ms | Good balance |
-| 5,000 | ~15,000 rec/sec | 350ms | **Default** — good throughput/latency balance |
-| 10,000 | ~18,000 rec/sec | 550ms | Maximum throughput, highest memory |
+| 5,000 | ~21,000 rec/sec | 350ms | **Default** — good throughput/latency balance |
+| 10,000 | ~24,000 rec/sec | 550ms | Maximum throughput, highest memory |
 
 **Recommendation:** The default of 5000 balances throughput and latency. Decrease to 500 if you need lower latency under light load. See [Performance Gotchas](#performance-gotchas) for critical driver settings.
 
@@ -96,7 +96,7 @@ Optimal batch sizes for database batch-UPSERT (with `interpolateParams=true` in 
 
 Each coordinator is responsible for an **independent** database table (and optionally a Kafka topic). This provides workload isolation rather than shared scaling.
 
-Each coordinator owns an independent database table (one-to-one mapping). For Kafka ingestion, each coordinator also owns a dedicated Kafka topic. Total throughput scales linearly: N coordinators × 15K records/sec. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
+Each coordinator owns an independent database table (one-to-one mapping). For Kafka ingestion, each coordinator also owns a dedicated Kafka topic. Total throughput scales linearly: N coordinators × 21K records/sec. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
 
 ### 2. Vertical Scaling
 
@@ -119,13 +119,13 @@ Each coordinator owns an independent database table (one-to-one mapping). For Ka
 
 ## Production Projections
 
-Given measured throughput of 15,000 records/sec per coordinator (UPSERT mode):
+Given measured throughput of 21,000 records/sec per coordinator (UPSERT mode):
 
 | Metric | Per Coordinator | 3 Coordinators | 10 Coordinators |
 |--------|-----------------|-----------------|------------------|
-| Records/minute | 900,000 | 2,700,000 | 9,000,000 |
-| Records/hour | 54,000,000 | 162,000,000 | 540,000,000 |
-| Records/day | 1.3 billion | 3.9 billion | 13 billion |
+| Records/minute | 1,260,000 | 3,780,000 | 12,600,000 |
+| Records/hour | 75,600,000 | 226,800,000 | 756,000,000 |
+| Records/day | 1.8 billion | 5.4 billion | 18 billion |
 
 ---
 
@@ -134,7 +134,7 @@ Given measured throughput of 15,000 records/sec per coordinator (UPSERT mode):
 ### Current Design Bottlenecks
 
 1. **Database Write Throughput** (most common)
-   - Single goroutine batch-UPSERT: 14K-19K records/sec (measured)
+   - Single goroutine batch-UPSERT: 20K-22K records/sec (measured)
    - Mitigation: Larger batches, horizontal scaling, fast insert mode for bulk loads
 
 2. **Network Latency**
@@ -155,7 +155,7 @@ Given measured throughput of 15,000 records/sec per coordinator (UPSERT mode):
 
 ## Recommendations
 
-1. **Start with 1 coordinator** - sufficient for < 50M records/hour
+1. **Start with 1 coordinator** - sufficient for < 75M records/hour
 2. **Scale horizontally** when approaching 80% capacity
 3. **Monitor database slow query log** for index optimization opportunities
 4. **Keep default batch size of 5000** unless you need lower latency (decrease to 500 for latency-sensitive workloads)
@@ -170,9 +170,8 @@ Given measured throughput of 15,000 records/sec per coordinator (UPSERT mode):
 # Run task queue scalability benchmark
 integration-tests/benchmarks/task-queue-scalability/run.py
 
-# Run ingestion benchmarks
-integration-tests/benchmarks/kafka-ingestion/run.py -r 100000
-integration-tests/benchmarks/grpc-ingestion/run.py -r 100000
+# Run ingestion benchmark (gRPC mode)
+integration-tests/benchmarks/ingestion/run.py --mode grpc -r 100000
 ```
 
 ---
@@ -203,8 +202,8 @@ The Go implementation uses `strings.Builder` to construct multi-row INSERT state
 |------------|------------|-------------------|
 | 500 | ~14,500 rec/sec | ~35ms | Low latency |
 | 1,000 | ~8,000 rec/sec | ~125ms |
-| 5,000 | ~15,000 rec/sec | ~350ms |
-| 10,000 | ~18,000 rec/sec | ~550ms |
+| 5,000 | ~21,000 rec/sec | ~350ms |
+| 10,000 | ~24,000 rec/sec | ~550ms |
 
 **Recommendation:** The default of 5000 balances throughput and latency. Decrease to 500 for latency-sensitive workloads.
 
@@ -224,8 +223,8 @@ export COORDINATOR_INSERT_FAST_ENABLED=true
 
 | Mode | SQL | Use Case | Throughput |
 |------|-----|----------|------------|
-| Safe (default) | `INSERT ... ON DUPLICATE KEY UPDATE` | Production | ~15,000 rec/sec |
-| Fast | `INSERT IGNORE ...` | Bulk loading | ~19,000 rec/sec |
+| Safe (default) | `INSERT ... ON DUPLICATE KEY UPDATE` | Production | ~21,000 rec/sec |
+| Fast | `INSERT IGNORE ...` | Bulk loading | ~25,000 rec/sec |
 
 **When to use fast mode:**
 - Initial data migration
@@ -278,26 +277,17 @@ The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` 
 
 ## End-to-End Benchmark
 
-Two benchmark scripts exercise the full ingestion pipeline against real Docker infrastructure (MariaDB, Kafka, ZooKeeper). Both build the JAR, start containers, produce records, and report coordinator throughput.
+The unified ingestion benchmark exercises the full pipeline against real Docker infrastructure (MariaDB, optionally Kafka + ZooKeeper). It builds Go binaries, starts containers, produces records, and reports coordinator throughput.
 
-**Kafka ingestion benchmark:**
 ```bash
-# From the metalog directory
-integration-tests/benchmarks/kafka-ingestion/run.py -r 100000 -t 300
+# gRPC mode (default — just MariaDB)
+integration-tests/benchmarks/ingestion/run.py --mode grpc -r 100000
 
-# Wire format options (default: json)
-integration-tests/benchmarks/kafka-ingestion/run.py --mode json
-integration-tests/benchmarks/kafka-ingestion/run.py --mode proto-structured   # DimEntry/AggEntry
-integration-tests/benchmarks/kafka-ingestion/run.py --mode proto-compat       # SelfDescribingEntry /keys
-```
+# Kafka protobuf mode (MariaDB + Kafka)
+integration-tests/benchmarks/ingestion/run.py --mode kafka-proto -r 100000
 
-**gRPC ingestion benchmark:**
-```bash
-integration-tests/benchmarks/grpc-ingestion/run.py -r 100000
-
-# Wire format options (default: structured)
-integration-tests/benchmarks/grpc-ingestion/run.py --mode structured   # DimEntry/AggEntry
-integration-tests/benchmarks/grpc-ingestion/run.py --mode compat        # SelfDescribingEntry /keys
+# Kafka JSON mode (MariaDB + Kafka)
+integration-tests/benchmarks/ingestion/run.py --mode kafka-json -r 100000
 ```
 
 See the [Summary](#summary) table for expected throughput ranges. Results vary by hardware — run the benchmark to get numbers for your environment.
