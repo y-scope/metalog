@@ -1,0 +1,79 @@
+services:
+  # MariaDB — metadata database
+  mariadb:
+    image: mariadb:10.6
+    environment:
+      MARIADB_ROOT_PASSWORD: password
+      MARIADB_DATABASE: metalog_metadata
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      metalog-network:
+        aliases:
+          - db
+
+  # Coordinator — runs CoordinatorUnit + gRPC ingestion server
+  coordinator:
+    build:
+      context: ../../..
+      dockerfile: integration-tests/stacks/presto/Dockerfile
+    command: ["/app/metalog-server", "--config", "/etc/clp/node.yaml"]
+    volumes:
+      - ./config/node.yaml:/etc/clp/node.yaml:ro
+    ports:
+      - "9091:9091"   # gRPC ingestion
+      - "8081:8081"   # health check
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    networks:
+      - metalog-network
+
+  # Data loader — sends test records via gRPC; coordinator auto-creates the table
+  data-loader:
+    build:
+      context: ../../..
+      dockerfile: integration-tests/stacks/presto/Dockerfile.loader
+    environment:
+      GRPC_HOST: coordinator
+      GRPC_PORT: "9091"
+      TABLE_NAME: clp_cockroachdb
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - metalog-network
+
+  # API server — gRPC query endpoint
+  api-server:
+    build:
+      context: ../../..
+      dockerfile: integration-tests/stacks/presto/Dockerfile
+    entrypoint: ["/app/metalog-apiserver"]
+    command: ["--config", "/etc/clp/node.yaml"]
+    ports:
+      - "50051:9091"
+    volumes:
+      - ./config/node.yaml:/etc/clp/node.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - metalog-network
+
+networks:
+  metalog-network:
+    driver: bridge
