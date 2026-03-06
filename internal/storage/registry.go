@@ -5,6 +5,45 @@ import (
 	"sync"
 )
 
+// BackendMeta describes a registered backend type.
+type BackendMeta struct {
+	RequiresBucket bool
+	Factory        func(cfg map[string]string) (StorageBackend, error)
+}
+
+var (
+	typeMu       sync.RWMutex
+	typeRegistry = map[string]BackendMeta{}
+)
+
+// RegisterType registers a backend type factory.
+func RegisterType(typeName string, meta BackendMeta) {
+	typeMu.Lock()
+	defer typeMu.Unlock()
+	typeRegistry[typeName] = meta
+}
+
+// CreateBackend creates a backend instance by type name.
+func CreateBackend(typeName string, cfg map[string]string) (StorageBackend, error) {
+	typeMu.RLock()
+	meta, ok := typeRegistry[typeName]
+	typeMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown storage backend type: %q", typeName)
+	}
+	return meta.Factory(cfg)
+}
+
+// RequiresBucket returns whether a backend type uses buckets.
+func RequiresBucket(typeName string) bool {
+	typeMu.RLock()
+	defer typeMu.RUnlock()
+	if meta, ok := typeRegistry[typeName]; ok {
+		return meta.RequiresBucket
+	}
+	return true
+}
+
 // Registry maps backend names to StorageBackend instances.
 type Registry struct {
 	mu       sync.RWMutex

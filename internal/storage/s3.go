@@ -11,6 +11,40 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+func init() {
+	RegisterType("s3", BackendMeta{
+		RequiresBucket: true,
+		Factory:        newS3BackendFromConfig,
+	})
+}
+
+// newS3BackendFromConfig creates an S3 backend from a config map.
+func newS3BackendFromConfig(cfg map[string]string) (StorageBackend, error) {
+	endpoint := cfg["endpoint"]
+	if endpoint == "" {
+		return nil, fmt.Errorf("s3 backend requires endpoint")
+	}
+	resolver := aws.EndpointResolverWithOptionsFunc(
+		func(service, region string, options ...any) (aws.Endpoint, error) {
+			return aws.Endpoint{URL: endpoint}, nil
+		})
+	awsCfg := aws.Config{
+		Region:                      cfg["region"],
+		EndpointResolverWithOptions: resolver,
+		Credentials: aws.CredentialsProviderFunc(
+			func(ctx context.Context) (aws.Credentials, error) {
+				return aws.Credentials{
+					AccessKeyID:     cfg["accessKey"],
+					SecretAccessKey: cfg["secretKey"],
+				}, nil
+			}),
+	}
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.UsePathStyle = cfg["forcePathStyle"] == "true"
+	})
+	return NewS3Backend(client), nil
+}
+
 // S3Backend implements StorageBackend using AWS S3.
 type S3Backend struct {
 	client *s3.Client

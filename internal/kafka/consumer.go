@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
@@ -19,6 +20,35 @@ const pollTimeoutMs = 100
 
 // maxPollBatch is the maximum number of messages to drain per poll cycle.
 const maxPollBatch = 1000
+
+var (
+	transformerMu       sync.RWMutex
+	transformerRegistry = map[string]func() MessageTransformer{}
+)
+
+// RegisterTransformer registers a named message transformer factory.
+func RegisterTransformer(name string, factory func() MessageTransformer) {
+	transformerMu.Lock()
+	defer transformerMu.Unlock()
+	transformerRegistry[name] = factory
+}
+
+// NewTransformer creates a transformer by name. Falls back to AutoDetectTransformer.
+func NewTransformer(name string) MessageTransformer {
+	transformerMu.RLock()
+	factory, ok := transformerRegistry[name]
+	transformerMu.RUnlock()
+	if ok {
+		return factory()
+	}
+	return &AutoDetectTransformer{}
+}
+
+func init() {
+	RegisterTransformer("", func() MessageTransformer { return &AutoDetectTransformer{} })
+	RegisterTransformer("auto", func() MessageTransformer { return &AutoDetectTransformer{} })
+	RegisterTransformer("proto", func() MessageTransformer { return &ProtoTransformer{} })
+}
 
 // ProtoTransformer deserializes protobuf MetadataRecord payloads.
 type ProtoTransformer struct{}

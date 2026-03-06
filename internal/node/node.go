@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
@@ -72,10 +70,16 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	// Set up storage registry
 	storageReg := storage.NewRegistry()
 	for name, backendCfg := range cfg.Node.Storage.Backends {
-		s3Client := buildS3Client(backendCfg)
-		if s3Client != nil {
-			storageReg.Register(name, storage.NewS3Backend(s3Client))
+		typeName := backendCfg.Type
+		if typeName == "" {
+			typeName = "s3"
 		}
+		backend, err := storage.CreateBackend(typeName, backendCfg.ToMap())
+		if err != nil {
+			log.Warn("failed to create storage backend", zap.String("name", name), zap.Error(err))
+			continue
+		}
+		storageReg.Register(name, backend)
 	}
 
 	// Create compressor
@@ -470,29 +474,3 @@ func (n *Node) reconcile() {
 	}
 }
 
-// buildS3Client creates an S3 client from backend config.
-// Returns nil if config is insufficient.
-func buildS3Client(cfg config.StorageBackendConfig) *s3.Client {
-	if cfg.Endpoint == "" {
-		return nil
-	}
-	// Build S3 client with custom endpoint
-	resolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, region string, options ...any) (aws.Endpoint, error) {
-			return aws.Endpoint{URL: cfg.Endpoint}, nil
-		})
-	awsCfg := aws.Config{
-		Region:                      cfg.Region,
-		EndpointResolverWithOptions: resolver,
-		Credentials: aws.CredentialsProviderFunc(
-			func(ctx context.Context) (aws.Credentials, error) {
-				return aws.Credentials{
-					AccessKeyID:     cfg.AccessKey,
-					SecretAccessKey: cfg.SecretKey,
-				}, nil
-			}),
-	}
-	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = cfg.ForcePathStyle
-	})
-}

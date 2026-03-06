@@ -8,6 +8,15 @@ import (
 	"path/filepath"
 )
 
+func init() {
+	RegisterType("fs", BackendMeta{
+		RequiresBucket: true,
+		Factory: func(cfg map[string]string) (StorageBackend, error) {
+			return NewFilesystemBackend(), nil
+		},
+	})
+}
+
 // FilesystemBackend implements StorageBackend using the local filesystem.
 // Bucket is treated as a base directory.
 type FilesystemBackend struct{}

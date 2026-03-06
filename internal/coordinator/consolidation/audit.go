@@ -6,6 +6,12 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
+func init() {
+	RegisterPolicyType("audit", func(cfg PolicyConfig) (Policy, error) {
+		return NewAuditPolicy(cfg.MinFiles, cfg.MaxFiles), nil
+	})
+}
+
 // AuditPolicy groups files by exact day boundaries for compliance-oriented
 // consolidation. Files are never merged across day boundaries.
 type AuditPolicy struct {

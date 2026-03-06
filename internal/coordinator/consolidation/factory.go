@@ -2,6 +2,7 @@ package consolidation
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,18 @@ func DefaultPolicyConfig() PolicyConfig {
 	}
 }
 
+var (
+	policyMu       sync.RWMutex
+	policyRegistry = map[string]func(cfg PolicyConfig) (Policy, error){}
+)
+
+// RegisterPolicyType registers a policy type factory.
+func RegisterPolicyType(typeName string, factory func(cfg PolicyConfig) (Policy, error)) {
+	policyMu.Lock()
+	defer policyMu.Unlock()
+	policyRegistry[typeName] = factory
+}
+
 // CreatePolicy instantiates a Policy from configuration.
 func CreatePolicy(cfg PolicyConfig) (Policy, error) {
 	if cfg.MinFiles <= 0 {
@@ -34,28 +47,16 @@ func CreatePolicy(cfg PolicyConfig) (Policy, error) {
 		cfg.MaxFiles = 100
 	}
 
-	switch cfg.Type {
-	case "time_window", "":
-		ws := cfg.WindowSize
-		if ws <= 0 {
-			ws = time.Hour
-		}
-		return NewTimeWindowPolicy(ws, cfg.MinFiles, cfg.MaxFiles), nil
-
-	case "spark_job":
-		if cfg.GroupingDimKey == "" {
-			return nil, fmt.Errorf("spark_job policy requires groupingDimKey")
-		}
-		jt := cfg.JobTimeout
-		if jt <= 0 {
-			jt = 2 * time.Hour
-		}
-		return NewSparkJobPolicy(cfg.GroupingDimKey, cfg.MinFiles, cfg.MaxFiles, jt), nil
-
-	case "audit":
-		return NewAuditPolicy(cfg.MinFiles, cfg.MaxFiles), nil
-
-	default:
-		return nil, fmt.Errorf("unknown policy type: %q", cfg.Type)
+	typeName := cfg.Type
+	if typeName == "" {
+		typeName = "time_window"
 	}
+
+	policyMu.RLock()
+	factory, ok := policyRegistry[typeName]
+	policyMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown policy type: %q", typeName)
+	}
+	return factory(cfg)
 }

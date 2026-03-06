@@ -77,7 +77,7 @@ func NewCoordinatorUnit(
 		groupID := "metalog-coordinator-" + tableName
 		kc = kafkaconsumer.NewConsumer(
 			kafkaCfg.BootstrapServers, groupID, kafkaCfg.Topic, tableName,
-			&kafkaconsumer.AutoDetectTransformer{},
+			kafkaconsumer.NewTransformer(kafkaCfg.RecordTransformer),
 			ingestSvc,
 			log,
 		)

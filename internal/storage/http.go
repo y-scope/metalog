@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+func init() {
+	RegisterType("http", BackendMeta{
+		RequiresBucket: true,
+		Factory: func(cfg map[string]string) (StorageBackend, error) {
+			return NewHTTPBackend(cfg["baseUrl"], 30*time.Second), nil
+		},
+	})
+}
+
 // HTTPBackend implements a read-only StorageBackend that fetches objects via HTTP(S).
 // Useful for reading from CDNs, public object store endpoints, or HTTP file servers.
 type HTTPBackend struct {

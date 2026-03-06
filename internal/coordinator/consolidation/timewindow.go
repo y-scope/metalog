@@ -6,6 +6,16 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
+func init() {
+	RegisterPolicyType("time_window", func(cfg PolicyConfig) (Policy, error) {
+		ws := cfg.WindowSize
+		if ws <= 0 {
+			ws = time.Hour
+		}
+		return NewTimeWindowPolicy(ws, cfg.MinFiles, cfg.MaxFiles), nil
+	})
+}
+
 // TimeWindowPolicy groups files by time window for consolidation.
 type TimeWindowPolicy struct {
 	WindowSize       time.Duration

@@ -22,7 +22,7 @@ func NewPollerFactory(service *ingestion.Service, log *zap.Logger) *PollerFactor
 func (f *PollerFactory) Create(tableConfig config.TableConfig) *Poller {
 	groupID := "metalog-" + tableConfig.Name
 
-	transformer := &AutoDetectTransformer{}
+	transformer := NewTransformer(tableConfig.Kafka.RecordTransformer)
 
 	return NewPoller(
 		tableConfig.Kafka.BootstrapServers,

@@ -1,10 +1,24 @@
 package consolidation
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/y-scope/metalog/internal/metastore"
 )
+
+func init() {
+	RegisterPolicyType("spark_job", func(cfg PolicyConfig) (Policy, error) {
+		if cfg.GroupingDimKey == "" {
+			return nil, fmt.Errorf("spark_job policy requires groupingDimKey")
+		}
+		jt := cfg.JobTimeout
+		if jt <= 0 {
+			jt = 2 * time.Hour
+		}
+		return NewSparkJobPolicy(cfg.GroupingDimKey, cfg.MinFiles, cfg.MaxFiles, jt), nil
+	})
+}
 
 // SparkJobPolicy groups files by a dimension value (e.g., application_id)
 // to consolidate all IR files belonging to the same job together.
