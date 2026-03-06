@@ -10,12 +10,12 @@
 #   5. Periodic reconciliation: table added after startup is picked up within seconds
 #
 # Usage:
-#   ./docker/validate-e2e.sh
+#   ./integration-tests/functional/coordinator/validate-e2e.sh
 #
 # Prerequisites:
-#   - Docker and $COMPOSE
+#   - Docker and docker compose
 #   - Port 3307 free (database), or set DB_PORT
-#   - Built image (script builds if needed)
+#   - CLP core .deb package (auto-built if missing)
 
 set -euo pipefail
 
@@ -97,7 +97,6 @@ info "Cleaning up previous runs..."
 $COMPOSE down -v 2>/dev/null || true
 
 # Ensure CLP core .deb package is available for Docker image build
-# The coordinator-node service requires this package to install CLP binaries
 if ! ls "$PROJECT_DIR"/clp-core_*.deb >/dev/null 2>&1; then
     info "Building CLP core .deb package (this may take a few minutes)..."
     "$PROJECT_DIR/scripts/build-clp.sh"
@@ -108,8 +107,8 @@ fi
 info "Building Docker image..."
 $COMPOSE build coordinator-node --quiet 2>&1
 
-info "Starting infrastructure (MariaDB, Kafka, MinIO)..."
-DB_PORT="$DB_PORT" $COMPOSE up -d 2>&1
+info "Starting infrastructure (MariaDB, Kafka, MinIO) with 2 coordinator replicas..."
+DB_PORT="$DB_PORT" $COMPOSE up -d --scale coordinator-node=2 2>&1
 
 # Wait for MariaDB
 wait_for_condition "MariaDB healthy" \
@@ -145,7 +144,7 @@ else
     fail "clp_spark table seed unexpected: node_id='$SEED_CHECK'"
 fi
 
-info "Restarting both nodes to trigger fight-for-master..."
+info "Restarting both coordinator nodes to trigger fight-for-master..."
 $COMPOSE restart coordinator-node 2>&1
 
 # Wait for the spark table to be claimed (node_id IS NOT NULL)
@@ -163,9 +162,9 @@ else
     fail "clp_spark table was not claimed (node_id='$ASSIGNED_NODE')"
 fi
 
-# Verify exactly one node claimed it
-CLAIM_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c "Claimed table 'clp_spark'" || true)
-SKIP_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c "Table 'clp_spark' already claimed" || true)
+# Verify exactly one node claimed it (Go zap JSON: "msg":"claimed table","table":"clp_spark")
+CLAIM_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c '"claimed table".*"clp_spark"' || true)
+SKIP_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c '"table already claimed by another node".*"clp_spark"' || true)
 
 if [ "$CLAIM_COUNT" -eq 1 ]; then
     pass "Exactly 1 node claimed 'clp_spark' (no double-claim)"
@@ -185,18 +184,18 @@ fi
 echo ""
 info "=== Test 2: Single coordinator per table ==="
 
-# Count how many times a coordinator unit was CREATED (not discovered)
-# "Discovered" logs every DB query, "Created unit" logs only on actual creation
-COORDINATOR_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c "Created unit: coordinator-clp_spark" || true)
+# Count how many times a coordinator unit was started for clp_spark
+# Go zap JSON: "msg":"starting coordinator unit","table":"clp_spark"
+COORDINATOR_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c '"starting coordinator unit".*"clp_spark"' || true)
 
 if [ "$COORDINATOR_COUNT" -eq 1 ]; then
-    pass "Exactly 1 coordinator created for 'clp_spark'"
+    pass "Exactly 1 coordinator started for 'clp_spark'"
 else
     fail "Expected 1 coordinator for 'clp_spark', found $COORDINATOR_COUNT"
 fi
 
 # Identify which node is running the clp_spark coordinator
-OWNER_LOG=$($COMPOSE logs coordinator-node 2>&1 | grep "Created unit: coordinator-clp_spark" || true)
+OWNER_LOG=$($COMPOSE logs coordinator-node 2>&1 | grep '"starting coordinator unit".*"clp_spark"' || true)
 info "Coordinator owner: $OWNER_LOG"
 
 # =========================================================================
@@ -323,7 +322,7 @@ if [ "$INGESTED" = true ]; then
 else
     fail "Records did not appear in clp_spark within timeout"
     info "Checking coordinator logs for errors..."
-    $COMPOSE logs coordinator-node 2>&1 | grep -iE "ERROR|WARN|exception|Dropping" | tail -20
+    $COMPOSE logs coordinator-node 2>&1 | grep -iE "error|warn" | tail -20
 fi
 
 # =========================================================================
@@ -332,7 +331,8 @@ fi
 echo ""
 info "=== Test 4: Unique nodeIds ==="
 
-NODE_IDS=$($COMPOSE logs coordinator-node 2>&1 | grep "Resolved nodeId from env var HOSTNAME=" | sed 's/.*HOSTNAME=//' | sort -u || true)
+# Go zap JSON: "nodeId":"<container-id>" appears on every log line
+NODE_IDS=$($COMPOSE logs coordinator-node 2>&1 | grep -oP '"nodeId":"[^"]+' | sed 's/"nodeId":"//' | sort -u || true)
 NODE_COUNT=$(echo "$NODE_IDS" | grep -c . || true)
 
 if [ "$NODE_COUNT" -eq 2 ]; then
@@ -376,16 +376,15 @@ else
     fail "clp_flink was NOT claimed within 30s — periodic reconciliation may not be working"
 fi
 
-# Verify coordinator was created and started for the new table.
-# Dump logs to a temp file to avoid pipe buffering issues with large $COMPOSE output.
+# Verify coordinator was started for the new table (Go zap JSON log).
 FLINK_LOG=$(mktemp)
-if wait_for_condition "coordinator-clp_flink running" \
-    "$COMPOSE logs coordinator-node >\"$FLINK_LOG\" 2>&1 && grep -q 'Created unit: coordinator-clp_flink' \"$FLINK_LOG\"" \
+if wait_for_condition "coordinator for clp_flink started" \
+    "$COMPOSE logs coordinator-node >\"$FLINK_LOG\" 2>&1 && grep -q '\"new assignment detected, starting coordinator\".*\"clp_flink\"' \"$FLINK_LOG\"" \
     10 2; then
-    pass "CoordinatorUnit created for clp_flink after reconciliation"
+    pass "CoordinatorUnit started for clp_flink after reconciliation"
 else
-    fail "No coordinator created for clp_flink"
-    grep -i "clp_flink" "$FLINK_LOG" | grep -v DEBUG | tail -10
+    fail "No coordinator started for clp_flink"
+    grep -i "clp_flink" "$FLINK_LOG" | tail -10
 fi
 rm -f "$FLINK_LOG"
 
