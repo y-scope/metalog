@@ -25,8 +25,8 @@ func NewMetadataHandler(db *sql.DB, log *zap.Logger) *MetadataHandler {
 }
 
 // ListTables returns all registered table names.
-func (s *MetadataHandler) ListTables(ctx context.Context, _ *metapb.ListTablesRequest) (*metapb.ListTablesResponse, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT table_name FROM "+metastore.TableRegistry+" ORDER BY table_name")
+func (h *MetadataHandler) ListTables(ctx context.Context, _ *metapb.ListTablesRequest) (*metapb.ListTablesResponse, error) {
+	rows, err := h.db.QueryContext(ctx, "SELECT table_name FROM "+metastore.TableRegistry+" ORDER BY table_name")
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list tables: %v", err)
 	}
@@ -48,13 +48,13 @@ func (s *MetadataHandler) ListTables(ctx context.Context, _ *metapb.ListTablesRe
 }
 
 // ListDimensions returns dimension metadata for a table.
-func (s *MetadataHandler) ListDimensions(ctx context.Context, req *metapb.ListDimensionsRequest) (*metapb.ListDimensionsResponse, error) {
+func (h *MetadataHandler) ListDimensions(ctx context.Context, req *metapb.ListDimensionsRequest) (*metapb.ListDimensionsResponse, error) {
 	tableName := req.GetTable()
 	if tableName == "" {
 		return nil, status.Error(codes.InvalidArgument, "table is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := h.db.QueryContext(ctx,
 		"SELECT column_name, dim_key FROM "+metastore.DimRegistryTable+" WHERE table_name = ? AND state = 'ACTIVE' ORDER BY column_name",
 		tableName,
 	)
@@ -82,13 +82,13 @@ func (s *MetadataHandler) ListDimensions(ctx context.Context, req *metapb.ListDi
 }
 
 // ListAggs returns aggregation metadata for a table.
-func (s *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequest) (*metapb.ListAggsResponse, error) {
+func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequest) (*metapb.ListAggsResponse, error) {
 	tableName := req.GetTable()
 	if tableName == "" {
 		return nil, status.Error(codes.InvalidArgument, "table is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := h.db.QueryContext(ctx,
 		"SELECT column_name, agg_key, value_type FROM "+metastore.AggRegistryTable+" WHERE table_name = ? AND state = 'ACTIVE' ORDER BY column_name",
 		tableName,
 	)
@@ -122,13 +122,13 @@ func (s *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 }
 
 // ListSketches returns sketch metadata for a table.
-func (s *MetadataHandler) ListSketches(ctx context.Context, req *metapb.ListSketchesRequest) (*metapb.ListSketchesResponse, error) {
+func (h *MetadataHandler) ListSketches(ctx context.Context, req *metapb.ListSketchesRequest) (*metapb.ListSketchesResponse, error) {
 	tableName := req.GetTable()
 	if tableName == "" {
 		return nil, status.Error(codes.InvalidArgument, "table is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := h.db.QueryContext(ctx,
 		"SELECT sketch_name FROM "+metastore.SketchRegistryTable+" WHERE table_name = ? AND state = 'ACTIVE' ORDER BY sketch_name",
 		tableName,
 	)

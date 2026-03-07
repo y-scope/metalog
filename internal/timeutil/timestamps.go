@@ -2,6 +2,7 @@ package timeutil
 
 import "time"
 
+// NanosPerSecond is the number of nanoseconds in one second (1e9).
 const NanosPerSecond = int64(time.Second)
 
 // EpochNanos returns the current time as epoch nanoseconds.

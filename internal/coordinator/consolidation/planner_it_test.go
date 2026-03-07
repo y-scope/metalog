@@ -73,7 +73,7 @@ func TestPlanner_RunCreatesTasksForPendingFiles(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	cancel()
 
-	// Check that tasks were created (use fresh context since ctx is cancelled)
+	// Check that tasks were created (use fresh context since ctx is canceled)
 	counts, err := taskQueue.GetTaskCounts(context.Background(), plannerTable)
 	if err != nil {
 		t.Fatal(err)

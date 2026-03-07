@@ -9,8 +9,8 @@ import (
 // ErrObjectNotFound is returned when a requested object does not exist.
 var ErrObjectNotFound = errors.New("object not found")
 
-// StorageBackend is the interface for object storage operations.
-type StorageBackend interface {
+// Backend is the interface for object storage operations.
+type Backend interface {
 	// Get retrieves an object. Caller must close the reader.
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 

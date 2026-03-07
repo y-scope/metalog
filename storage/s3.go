@@ -19,7 +19,7 @@ func init() {
 }
 
 // newS3BackendFromConfig creates an S3 backend from a config map.
-func newS3BackendFromConfig(cfg map[string]string) (StorageBackend, error) {
+func newS3BackendFromConfig(cfg map[string]string) (Backend, error) {
 	endpoint := cfg["endpoint"]
 	if endpoint == "" {
 		return nil, fmt.Errorf("s3 backend requires endpoint")
@@ -45,7 +45,7 @@ func newS3BackendFromConfig(cfg map[string]string) (StorageBackend, error) {
 	return NewS3Backend(client), nil
 }
 
-// S3Backend implements StorageBackend using AWS S3.
+// S3Backend implements Backend using AWS S3.
 type S3Backend struct {
 	client *s3.Client
 }

@@ -10,9 +10,9 @@ import (
 
 	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/metastore"
-	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/timeutil"
+	"github.com/y-scope/metalog/storage"
 )
 
 // maxBackpressureDepth is the maximum number of pending+processing tasks
@@ -66,7 +66,7 @@ func NewPlanner(
 	}, nil
 }
 
-// Run executes the planning loop until ctx is cancelled.
+// Run executes the planning loop until ctx is canceled.
 func (p *Planner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
@@ -153,6 +153,7 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		}
 		for _, rec := range group {
 			payload.FileIDs = append(payload.FileIDs, rec.ID)
+			// MinTimestamp == 0 is treated as uninitialized (not a valid epoch-zero timestamp).
 			if payload.MinTimestamp == 0 || rec.MinTimestamp < payload.MinTimestamp {
 				payload.MinTimestamp = rec.MinTimestamp
 			}

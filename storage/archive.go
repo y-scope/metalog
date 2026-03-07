@@ -95,7 +95,7 @@ func (ac *ArchiveCreator) CreateArchive(
 	return stat.Size(), nil
 }
 
-func downloadFile(ctx context.Context, backend StorageBackend, bucket, key, localPath string) error {
+func downloadFile(ctx context.Context, backend Backend, bucket, key, localPath string) error {
 	reader, err := backend.Get(ctx, bucket, key)
 	if err != nil {
 		return fmt.Errorf("download file: get: %w", err)

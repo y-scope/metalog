@@ -1,7 +1,7 @@
 // Package storage provides pluggable object storage backends and archive
 // creation utilities for metalog.
 //
-// The [StorageBackend] interface abstracts operations (Get, Put, Delete, Exists)
+// The [Backend] interface abstracts operations (Get, Put, Delete, Exists)
 // across multiple backends:
 //   - [S3Backend]: AWS S3 and S3-compatible stores (MinIO, GCS interop)
 //   - [FilesystemBackend]: local filesystem (development and testing)

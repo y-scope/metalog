@@ -13,10 +13,10 @@ import (
 
 // TableRegistration handles registering new tables at runtime.
 type TableRegistration struct {
-	db                   *sql.DB
-	isMariaDB            bool
-	compressionOverride  string
-	log                  *zap.Logger
+	db                  *sql.DB
+	isMariaDB           bool
+	compressionOverride string
+	log                 *zap.Logger
 }
 
 // NewTableRegistration creates a TableRegistration.

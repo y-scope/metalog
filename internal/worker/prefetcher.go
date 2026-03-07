@@ -43,7 +43,7 @@ func (pf *Prefetcher) Done() <-chan struct{} {
 	return pf.done
 }
 
-// Run polls for tasks until ctx is cancelled, then closes the task channel.
+// Run polls for tasks until ctx is canceled, then closes the task channel.
 func (pf *Prefetcher) Run(ctx context.Context) {
 	defer close(pf.done)
 	defer close(pf.tasks)
@@ -84,7 +84,7 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 				// Log abandoned tasks so operators know they'll be reclaimed after stale timeout.
 				remaining := len(claimed) - i
 				if remaining > 0 {
-					pf.log.Warn("prefetcher cancelled, abandoning claimed tasks",
+					pf.log.Warn("prefetcher canceled, abandoning claimed tasks",
 						zap.Int("abandoned", remaining))
 				}
 				return

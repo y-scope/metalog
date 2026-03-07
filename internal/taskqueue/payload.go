@@ -84,11 +84,18 @@ func compressMsgpack(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// maxDecompressedSize is the upper bound on decompressed payload size (16 MB).
+// This prevents a crafted LZ4 stream from causing unbounded memory allocation.
+const maxDecompressedSize = 16 << 20
+
 func decompressMsgpack(data []byte, v any) error {
 	r := lz4.NewReader(bytes.NewReader(data))
-	raw, err := io.ReadAll(r)
+	raw, err := io.ReadAll(io.LimitReader(r, maxDecompressedSize+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxDecompressedSize {
+		return fmt.Errorf("decompressed payload exceeds %d bytes", maxDecompressedSize)
 	}
 	return msgpack.Unmarshal(raw, v)
 }

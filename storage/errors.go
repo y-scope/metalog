@@ -12,19 +12,19 @@ var (
 	ErrTimeout      = errors.New("storage: timeout")
 )
 
-// StorageError wraps an underlying error with a storage-specific classification.
-type StorageError struct {
+// OpError wraps an underlying error with the operation context that caused it.
+type OpError struct {
 	Op     string // operation: "get", "put", "delete", "exists"
 	Bucket string
 	Key    string
 	Err    error
 }
 
-func (e *StorageError) Error() string {
+func (e *OpError) Error() string {
 	return fmt.Sprintf("storage %s %s/%s: %v", e.Op, e.Bucket, e.Key, e.Err)
 }
 
-func (e *StorageError) Unwrap() error {
+func (e *OpError) Unwrap() error {
 	return e.Err
 }
 

@@ -2,9 +2,9 @@ package config
 
 // StorageBackendConfig holds connection info for a single storage backend.
 type StorageBackendConfig struct {
-	Type           string `yaml:"type"`           // "s3" (default), "tb", "http", "fs"
-	BaseURL        string `yaml:"baseUrl"`        // for http-based backends (tb, http)
-	BasePath       string `yaml:"basePath"`       // for filesystem backend
+	Type           string `yaml:"type"`     // "s3" (default), "tb", "http", "fs"
+	BaseURL        string `yaml:"baseUrl"`  // for http-based backends (tb, http)
+	BasePath       string `yaml:"basePath"` // for filesystem backend
 	Endpoint       string `yaml:"endpoint"`
 	AccessKey      string `yaml:"accessKey"`
 	SecretKey      string `yaml:"secretKey"`
@@ -15,12 +15,12 @@ type StorageBackendConfig struct {
 // ToMap returns config fields as a string map for factory consumption.
 func (c StorageBackendConfig) ToMap() map[string]string {
 	m := map[string]string{
-		"endpoint":       c.Endpoint,
-		"accessKey":      c.AccessKey,
-		"secretKey":      c.SecretKey,
-		"region":         c.Region,
-		"baseUrl":        c.BaseURL,
-		"basePath":       c.BasePath,
+		"endpoint":  c.Endpoint,
+		"accessKey": c.AccessKey,
+		"secretKey": c.SecretKey,
+		"region":    c.Region,
+		"baseUrl":   c.BaseURL,
+		"basePath":  c.BasePath,
 	}
 	if c.ForcePathStyle {
 		m["forcePathStyle"] = "true"

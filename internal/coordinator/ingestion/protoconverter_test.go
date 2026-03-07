@@ -7,22 +7,22 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
-func TestConvertProtoToFileRecord_NilInput(t *testing.T) {
-	result := ConvertProtoToFileRecord(nil)
+func TestFileRecordFromProto_NilInput(t *testing.T) {
+	result := FileRecordFromProto(nil)
 	if result != nil {
-		t.Error("ConvertProtoToFileRecord(nil) should return nil")
+		t.Error("FileRecordFromProto(nil) should return nil")
 	}
 }
 
-func TestConvertProtoToFileRecord_NilFile(t *testing.T) {
+func TestFileRecordFromProto_NilFile(t *testing.T) {
 	record := &pb.MetadataRecord{File: nil}
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 	if result != nil {
-		t.Error("ConvertProtoToFileRecord with nil File should return nil")
+		t.Error("FileRecordFromProto with nil File should return nil")
 	}
 }
 
-func TestConvertProtoToFileRecord_BasicFields(t *testing.T) {
+func TestFileRecordFromProto_BasicFields(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State:         "IR_BUFFERING",
@@ -35,10 +35,10 @@ func TestConvertProtoToFileRecord_BasicFields(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	if result == nil {
-		t.Fatal("ConvertProtoToFileRecord returned nil")
+		t.Fatal("FileRecordFromProto returned nil")
 	}
 
 	if result.State != metastore.FileState("IR_BUFFERING") {
@@ -64,7 +64,7 @@ func TestConvertProtoToFileRecord_BasicFields(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_RawSizeBytesZero(t *testing.T) {
+func TestFileRecordFromProto_RawSizeBytesZero(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State:        "IR_BUFFERING",
@@ -72,7 +72,7 @@ func TestConvertProtoToFileRecord_RawSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	// Zero or negative should result in Invalid NullInt64
 	if result.RawSizeBytes.Valid {
@@ -80,7 +80,7 @@ func TestConvertProtoToFileRecord_RawSizeBytesZero(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_IRFields(t *testing.T) {
+func TestFileRecordFromProto_IRFields(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State: "IR_BUFFERING",
@@ -93,7 +93,7 @@ func TestConvertProtoToFileRecord_IRFields(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	if !result.ClpIRStorageBackend.Valid || result.ClpIRStorageBackend.String != "s3" {
 		t.Errorf("ClpIRStorageBackend = %v, want s3", result.ClpIRStorageBackend)
@@ -109,7 +109,7 @@ func TestConvertProtoToFileRecord_IRFields(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_ArchiveFields(t *testing.T) {
+func TestFileRecordFromProto_ArchiveFields(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State: "ARCHIVE_CLOSED",
@@ -123,7 +123,7 @@ func TestConvertProtoToFileRecord_ArchiveFields(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	if !result.ClpArchiveStorageBackend.Valid || result.ClpArchiveStorageBackend.String != "gcs" {
 		t.Errorf("ClpArchiveStorageBackend = %v, want gcs", result.ClpArchiveStorageBackend)
@@ -142,7 +142,7 @@ func TestConvertProtoToFileRecord_ArchiveFields(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_NoArchive(t *testing.T) {
+func TestFileRecordFromProto_NoArchive(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State:   "IR_BUFFERING",
@@ -150,7 +150,7 @@ func TestConvertProtoToFileRecord_NoArchive(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	// Archive fields should be null/invalid
 	if result.ClpArchiveStorageBackend.Valid {
@@ -167,14 +167,14 @@ func TestConvertProtoToFileRecord_NoArchive(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_DimsAndAggsInitialized(t *testing.T) {
+func TestFileRecordFromProto_DimsAndAggsInitialized(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State: "IR_BUFFERING",
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	if result.Dims == nil {
 		t.Error("Dims should be initialized (not nil)")
@@ -190,7 +190,7 @@ func TestConvertProtoToFileRecord_DimsAndAggsInitialized(t *testing.T) {
 	}
 }
 
-func TestConvertProtoToFileRecord_IRSizeBytesZero(t *testing.T) {
+func TestFileRecordFromProto_IRSizeBytesZero(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{
 			State: "IR_BUFFERING",
@@ -201,7 +201,7 @@ func TestConvertProtoToFileRecord_IRSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := ConvertProtoToFileRecord(record)
+	result := FileRecordFromProto(record)
 
 	// Zero size should be invalid
 	if result.ClpIRSizeBytes.Valid {

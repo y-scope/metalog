@@ -10,19 +10,19 @@ import (
 	"github.com/y-scope/metalog/internal/db"
 )
 
-// SchemaEvolution handles online DDL for adding new columns to metadata tables.
-type SchemaEvolution struct {
+// Evolver handles online DDL for adding new columns to metadata tables.
+type Evolver struct {
 	db  *sql.DB
 	log *zap.Logger
 }
 
-// NewSchemaEvolution creates a SchemaEvolution.
-func NewSchemaEvolution(db *sql.DB, log *zap.Logger) *SchemaEvolution {
-	return &SchemaEvolution{db: db, log: log}
+// NewEvolver creates an Evolver.
+func NewEvolver(db *sql.DB, log *zap.Logger) *Evolver {
+	return &Evolver{db: db, log: log}
 }
 
 // AddColumn adds a new column to the table using online DDL (ALGORITHM=INPLACE, LOCK=NONE).
-func (se *SchemaEvolution) AddColumn(ctx context.Context, tableName, colName, sqlType string) error {
+func (se *Evolver) AddColumn(ctx context.Context, tableName, colName, sqlType string) error {
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
 		return err
 	}

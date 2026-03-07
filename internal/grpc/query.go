@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"go.uber.org/zap"
-	ggrpc "google.golang.org/grpc"
+	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -31,7 +31,7 @@ func NewQueryHandler(engine *query.SplitQueryEngine, lookup RegistryLookup, log 
 }
 
 // StreamSplits handles server-streaming split queries.
-func (s *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream ggrpc.ServerStreamingServer[pb.StreamSplitsResponse]) error {
+func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.ServerStreamingServer[pb.StreamSplitsResponse]) error {
 	if req.GetTable() == "" {
 		return status.Error(codes.InvalidArgument, "table is required")
 	}
@@ -48,7 +48,7 @@ func (s *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream ggrpc.Se
 		FilterExpr:     req.GetFilterExpression(),
 		Limit:          int(req.GetLimit()),
 		AllowUnindexed: req.GetAllowUnindexedSort(),
-		Registry:       s.registryLookup(req.GetTable()),
+		Registry:       h.registryLookup(req.GetTable()),
 	}
 
 	// Columns (projection)
@@ -85,9 +85,9 @@ func (s *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream ggrpc.Se
 	}
 
 	// Execute query
-	rows, err := s.engine.Query(stream.Context(), params)
+	rows, err := h.engine.Query(stream.Context(), params)
 	if err != nil {
-		s.log.Error("query failed", zap.String("table", req.GetTable()), zap.Error(err))
+		h.log.Error("query failed", zap.String("table", req.GetTable()), zap.Error(err))
 		return status.Errorf(codes.Internal, "query: %v", err)
 	}
 

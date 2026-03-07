@@ -30,7 +30,7 @@ func NewPoller(
 	}
 }
 
-// Run starts the polling loop until ctx is cancelled.
+// Run starts the polling loop until ctx is canceled.
 func (p *Poller) Run(ctx context.Context) {
 	p.log.Info("kafka poller starting")
 	p.consumer.Run(ctx)

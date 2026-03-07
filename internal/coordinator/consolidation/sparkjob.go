@@ -77,8 +77,11 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*me
 		timedOut := false
 		if p.JobTimeout > 0 {
 			for _, rec := range group {
-				age := time.Duration(now - rec.MinTimestamp)
-				if age >= p.JobTimeout {
+				elapsed := now - rec.MinTimestamp
+				if elapsed <= 0 {
+					continue // future timestamp or clock skew — not timed out
+				}
+				if time.Duration(elapsed) >= p.JobTimeout {
 					timedOut = true
 					break
 				}

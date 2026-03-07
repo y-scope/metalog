@@ -11,7 +11,7 @@ type RecordTransformer interface {
 }
 
 // DefaultTransformer is the default RecordTransformer that maps self-describing
-// key-value entries to dimensions and aggregations.
+// key-value entries to dimensions.
 type DefaultTransformer struct{}
 
 // NewDefaultTransformer creates a DefaultTransformer.
@@ -19,7 +19,7 @@ func NewDefaultTransformer() *DefaultTransformer {
 	return &DefaultTransformer{}
 }
 
-// Transform populates the record's Dims and Aggs from self-describing key-value data.
+// Transform populates the record's Dims from self-describing key-value data.
 func (t *DefaultTransformer) Transform(rec *metastore.FileRecord, data map[string]string) error {
 	if rec.Dims == nil {
 		rec.Dims = make(map[string]any)

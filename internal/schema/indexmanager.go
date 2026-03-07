@@ -156,8 +156,7 @@ func (im *IndexManager) listDynamicIndexes(ctx context.Context, tableName string
 			return nil, err
 		}
 		// Strip "idx_" prefix to get column name.
-		if len(indexName) > 4 {
-			col := indexName[4:]
+		if col := strings.TrimPrefix(indexName, "idx_"); col != indexName {
 			result[col] = true
 		}
 	}

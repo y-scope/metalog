@@ -46,7 +46,7 @@ func NewCore(
 	}
 }
 
-// Run processes tasks from the prefetcher until ctx is cancelled.
+// Run processes tasks from the prefetcher until ctx is canceled.
 func (c *Core) Run(ctx context.Context) {
 	for task := range c.prefetcher.Tasks() {
 		if ctx.Err() != nil {

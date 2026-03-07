@@ -9,7 +9,7 @@ import (
 )
 
 // jsonRecordTransformer parses a JSON payload field and flattens nested keys
-// into the record's Dims and Aggs maps.
+// into the record's Dims map.
 type jsonRecordTransformer struct {
 	// PayloadKey is the data key containing the JSON string. Empty means the
 	// entire data map is treated as the record fields.
@@ -65,7 +65,7 @@ func flattenJSON(prefix string, m map[string]any, out map[string]any) {
 		case map[string]any:
 			flattenJSON(key, val, out)
 		case []any:
-			// Store arrays as JSON string
+			// Store arrays as a JSON string
 			if b, err := json.Marshal(val); err == nil {
 				out[key] = string(b)
 			}

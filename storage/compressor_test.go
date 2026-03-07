@@ -55,7 +55,7 @@ func TestClpCompressor_Compress_ContextCancelled(t *testing.T) {
 
 	err := c.Compress(ctx, inputDir, outputPath)
 	if err == nil {
-		t.Fatal("Compress() with cancelled context should return error")
+		t.Fatal("Compress() with canceled context should return error")
 	}
 }
 

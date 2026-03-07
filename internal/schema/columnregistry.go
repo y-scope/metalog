@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -12,6 +13,9 @@ import (
 	"github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/metastore"
 )
+
+// statusActive is the registry status for columns available for use.
+const statusActive = "ACTIVE"
 
 // DimRegistryEntry represents an active dimension column mapping.
 type DimRegistryEntry struct {
@@ -36,8 +40,8 @@ type AggRegistryEntry struct {
 	Status          string
 }
 
-// ColumnRegistry maps opaque placeholder columns (dim_f01, agg_f01) to field metadata.
-// Thread-safe via sync.RWMutex for reads and sync.Mutex for allocation.
+// ColumnRegistry maps physical placeholder columns (dim_fNN, agg_fNN) to field metadata.
+// Thread-safe: RWMutex guards map reads/writes; a separate Mutex serializes slot allocation.
 type ColumnRegistry struct {
 	db        *sql.DB
 	tableName string
@@ -96,7 +100,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		e := &DimRegistryEntry{TableName: cr.tableName, Status: "ACTIVE"}
+		e := &DimRegistryEntry{TableName: cr.tableName, Status: statusActive}
 		var aliasCol sql.NullString
 		var width sql.NullInt32
 		if err := rows.Scan(&e.ColumnName, &e.BaseType, &width, &e.DimKey, &aliasCol); err != nil {
@@ -129,7 +133,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	defer rows2.Close()
 
 	for rows2.Next() {
-		e := &AggRegistryEntry{TableName: cr.tableName, Status: "ACTIVE"}
+		e := &AggRegistryEntry{TableName: cr.tableName, Status: statusActive}
 		var aggValue, aliasCol sql.NullString
 		if err := rows2.Scan(&e.ColumnName, &e.AggKey, &aggValue, &e.AggregationType, &e.ValueType, &aliasCol); err != nil {
 			return err
@@ -140,7 +144,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 		if aliasCol.Valid {
 			e.AliasCol = aliasCol.String
 		}
-		key := AggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
+		key := aggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
 		cr.aggByKey[key] = e
 		cr.aggByColumn[e.ColumnName] = e
 		slot := parseSlotNumber(e.ColumnName, metastore.AggColumnPrefix)
@@ -165,7 +169,7 @@ func (cr *ColumnRegistry) ResolveDim(dimKey string) string {
 func (cr *ColumnRegistry) ResolveAgg(aggKey, aggValue, aggType string) string {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
-	key := AggCacheKey(aggKey, aggValue, aggType)
+	key := aggCacheKey(aggKey, aggValue, aggType)
 	if e, ok := cr.aggByKey[key]; ok {
 		return e.ColumnName
 	}
@@ -286,7 +290,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	// Update cache
 	entry := &DimRegistryEntry{
 		TableName: cr.tableName, ColumnName: colName,
-		BaseType: baseType, Width: width, DimKey: dimKey, Status: "ACTIVE",
+		BaseType: baseType, Width: width, DimKey: dimKey, Status: statusActive,
 	}
 	cr.mu.Lock()
 	cr.dimByKey[dimKey] = entry
@@ -299,7 +303,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 
 // ResolveOrAllocateAgg resolves an existing agg mapping or allocates a new slot.
 func (cr *ColumnRegistry) ResolveOrAllocateAgg(ctx context.Context, aggKey, aggValue, aggType, valueType string) (string, error) {
-	cacheKey := AggCacheKey(aggKey, aggValue, aggType)
+	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
 
 	cr.mu.RLock()
 	if e, ok := cr.aggByKey[cacheKey]; ok {
@@ -315,7 +319,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
-	cacheKey := AggCacheKey(aggKey, aggValue, aggType)
+	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
 	cr.mu.RLock()
 	if e, ok := cr.aggByKey[cacheKey]; ok {
 		cr.mu.RUnlock()
@@ -355,7 +359,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	entry := &AggRegistryEntry{
 		TableName: cr.tableName, ColumnName: colName,
 		AggKey: aggKey, AggValue: aggValue,
-		AggregationType: aggType, ValueType: valueType, Status: "ACTIVE",
+		AggregationType: aggType, ValueType: valueType, Status: statusActive,
 	}
 	cr.mu.Lock()
 	cr.aggByKey[cacheKey] = entry
@@ -367,6 +371,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 }
 
 // ActiveDimColumns returns the column names of all active dimension entries.
+// The result is sorted for deterministic SQL generation.
 func (cr *ColumnRegistry) ActiveDimColumns() []string {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -374,10 +379,12 @@ func (cr *ColumnRegistry) ActiveDimColumns() []string {
 	for col := range cr.dimByColumn {
 		cols = append(cols, col)
 	}
+	sort.Strings(cols)
 	return cols
 }
 
 // ActiveAggColumns returns the column names of all active aggregation entries.
+// The result is sorted for deterministic SQL generation.
 func (cr *ColumnRegistry) ActiveAggColumns() []string {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -385,10 +392,11 @@ func (cr *ColumnRegistry) ActiveAggColumns() []string {
 	for col := range cr.aggByColumn {
 		cols = append(cols, col)
 	}
+	sort.Strings(cols)
 	return cols
 }
 
-// AllDimEntries returns all active dim entries.
+// AllDimEntries returns a snapshot of all active dimension registry entries.
 func (cr *ColumnRegistry) AllDimEntries() []*DimRegistryEntry {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -399,7 +407,7 @@ func (cr *ColumnRegistry) AllDimEntries() []*DimRegistryEntry {
 	return entries
 }
 
-// AllAggEntries returns all active agg entries.
+// AllAggEntries returns a snapshot of all active aggregation registry entries.
 func (cr *ColumnRegistry) AllAggEntries() []*AggRegistryEntry {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -462,7 +470,7 @@ func (cr *ColumnRegistry) Snapshot() *ColumnRegistryReader {
 		snap.aggByKey[k] = &cp
 	}
 	for k, v := range cr.aggByColumn {
-		cacheKey := AggCacheKey(v.AggKey, v.AggValue, v.AggregationType)
+		cacheKey := aggCacheKey(v.AggKey, v.AggValue, v.AggregationType)
 		if existing, ok := snap.aggByKey[cacheKey]; ok {
 			snap.aggByColumn[k] = existing
 		} else {
@@ -483,7 +491,7 @@ func (r *ColumnRegistryReader) ResolveDim(dimKey string) string {
 
 // ResolveAgg returns the column name for an aggregation, or empty string if not found.
 func (r *ColumnRegistryReader) ResolveAgg(aggKey, aggValue, aggType string) string {
-	key := AggCacheKey(aggKey, aggValue, aggType)
+	key := aggCacheKey(aggKey, aggValue, aggType)
 	if e, ok := r.aggByKey[key]; ok {
 		return e.ColumnName
 	}
@@ -508,8 +516,8 @@ func (r *ColumnRegistryReader) AllAggEntries() []*AggRegistryEntry {
 	return entries
 }
 
-// AggCacheKey builds the composite key for agg cache lookups.
-func AggCacheKey(aggKey, aggValue, aggType string) string {
+// aggCacheKey builds the composite key for agg cache lookups.
+func aggCacheKey(aggKey, aggValue, aggType string) string {
 	return aggType + "\x00" + aggKey + "\x00" + aggValue
 }
 

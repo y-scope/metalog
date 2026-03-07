@@ -17,7 +17,7 @@ const (
 	StateIRArchiveConsolidationPending FileState = "IR_ARCHIVE_CONSOLIDATION_PENDING"
 )
 
-// String returns the string representation.
+// String implements fmt.Stringer.
 func (s FileState) String() string { return string(s) }
 
 // IsTerminal returns true for states that represent a completed lifecycle.

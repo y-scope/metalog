@@ -12,9 +12,9 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator"
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
-	kafkaconsumer "github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/internal/taskqueue"
+	kafkaconsumer "github.com/y-scope/metalog/kafka"
 )
 
 // CoordinatorUnit manages coordinator goroutines for a single table.
@@ -30,7 +30,7 @@ type CoordinatorUnit struct {
 	log           *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
-	ctxMu     sync.Mutex     // protects ctx and cancel
+	ctxMu     sync.Mutex      // protects ctx and cancel
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup

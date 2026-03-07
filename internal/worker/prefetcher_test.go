@@ -10,7 +10,7 @@ import (
 
 func TestPrefetcher_Run_ClosesChannelOnCancel(t *testing.T) {
 	// We can't use a real TaskQueue here, but we can test that the channel
-	// is closed when context is cancelled by using a nil taskQueue which
+	// is closed when context is canceled by using a nil taskQueue which
 	// will cause ClaimTasks to panic. Instead, test the sleep helper.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -23,9 +23,9 @@ func TestPrefetcher_Run_ClosesChannelOnCancel(t *testing.T) {
 
 	select {
 	case <-done:
-		// sleep returned immediately due to cancelled context
+		// sleep returned immediately due to canceled context
 	case <-time.After(1 * time.Second):
-		t.Fatal("sleep did not return on cancelled context")
+		t.Fatal("sleep did not return on canceled context")
 	}
 }
 

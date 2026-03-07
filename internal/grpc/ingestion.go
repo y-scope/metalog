@@ -22,15 +22,15 @@ func NewIngestionHandler(svc *ingestion.Service, log *zap.Logger) *IngestionHand
 }
 
 // Ingest handles a single metadata record ingestion request.
-func (s *IngestionHandler) Ingest(ctx context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
-	result := s.service.Ingest(ctx, req.GetTableName(), req.GetRecord())
+func (h *IngestionHandler) Ingest(ctx context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
+	result := h.service.Ingest(ctx, req.GetTableName(), req.GetRecord())
 	if !result.Accepted {
-		s.log.Warn("ingest failed",
+		h.log.Warn("ingest failed",
 			zap.String("table", req.GetTableName()),
 			zap.String("error", result.Error),
 		)
 	} else {
-		s.log.Debug("record ingested",
+		h.log.Debug("record ingested",
 			zap.String("table", req.GetTableName()),
 		)
 	}

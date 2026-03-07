@@ -50,7 +50,7 @@ func (pm *PartitionManager) RunMaintenance(ctx context.Context) error {
 
 	pm.log.Debug("starting partition maintenance", zap.String("table", pm.tableName))
 
-	if err := pm.createLookaheadPartitions(ctx); err != nil {
+	if _, err := pm.createLookaheadPartitions(ctx); err != nil {
 		return err
 	}
 
@@ -64,7 +64,8 @@ func (pm *PartitionManager) RunMaintenance(ctx context.Context) error {
 	return nil
 }
 
-// EnsureLookaheadPartitions creates partitions ahead of today (blocking startup).
+// EnsureLookaheadPartitions creates partitions ahead of today. It attempts to
+// acquire an advisory lock and proceeds without it after a timeout.
 func (pm *PartitionManager) EnsureLookaheadPartitions(ctx context.Context) (int, error) {
 	lockName := "pm_" + pm.tableName
 	lock, err := metastore.AcquireAdvisoryLock(ctx, pm.db, lockName, 5)
@@ -75,15 +76,10 @@ func (pm *PartitionManager) EnsureLookaheadPartitions(ctx context.Context) (int,
 		defer lock.Release(ctx)
 	}
 
-	return pm.doCreateLookaheadPartitions(ctx)
+	return pm.createLookaheadPartitions(ctx)
 }
 
-func (pm *PartitionManager) createLookaheadPartitions(ctx context.Context) error {
-	_, err := pm.doCreateLookaheadPartitions(ctx)
-	return err
-}
-
-func (pm *PartitionManager) doCreateLookaheadPartitions(ctx context.Context) (int, error) {
+func (pm *PartitionManager) createLookaheadPartitions(ctx context.Context) (int, error) {
 	existing, err := pm.getExistingPartitions(ctx)
 	if err != nil {
 		return 0, err

@@ -33,11 +33,11 @@ type NodeSettings struct {
 	ReconciliationIntervalSeconds int                 `yaml:"reconciliationIntervalSeconds"`
 
 	// HA settings
-	CoordinatorHAStrategy        HAStrategy `yaml:"coordinatorHaStrategy"`
-	HeartbeatIntervalSeconds     int        `yaml:"heartbeatIntervalSeconds"`
-	DeadNodeThresholdSeconds     int        `yaml:"deadNodeThresholdSeconds"`
-	LeaseTTLSeconds              int        `yaml:"leaseTtlSeconds"`
-	LeaseRenewalIntervalSeconds  int        `yaml:"leaseRenewalIntervalSeconds"`
+	CoordinatorHAStrategy       HAStrategy `yaml:"coordinatorHaStrategy"`
+	HeartbeatIntervalSeconds    int        `yaml:"heartbeatIntervalSeconds"`
+	DeadNodeThresholdSeconds    int        `yaml:"deadNodeThresholdSeconds"`
+	LeaseTTLSeconds             int        `yaml:"leaseTtlSeconds"`
+	LeaseRenewalIntervalSeconds int        `yaml:"leaseRenewalIntervalSeconds"`
 }
 
 // HealthConfig controls the HTTP health endpoint.
@@ -96,11 +96,35 @@ func LoadNodeConfig(path string) (*NodeConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	if err := cfg.validateRaw(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
 	applyDefaults(&cfg)
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// validateRaw checks user-provided values before defaults are applied.
+// This catches negative or otherwise invalid values that would be masked by applyDefaults.
+func (c *NodeConfig) validateRaw() error {
+	if c.Node.LeaseTTLSeconds < 0 {
+		return fmt.Errorf("node.leaseTtlSeconds must be non-negative, got %d", c.Node.LeaseTTLSeconds)
+	}
+	if c.Node.LeaseRenewalIntervalSeconds < 0 {
+		return fmt.Errorf("node.leaseRenewalIntervalSeconds must be non-negative, got %d", c.Node.LeaseRenewalIntervalSeconds)
+	}
+	if c.Node.HeartbeatIntervalSeconds < 0 {
+		return fmt.Errorf("node.heartbeatIntervalSeconds must be non-negative, got %d", c.Node.HeartbeatIntervalSeconds)
+	}
+	if c.Node.DeadNodeThresholdSeconds < 0 {
+		return fmt.Errorf("node.deadNodeThresholdSeconds must be non-negative, got %d", c.Node.DeadNodeThresholdSeconds)
+	}
+	if c.Node.ReconciliationIntervalSeconds < 0 {
+		return fmt.Errorf("node.reconciliationIntervalSeconds must be non-negative, got %d", c.Node.ReconciliationIntervalSeconds)
+	}
+	return nil
 }
 
 func (c *NodeConfig) validate() error {

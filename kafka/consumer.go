@@ -127,7 +127,7 @@ func NewConsumer(
 	}
 }
 
-// Run starts consuming from the Kafka topic until ctx is cancelled.
+// Run starts consuming from the Kafka topic until ctx is canceled.
 // It batch-polls messages: waits up to pollTimeoutMs for the first message,
 // then drains all buffered messages (up to maxPollBatch) with non-blocking polls.
 func (c *Consumer) Run(ctx context.Context) {
@@ -180,6 +180,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		// Process first message, then drain all buffered messages.
 		processed := 0
 		if c.handleEvent(ctx, ev, &processed) {
+			c.commitPending(consumer)
 			return // fatal error
 		}
 
@@ -189,6 +190,7 @@ func (c *Consumer) Run(ctx context.Context) {
 				break
 			}
 			if c.handleEvent(ctx, ev, &processed) {
+				c.commitPending(consumer)
 				return // fatal error
 			}
 		}
@@ -209,6 +211,7 @@ func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *i
 	case kafka.Error:
 		if e.IsFatal() {
 			c.log.Error("fatal kafka error, stopping consumer", zap.Error(e))
+			c.drainFlushes()
 			return true
 		}
 		c.log.Warn("kafka error", zap.Error(e))
@@ -248,7 +251,7 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	})
 }
 
-// drainFlushes non-blockingly checks all pending flush channels. Completed
+// drainFlushes checks all pending flush channels without blocking. Completed
 // flushes have their offsets queued for commit; failed flushes are dropped.
 // Entries that haven't received a result yet are retained for the next cycle.
 func (c *Consumer) drainFlushes() {
@@ -264,7 +267,9 @@ func (c *Consumer) drainFlushes() {
 				)
 				continue
 			}
-			c.lastOffsets[pf.partition] = pf.offset
+			if existing, ok := c.lastOffsets[pf.partition]; !ok || pf.offset > existing {
+				c.lastOffsets[pf.partition] = pf.offset
+			}
 			c.pendingCommit = append(c.pendingCommit, kafka.TopicPartition{
 				Topic:     pf.topic,
 				Partition: pf.partition,

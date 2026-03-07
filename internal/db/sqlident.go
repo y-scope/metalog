@@ -6,7 +6,7 @@ import (
 )
 
 // sqlIdentRe validates SQL identifiers used as table/column names.
-// Only lowercase alphanumeric and underscores are allowed.
+// Only lowercase alphanumeric and underscores are allowed, up to 64 characters.
 var sqlIdentRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
 
 // ValidateSQLIdentifier returns an error if name is not a safe SQL identifier.

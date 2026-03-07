@@ -25,7 +25,7 @@ type WorkerUnit struct {
 	log        *zap.Logger
 
 	// prefetchCtx/prefetchCancel control the prefetcher only.
-	// Workers use workerCtx which is cancelled after drain timeout.
+	// Workers use workerCtx which is canceled after drain timeout.
 	prefetchCtx    context.Context
 	prefetchCancel context.CancelFunc
 	workerCtx      context.Context

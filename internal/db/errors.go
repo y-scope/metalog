@@ -8,10 +8,10 @@ import (
 
 // MySQL/MariaDB error codes.
 const (
-	errDeadlock     = 1213
-	errDupEntry     = 1062
-	errLockWaitTO   = 1205
-	errTableExists = 1050
+	errDeadlock        = 1213
+	errDupEntry        = 1062
+	errLockWaitTimeout = 1205
+	errTableExists     = 1050
 )
 
 // IsDeadlock returns true if the error is a MySQL deadlock (ER_LOCK_DEADLOCK).
@@ -26,7 +26,7 @@ func IsDuplicateKey(err error) bool {
 
 // IsLockWaitTimeout returns true if the error is a lock wait timeout.
 func IsLockWaitTimeout(err error) bool {
-	return isMySQLError(err, errLockWaitTO)
+	return isMySQLError(err, errLockWaitTimeout)
 }
 
 // IsTableExists returns true if the error is "table already exists".

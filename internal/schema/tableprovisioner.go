@@ -131,7 +131,7 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 		return fmt.Errorf("insert _table_config: %w", err)
 	}
 
-	// _table_assignment: node_id NULL for fight-for-master
+	// _table_assignment: node_id NULL — to be claimed via leader election
 	_, err = database.ExecContext(ctx,
 		"INSERT IGNORE INTO "+metastore.TableRegistryAssignment+" (table_name) VALUES (?)",
 		tableName)

@@ -6,7 +6,7 @@
 //   - Metadata service (table listing and schema introspection)
 //   - Coordinator service (runtime table registration)
 //
-// The [Server] wraps a net/grpc server with graceful shutdown support.
+// The [Server] wraps a google.golang.org/grpc server with graceful shutdown support.
 // Each handler adapts between protobuf request/response types and the
 // corresponding internal service layer.
 package grpc

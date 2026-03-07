@@ -162,9 +162,10 @@ func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (
 		return 0, fmt.Errorf("complete task: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	if n > 0 {
-		q.log.Debug("task completed", zap.Int64("taskId", taskID))
+	if n == 0 {
+		return 0, fmt.Errorf("complete task %d: no matching task in processing state", taskID)
 	}
+	q.log.Debug("task completed", zap.Int64("taskId", taskID))
 	return n, nil
 }
 

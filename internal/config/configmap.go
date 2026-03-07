@@ -48,6 +48,9 @@ func ParseConfigMap(dir string) (*NodeConfig, error) {
 		}
 	}
 
+	if err := cfg.validateRaw(); err != nil {
+		return nil, fmt.Errorf("configmap: invalid config: %w", err)
+	}
 	applyDefaults(cfg)
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("configmap: invalid config: %w", err)

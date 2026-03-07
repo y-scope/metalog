@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// DatabaseType identifies the database vendor.
+// DatabaseType identifies the database engine.
 type DatabaseType int
 
 const (
@@ -32,7 +32,7 @@ func (d DatabaseType) String() string {
 	}
 }
 
-// DetectDatabaseType queries the server version string to determine the vendor.
+// DetectDatabaseType queries the server version string to determine the engine.
 func DetectDatabaseType(ctx context.Context, db *sql.DB) (DatabaseType, string, error) {
 	var version string
 	if err := db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version); err != nil {

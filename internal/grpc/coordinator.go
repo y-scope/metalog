@@ -24,25 +24,25 @@ func NewCoordinatorHandler(reg *coordinator.TableRegistration, log *zap.Logger) 
 }
 
 // RegisterTable handles runtime table registration requests.
-func (s *CoordinatorHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableRequest) (*pb.RegisterTableResponse, error) {
+func (h *CoordinatorHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableRequest) (*pb.RegisterTableResponse, error) {
 	if req.GetTableName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_name is required")
 	}
 
-	kafka := req.GetKafka()
+	kafkaCfg := req.GetKafka()
 	var kafkaTopic, kafkaBootstrap, transformer string
-	if kafka != nil {
-		kafkaTopic = kafka.GetTopic()
-		kafkaBootstrap = kafka.GetBootstrapServers()
-		transformer = kafka.GetRecordTransformer()
+	if kafkaCfg != nil {
+		kafkaTopic = kafkaCfg.GetTopic()
+		kafkaBootstrap = kafkaCfg.GetBootstrapServers()
+		transformer = kafkaCfg.GetRecordTransformer()
 	}
 
-	created, err := s.registration.RegisterTable(ctx,
+	created, err := h.registration.RegisterTable(ctx,
 		req.GetTableName(), req.GetDisplayName(),
 		kafkaTopic, kafkaBootstrap, transformer,
 	)
 	if err != nil {
-		s.log.Error("register table failed", zap.Error(err))
+		h.log.Error("register table failed", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "register table: %v", err)
 	}
 

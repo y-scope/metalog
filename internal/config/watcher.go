@@ -30,7 +30,7 @@ func NewFileWatcher(path string, interval time.Duration, log *zap.Logger) *FileW
 	}
 }
 
-// Watch polls the file until ctx is cancelled. Calls onChange when the file is modified.
+// Watch polls the file until ctx is canceled. Calls onChange when the file is modified.
 // The callback receives the raw YAML bytes.
 func (w *FileWatcher) Watch(ctx context.Context, onChange func(data []byte)) {
 	// Capture initial state.
@@ -101,7 +101,7 @@ func (h *HotReloadableConfig[T]) Update(val T) {
 }
 
 // WatchAndReload starts a file watcher that parses YAML into T on change.
-// Blocks until ctx is cancelled.
+// Blocks until ctx is canceled.
 func (h *HotReloadableConfig[T]) WatchAndReload(ctx context.Context, path string, interval time.Duration) {
 	watcher := NewFileWatcher(path, interval, h.log)
 	watcher.Watch(ctx, func(data []byte) {

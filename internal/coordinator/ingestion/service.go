@@ -20,7 +20,7 @@ type Service struct {
 	regMu      sync.RWMutex
 }
 
-// NewService creates an IngestionService.
+// NewService creates a Service.
 func NewService(writer *BatchingWriter, log *zap.Logger) *Service {
 	return &Service{
 		writer:     writer,
@@ -68,7 +68,7 @@ func (s *Service) IngestWithCallback(ctx context.Context, tableName string, reco
 		return err
 	}
 
-	rec := ConvertProtoToFileRecord(record)
+	rec := FileRecordFromProto(record)
 	if rec == nil {
 		return fmt.Errorf("failed to convert record")
 	}

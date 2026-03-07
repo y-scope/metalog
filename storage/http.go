@@ -12,13 +12,13 @@ import (
 func init() {
 	RegisterType("http", BackendMeta{
 		RequiresBucket: true,
-		Factory: func(cfg map[string]string) (StorageBackend, error) {
+		Factory: func(cfg map[string]string) (Backend, error) {
 			return NewHTTPBackend(cfg["baseUrl"], 30*time.Second), nil
 		},
 	})
 }
 
-// HTTPBackend implements a read-only StorageBackend that fetches objects via HTTP(S).
+// HTTPBackend implements a read-only Backend that fetches objects via HTTP(S).
 // Useful for reading from CDNs, public object store endpoints, or HTTP file servers.
 type HTTPBackend struct {
 	baseURL string
@@ -43,12 +43,12 @@ func (b *HTTPBackend) Get(ctx context.Context, bucket, key string) (io.ReadClose
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, &StorageError{Op: "get", Bucket: bucket, Key: key, Err: err}
+		return nil, &OpError{Op: "get", Bucket: bucket, Key: key, Err: err}
 	}
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return nil, &StorageError{Op: "get", Bucket: bucket, Key: key, Err: err}
+		return nil, &OpError{Op: "get", Bucket: bucket, Key: key, Err: err}
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -57,11 +57,11 @@ func (b *HTTPBackend) Get(ctx context.Context, bucket, key string) (io.ReadClose
 	}
 	if resp.StatusCode == http.StatusForbidden {
 		resp.Body.Close()
-		return nil, &StorageError{Op: "get", Bucket: bucket, Key: key, Err: ErrAccessDenied}
+		return nil, &OpError{Op: "get", Bucket: bucket, Key: key, Err: ErrAccessDenied}
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, &StorageError{Op: "get", Bucket: bucket, Key: key,
+		return nil, &OpError{Op: "get", Bucket: bucket, Key: key,
 			Err: fmt.Errorf("unexpected status: %d", resp.StatusCode)}
 	}
 
@@ -70,13 +70,13 @@ func (b *HTTPBackend) Get(ctx context.Context, bucket, key string) (io.ReadClose
 
 // Put is not supported on a read-only HTTP backend.
 func (b *HTTPBackend) Put(_ context.Context, bucket, key string, _ io.Reader, _ int64) error {
-	return &StorageError{Op: "put", Bucket: bucket, Key: key,
+	return &OpError{Op: "put", Bucket: bucket, Key: key,
 		Err: fmt.Errorf("HTTP backend is read-only")}
 }
 
 // Delete is not supported on a read-only HTTP backend.
 func (b *HTTPBackend) Delete(_ context.Context, bucket, key string) error {
-	return &StorageError{Op: "delete", Bucket: bucket, Key: key,
+	return &OpError{Op: "delete", Bucket: bucket, Key: key,
 		Err: fmt.Errorf("HTTP backend is read-only")}
 }
 
@@ -86,12 +86,12 @@ func (b *HTTPBackend) Exists(ctx context.Context, bucket, key string) (bool, err
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
-		return false, &StorageError{Op: "exists", Bucket: bucket, Key: key, Err: err}
+		return false, &OpError{Op: "exists", Bucket: bucket, Key: key, Err: err}
 	}
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return false, &StorageError{Op: "exists", Bucket: bucket, Key: key, Err: err}
+		return false, &OpError{Op: "exists", Bucket: bucket, Key: key, Err: err}
 	}
 	resp.Body.Close()
 
@@ -101,6 +101,6 @@ func (b *HTTPBackend) Exists(ctx context.Context, bucket, key string) (bool, err
 	if resp.StatusCode == http.StatusOK {
 		return true, nil
 	}
-	return false, &StorageError{Op: "exists", Bucket: bucket, Key: key,
+	return false, &OpError{Op: "exists", Bucket: bucket, Key: key,
 		Err: fmt.Errorf("unexpected status: %d", resp.StatusCode)}
 }

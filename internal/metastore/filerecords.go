@@ -303,7 +303,9 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 			ColClpArchiveStorageBackend+", "+ColClpArchiveBucket+", "+ColClpArchivePath+", "+
 			ColClpIRPathHash+
 			" FROM "+dbutil.QuoteIdentifier(fr.tableName)+
-			" WHERE "+ColExpiresAt+" > 0 AND "+ColExpiresAt+" < ? LIMIT 1000",
+			" WHERE "+ColExpiresAt+" > 0 AND "+ColExpiresAt+" < ?"+
+			" AND "+ColState+" IN ('"+string(StateIRPurging)+"','"+string(StateArchivePurging)+"')"+
+			" LIMIT 1000",
 		currentNanos,
 	)
 	if err != nil {

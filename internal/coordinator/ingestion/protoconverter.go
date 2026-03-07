@@ -7,8 +7,8 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
-// ConvertProtoToFileRecord converts a protobuf MetadataRecord to a FileRecord.
-func ConvertProtoToFileRecord(record *pb.MetadataRecord) *metastore.FileRecord {
+// FileRecordFromProto converts a protobuf MetadataRecord to a FileRecord.
+func FileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
 	if record == nil || record.File == nil {
 		return nil
 	}

@@ -101,7 +101,11 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		if cacheErr != nil {
 			return nil, fmt.Errorf("rewrite filter: %w", cacheErr)
 		}
-		params.FilterExpr = cached.(string)
+		rewritten, ok := cached.(string)
+		if !ok {
+			return nil, fmt.Errorf("rewrite filter: unexpected cache type %T", cached)
+		}
+		params.FilterExpr = rewritten
 	}
 
 	builder := sq.Select(cols...).From(db.QuoteIdentifier(params.TableName))
@@ -129,6 +133,10 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 
 	// Keyset cursor
 	if params.HasCursor && len(params.OrderBy) > 0 {
+		if len(params.CursorValues) != len(params.OrderBy) {
+			return nil, fmt.Errorf("keyset cursor: got %d values but %d order-by columns",
+				len(params.CursorValues), len(params.OrderBy))
+		}
 		cursorWhere := buildKeysetWhere(params.OrderBy, params.CursorValues, params.CursorID)
 		builder = builder.Where(cursorWhere)
 	}
@@ -200,9 +208,9 @@ func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64)
 	// All columns must share the same direction (validated upstream).
 	colNames := make([]string, 0, len(orderBy)+1)
 	for _, ob := range orderBy {
-		colNames = append(colNames, ob.Column)
+		colNames = append(colNames, db.QuoteIdentifier(ob.Column))
 	}
-	colNames = append(colNames, metastore.ColID)
+	colNames = append(colNames, db.QuoteIdentifier(metastore.ColID))
 
 	vals := make([]any, 0, len(cursorValues)+1)
 	vals = append(vals, cursorValues...)
