@@ -46,6 +46,12 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	success := false
+	defer func() {
+		if !success {
+			pool.Close()
+		}
+	}()
 
 	// Detect database type
 	dbType, versionStr, err := db.DetectDatabaseType(context.Background(), pool)
@@ -61,7 +67,6 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	if cfg.Worker.Database != nil {
 		wPool, err := db.NewPool(*cfg.Worker.Database)
 		if err != nil {
-			pool.Close()
 			return nil, err
 		}
 		workerPool = wPool
@@ -126,6 +131,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		n.healthSrv = health.NewServer(cfg.Node.Health.Port, log)
 	}
 
+	success = true
 	return n, nil
 }
 
@@ -237,10 +243,15 @@ func (n *Node) Stop() {
 		n.healthSrv.SetReady(false)
 	}
 
-	// Cancel background goroutines
+	// Cancel background goroutines (reconciliation, liveness, stall checker)
 	n.cancel()
 
-	// Stop coordinators
+	// Wait for background goroutines to finish first — this ensures
+	// reconciliation (which may call Restart()) completes before we
+	// stop coordinators, preventing a WaitGroup reuse panic.
+	n.wg.Wait()
+
+	// Stop coordinators (safe now — no concurrent Restart() calls)
 	n.coordMu.Lock()
 	coords := make(map[string]*CoordinatorUnit, len(n.coordinators))
 	for k, v := range n.coordinators {
@@ -270,9 +281,6 @@ func (n *Node) Stop() {
 		defer cancel()
 		n.healthSrv.Stop(shutdownCtx)
 	}
-
-	// Wait for background goroutines
-	n.wg.Wait()
 
 	// Release shared resources
 	n.shared.Close()

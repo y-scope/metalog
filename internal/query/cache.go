@@ -94,14 +94,30 @@ func (c *Cache) Clear() {
 }
 
 // GetOrCompute retrieves a cached value, or calls compute to compute and cache it.
+// The mutex is held across the check-compute-store sequence to prevent concurrent
+// callers from running compute() in parallel for the same key.
 func (c *Cache) GetOrCompute(key string, compute func() (any, error)) (any, error) {
-	if val, ok := c.Get(key); ok {
-		return val, nil
+	c.mu.Lock()
+
+	// Check cache under lock.
+	if el, ok := c.entries[key]; ok {
+		e := el.Value.(*cacheEntry)
+		if time.Now().Before(e.expiresAt) {
+			c.order.MoveToFront(el)
+			val := e.value
+			c.mu.Unlock()
+			return val, nil
+		}
+		c.removeLocked(el)
 	}
+	c.mu.Unlock()
+
+	// Compute outside the lock to avoid holding it during slow operations.
 	val, err := compute()
 	if err != nil {
 		return nil, err
 	}
+
 	c.Set(key, val)
 	return val, nil
 }

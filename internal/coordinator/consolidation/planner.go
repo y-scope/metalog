@@ -207,7 +207,7 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 
 	rows, err := p.db.QueryContext(ctx,
 		"SELECT task_id, input, output FROM "+taskqueue.TableName+
-			" WHERE table_name = ? AND state = 'completed' AND output IS NOT NULL LIMIT 100",
+			" WHERE table_name = ? AND state IN ('completed', 'failed', 'dead_letter') LIMIT 100",
 		p.tableName,
 	)
 	if err != nil {
@@ -229,15 +229,25 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 	}
 
 	for _, t := range tasks {
-		result, err := taskqueue.UnmarshalResult(t.output)
-		if err != nil {
-			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.taskID), zap.Error(err))
-			continue
-		}
-
 		payload, err := taskqueue.UnmarshalPayload(t.input)
 		if err != nil {
 			p.log.Error("unmarshal task payload failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			p.markTaskProcessed(ctx, t.taskID)
+			continue
+		}
+
+		// Failed/dead-letter tasks: free in-flight paths, delete task, skip archive update.
+		if t.output == nil {
+			p.inFlight.Remove(payload.IRPaths)
+			p.markTaskProcessed(ctx, t.taskID)
+			continue
+		}
+
+		result, err := taskqueue.UnmarshalResult(t.output)
+		if err != nil {
+			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			p.inFlight.Remove(payload.IRPaths)
+			p.markTaskProcessed(ctx, t.taskID)
 			continue
 		}
 
@@ -259,6 +269,7 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		)
 		if err != nil {
 			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			p.inFlight.Remove(payload.IRPaths)
 			continue
 		}
 
@@ -273,10 +284,10 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 	return nil
 }
 
-// markTaskProcessed deletes a completed task after the planner has fully processed it.
+// markTaskProcessed deletes a terminal task after the planner has fully processed it.
 func (p *Planner) markTaskProcessed(ctx context.Context, taskID int64) {
 	_, err := p.db.ExecContext(ctx,
-		"DELETE FROM "+taskqueue.TableName+" WHERE task_id = ? AND state = 'completed'",
+		"DELETE FROM "+taskqueue.TableName+" WHERE task_id = ? AND state IN ('completed', 'failed', 'dead_letter')",
 		taskID,
 	)
 	if err != nil {

@@ -63,9 +63,10 @@ func APIServer() {
 		healthSrv.SetReady(true)
 	}
 
+	errCh := make(chan error, 1)
 	go func() {
 		if err := grpcSrv.Start(); err != nil {
-			log.Fatal("gRPC server failed", zap.Error(err))
+			errCh <- err
 		}
 	}()
 
@@ -73,8 +74,12 @@ func APIServer() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Info("received signal, shutting down", zap.String("signal", sig.String()))
+	select {
+	case sig := <-sigCh:
+		log.Info("received signal, shutting down", zap.String("signal", sig.String()))
+	case err := <-errCh:
+		log.Error("gRPC server failed, shutting down", zap.Error(err))
+	}
 
 	grpcSrv.Stop()
 

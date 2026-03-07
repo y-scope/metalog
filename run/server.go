@@ -60,17 +60,28 @@ func Server() {
 		metaGrpc := grpcserver.NewMetadataHandler(n.Shared().DB, log)
 		metadatapb.RegisterMetadataServiceServer(grpcSrv.GRPCServer(), metaGrpc)
 
+		errCh := make(chan error, 1)
 		go func() {
 			if err := grpcSrv.Start(); err != nil {
-				log.Fatal("gRPC server failed", zap.Error(err))
+				errCh <- err
 			}
 		}()
-	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Info("received signal, shutting down", zap.String("signal", sig.String()))
+		// Wait for signal or gRPC failure — whichever comes first.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case sig := <-sigCh:
+			log.Info("received signal, shutting down", zap.String("signal", sig.String()))
+		case err := <-errCh:
+			log.Error("gRPC server failed, shutting down", zap.Error(err))
+		}
+	} else {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-sigCh
+		log.Info("received signal, shutting down", zap.String("signal", sig.String()))
+	}
 
 	if grpcSrv != nil {
 		grpcSrv.Stop()

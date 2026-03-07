@@ -265,12 +265,12 @@ func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 
 	// Alive node sends heartbeat and claims orphans
 	node2.SendHeartbeat(ctx)
-	claimed, err := node2.ClaimOrphansFromDeadNodes(ctx, 60)
+	claimed, err := node2.ClaimOrphansHeartbeat(ctx, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claimed != 1 {
-		t.Errorf("claimed orphans = %d, want 1", claimed)
+	if len(claimed) != 1 {
+		t.Errorf("claimed orphans = %d, want 1", len(claimed))
 	}
 
 	// Verify alive-node owns the table now

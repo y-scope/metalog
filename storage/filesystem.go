@@ -41,7 +41,7 @@ func safePath(bucket, key string) (string, error) {
 	if !strings.HasPrefix(abs, bucketAbs+string(filepath.Separator)) && abs != bucketAbs {
 		return "", fmt.Errorf("path traversal detected: %q", key)
 	}
-	return path, nil
+	return abs, nil
 }
 
 func (b *FilesystemBackend) Get(_ context.Context, bucket, key string) (io.ReadCloser, error) {

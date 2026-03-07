@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
@@ -159,7 +160,7 @@ func (c *Consumer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.drainFlushes()
+			c.drainFlushesBlocking()
 			c.commitPending(consumer)
 			c.log.Info("kafka consumer stopped")
 			return
@@ -249,6 +250,40 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 		partition: msg.TopicPartition.Partition,
 		offset:    msg.TopicPartition.Offset,
 	})
+}
+
+// drainFlushesBlocking waits for all pending flushes to complete (with a timeout)
+// before shutdown. This ensures Kafka offsets are committed for records that are
+// still being flushed by the BatchingWriter.
+func (c *Consumer) drainFlushesBlocking() {
+	if len(c.pendingFlushes) == 0 {
+		return
+	}
+	deadline := time.After(5 * time.Second)
+	for _, pf := range c.pendingFlushes {
+		select {
+		case err := <-pf.flushed:
+			if err != nil {
+				c.log.Warn("flush failed on shutdown, skipping offset commit",
+					zap.Int32("partition", pf.partition),
+					zap.Any("offset", pf.offset),
+					zap.Error(err),
+				)
+				continue
+			}
+			c.pendingCommit = append(c.pendingCommit, kafka.TopicPartition{
+				Topic:     pf.topic,
+				Partition: pf.partition,
+				Offset:    pf.offset + 1,
+			})
+		case <-deadline:
+			c.log.Warn("shutdown drain timeout, uncommitted flushes remain",
+				zap.Int("remaining", len(c.pendingFlushes)))
+			c.pendingFlushes = nil
+			return
+		}
+	}
+	c.pendingFlushes = nil
 }
 
 // drainFlushes checks all pending flush channels without blocking. Completed

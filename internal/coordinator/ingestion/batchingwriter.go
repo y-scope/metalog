@@ -222,10 +222,16 @@ func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRe
 }
 
 // notifyBatch sends the flush result to each record's Flushed channel.
+// Uses non-blocking send to prevent stalling the tableWriter goroutine if
+// a consumer has already returned (e.g., context expired).
 func (tw *tableWriter) notifyBatch(batch []*metastore.FileRecord, err error) {
 	for _, rec := range batch {
 		if rec.Flushed != nil {
-			rec.Flushed <- err
+			select {
+			case rec.Flushed <- err:
+			default:
+				tw.log.Warn("flushed channel full, dropping notification")
+			}
 		}
 	}
 }

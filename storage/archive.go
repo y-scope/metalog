@@ -54,7 +54,7 @@ func (ac *ArchiveCreator) CreateArchive(
 		} else if len(irBuckets) == 1 {
 			bucket = irBuckets[0]
 		}
-		localPath := filepath.Join(inputDir, filepath.Base(irPath))
+		localPath := filepath.Join(inputDir, fmt.Sprintf("%04d_%s", i, filepath.Base(irPath)))
 		if err := downloadFile(ctx, backend, bucket, irPath, localPath); err != nil {
 			return 0, fmt.Errorf("download IR %s: %w", irPath, err)
 		}

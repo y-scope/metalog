@@ -38,6 +38,15 @@ func BuildGuardedUpsertSQL(
 	allCols = append(allCols, dimCols...)
 	allCols = append(allCols, aggCols...)
 
+	// Validate all dynamic column names before interpolation.
+	// BaseCols/GuardedUpdateCols are internal constants; dimCols/aggCols come
+	// from ColumnRegistry which uses validated dim_fNN/agg_fNN names.
+	for _, col := range allCols {
+		if err := dbutil.ValidateSQLIdentifier(col); err != nil {
+			return "", nil, 0
+		}
+	}
+
 	paramsPerRow := len(allCols)
 	var b strings.Builder
 
@@ -49,7 +58,7 @@ func BuildGuardedUpsertSQL(
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString(col)
+		b.WriteString(dbutil.QuoteIdentifier(col))
 	}
 	b.WriteString(") VALUES ")
 
@@ -79,13 +88,14 @@ func BuildGuardedUpsertSQL(
 
 	// newRef returns the reference to the new row's column value.
 	newRef := func(col string) string {
+		quoted := dbutil.QuoteIdentifier(col)
 		if useValuesFunc {
-			return "VALUES(" + col + ")"
+			return "VALUES(" + quoted + ")"
 		}
-		return rowAlias + "." + col
+		return rowAlias + "." + quoted
 	}
 
-	guard := "state NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + ColMaxTimestamp
+	guard := ColState + " NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + dbutil.QuoteIdentifier(ColMaxTimestamp)
 
 	// Guarded columns: everything except max_timestamp (which goes last)
 	first := true
@@ -119,14 +129,15 @@ func BuildGuardedUpsertSQL(
 	return b.String(), nil, paramsPerRow
 }
 
-// writeGuardedAssignment writes: col = IF(guard, <newRef(col)>, col)
+// writeGuardedAssignment writes: `col` = IF(guard, <newRef(col)>, `col`)
 func writeGuardedAssignment(b *strings.Builder, col string, guard string, newRef func(string) string) {
-	b.WriteString(col)
+	quoted := dbutil.QuoteIdentifier(col)
+	b.WriteString(quoted)
 	b.WriteString(" = IF(")
 	b.WriteString(guard)
 	b.WriteString(", ")
 	b.WriteString(newRef(col))
 	b.WriteString(", ")
-	b.WriteString(col)
+	b.WriteString(quoted)
 	b.WriteString(")")
 }

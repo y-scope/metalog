@@ -76,11 +76,14 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*me
 	now := time.Now().UnixNano()
 
 	for _, group := range groups {
-		// Check if group meets minimum size or has timed out
+		// Check if group meets minimum size or has timed out.
+		// Uses MaxTimestamp (latest event) as a proxy for "last write time".
+		// For historical data (backfills), this will always exceed the timeout,
+		// which is correct: old data implies the producing job is complete.
 		timedOut := false
 		if p.JobTimeout > 0 {
 			for _, rec := range group {
-				elapsed := now - rec.MinTimestamp
+				elapsed := now - rec.MaxTimestamp
 				if elapsed <= 0 {
 					continue // future timestamp or clock skew — not timed out
 				}

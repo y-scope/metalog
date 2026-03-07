@@ -175,6 +175,7 @@ func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (
 func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	res, err := q.db.ExecContext(ctx,
 		"UPDATE "+TableName+" SET "+
+			"retry_count = retry_count + 1, "+
 			"state = IF(retry_count >= ?, 'dead_letter', 'failed'), "+
 			"completed_at = UNIX_TIMESTAMP() "+
 			"WHERE task_id = ? AND state = 'processing'",
@@ -240,12 +241,16 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 		newState = "dead_letter"
 	}
 
-	_, err = tx.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		"UPDATE "+TableName+" SET state = ?, completed_at = UNIX_TIMESTAMP() WHERE task_id = ? AND state = 'processing'",
 		newState, taskID,
 	)
 	if err != nil {
 		return fmt.Errorf("reclaim update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("reclaim task %d: no matching task in processing state", taskID)
 	}
 
 	if newState == "dead_letter" {
