@@ -52,11 +52,11 @@ CREATE TABLE _dim_registry (
     width           SMALLINT UNSIGNED NULL,       -- VARCHAR width (str/str_utf8 only)
     dim_key         VARCHAR(1024) NOT NULL,       -- original field name, may contain special chars
     alias_column    VARCHAR(64)   NULL,           -- optional human-readable alias
-    status          ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
+    state           ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
     created_at      INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
     invalidated_at  INT UNSIGNED NULL,
     PRIMARY KEY (table_name, column_name),
-    INDEX idx_dim_lookup (table_name, dim_key(255), status),
+    INDEX idx_dim_lookup (table_name, dim_key(255), state),
     FOREIGN KEY (table_name) REFERENCES _table(table_name)
 ) ENGINE=InnoDB;
 ```
@@ -74,11 +74,11 @@ CREATE TABLE _agg_registry (
     aggregation_type  ENUM('EQ','GTE','GT','LTE','LT','SUM','AVG','MIN','MAX') NOT NULL DEFAULT 'EQ',
     value_type        ENUM('INT','FLOAT') NOT NULL DEFAULT 'INT',
     alias_column      VARCHAR(64)   NULL,            -- if set, this agg aliases an existing column
-    status            ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
+    state             ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
     created_at        INT UNSIGNED  NOT NULL DEFAULT (UNIX_TIMESTAMP()),
     invalidated_at    INT UNSIGNED  NULL,
     PRIMARY KEY (table_name, column_name),
-    INDEX idx_agg_lookup (table_name, agg_key(255), status),
+    INDEX idx_agg_lookup (table_name, agg_key(255), state),
     FOREIGN KEY (table_name) REFERENCES _table(table_name)
 ) ENGINE=InnoDB;
 ```
