@@ -142,8 +142,8 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 }
 
 func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
-	for i := 0; i < sketchSlotCount; i++ {
-		member := fmt.Sprintf("b%02d", i)
+	for i := 1; i <= sketchSlotCount; i++ {
+		member := fmt.Sprintf("s%02d", i)
 		_, err := database.ExecContext(ctx,
 			"INSERT IGNORE INTO "+metastore.SketchRegistryTable+
 				" (table_name, sketch_name, state) VALUES (?, ?, 'AVAILABLE')",

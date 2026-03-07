@@ -38,9 +38,9 @@ func (e *SketchEvaluator) MayContain(ctx context.Context, tableName, sketchColum
 		return false, err
 	}
 
-	// Compute the bucket index for this value (0-31)
+	// Compute the bucket index for this value (1-32)
 	bucket := hashToBucket(value, 32)
-	member := fmt.Sprintf("b%02d", bucket)
+	member := fmt.Sprintf("s%02d", bucket+1)
 
 	// FIND_IN_SET with mixed parameter ordering is awkward in squirrel, use raw SQL.
 	rawQuery := fmt.Sprintf(
