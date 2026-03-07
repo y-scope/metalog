@@ -387,12 +387,21 @@ func rewriteExpr(node sqlparser.Expr, registry *schema.ColumnRegistry) (sqlparse
 
 // colNameToString reconstructs the dotted column name from a vitess ColName.
 // Vitess parses "__DIM.zone" as qualifier="__DIM", name="zone".
+// For three-part names like "__AGG_EQ.key.value", vitess stores:
+//
+//	Qualifier.Qualifier="__AGG_EQ", Qualifier.Name="key", Name="value"
+//
+// We reconstruct all parts to preserve the full reference.
 func colNameToString(col *sqlparser.ColName) string {
-	q := col.Qualifier.Name.String()
-	if q != "" {
-		return q + "." + col.Name.String()
+	var parts []string
+	if schema := col.Qualifier.Qualifier.String(); schema != "" {
+		parts = append(parts, schema)
 	}
-	return col.Name.String()
+	if table := col.Qualifier.Name.String(); table != "" {
+		parts = append(parts, table)
+	}
+	parts = append(parts, col.Name.String())
+	return strings.Join(parts, ".")
 }
 
 // isPhysicalColumn checks if a column name matches dim_fNN or agg_fNN pattern.

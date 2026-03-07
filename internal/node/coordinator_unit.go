@@ -30,6 +30,7 @@ type CoordinatorUnit struct {
 	log           *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
+	ctxMu     sync.Mutex     // protects ctx and cancel
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -113,7 +114,9 @@ func (u *CoordinatorUnit) IsStalled() bool {
 func (u *CoordinatorUnit) Restart() {
 	u.log.Warn("restarting stalled coordinator")
 	u.Stop()
+	u.ctxMu.Lock()
 	u.ctx, u.cancel = context.WithCancel(u.parentCtx)
+	u.ctxMu.Unlock()
 	u.progress.RecordProgress()
 	u.Start()
 }

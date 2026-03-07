@@ -47,6 +47,7 @@ func (s FileState) CanTransitionTo(target FileState) bool {
 // If a record is in one of these states, the guarded UPSERT preserves the
 // existing row instead of applying new values.
 var UpsertGuardStates = []FileState{
+	StateIRPurging,
 	StateIRArchiveConsolidationPending,
 	StateArchiveClosed,
 	StateArchivePurging,

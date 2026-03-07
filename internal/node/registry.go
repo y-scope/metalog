@@ -17,14 +17,15 @@ import (
 
 // CoordinatorRegistry handles table assignment, heartbeat, and HA operations.
 type CoordinatorRegistry struct {
-	db     *sql.DB
-	nodeID string
-	log    *zap.Logger
+	db        *sql.DB
+	nodeID    string
+	isMariaDB bool
+	log       *zap.Logger
 }
 
 // NewCoordinatorRegistry creates a CoordinatorRegistry.
-func NewCoordinatorRegistry(db *sql.DB, nodeID string, log *zap.Logger) *CoordinatorRegistry {
-	return &CoordinatorRegistry{db: db, nodeID: nodeID, log: log}
+func NewCoordinatorRegistry(db *sql.DB, nodeID string, isMariaDB bool, log *zap.Logger) *CoordinatorRegistry {
+	return &CoordinatorRegistry{db: db, nodeID: nodeID, isMariaDB: isMariaDB, log: log}
 }
 
 // EnsureSystemTables executes the embedded schema.sql to create all system
@@ -48,19 +49,51 @@ func (r *CoordinatorRegistry) EnsureSystemTables(ctx context.Context) error {
 	return nil
 }
 
-// splitSQLStatements splits a SQL script into individual statements,
-// stripping single-line comments.
-func splitSQLStatements(sql string) []string {
-	lines := strings.Split(sql, "\n")
-	var filtered []string
+// splitSQLStatements splits a SQL script into individual statements.
+// Handles single-line comments (--) and semicolons inside string literals.
+func splitSQLStatements(sqlText string) []string {
+	var stmts []string
+	var current strings.Builder
+	inSingleQuote := false
+
+	lines := strings.Split(sqlText, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "--") {
+		if !inSingleQuote && strings.HasPrefix(trimmed, "--") {
 			continue
 		}
-		filtered = append(filtered, line)
+
+		for i := 0; i < len(line); i++ {
+			ch := line[i]
+			if ch == '\'' {
+				if inSingleQuote && i+1 < len(line) && line[i+1] == '\'' {
+					// Escaped single quote ('') inside string literal
+					current.WriteByte(ch)
+					current.WriteByte(ch)
+					i++
+					continue
+				}
+				inSingleQuote = !inSingleQuote
+				current.WriteByte(ch)
+			} else if ch == ';' && !inSingleQuote {
+				stmt := strings.TrimSpace(current.String())
+				if stmt != "" {
+					stmts = append(stmts, stmt)
+				}
+				current.Reset()
+			} else {
+				current.WriteByte(ch)
+			}
+		}
+		current.WriteByte('\n')
 	}
-	return strings.Split(strings.Join(filtered, "\n"), ";")
+
+	// Remaining content after last semicolon
+	stmt := strings.TrimSpace(current.String())
+	if stmt != "" {
+		stmts = append(stmts, stmt)
+	}
+	return stmts
 }
 
 // ValidateSchemaReady checks that all required system tables exist.
@@ -94,13 +127,20 @@ func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 
 // UpsertTables registers tables from the config into the registry.
 // INSERT ... ON DUPLICATE KEY UPDATE is MySQL-specific and not supported by squirrel.
+// Note: VALUES() in ON DUPLICATE KEY UPDATE is deprecated in MySQL 8.0.20+ but
+// fully supported in MariaDB 10.6+ (our target). If migrating to MySQL 8.0.20+,
+// use the alias form: INSERT INTO ... AS new_row ... ON DUPLICATE KEY UPDATE col = new_row.col.
 func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.TableConfig) error {
 	for _, t := range tables {
-		_, err := r.db.ExecContext(ctx,
-			"INSERT INTO "+metastore.TableRegistry+" (table_name, display_name) VALUES (?, ?) "+
-				"ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)",
-			t.Name, t.DisplayName,
-		)
+		var tableUpsert string
+		if r.isMariaDB {
+			tableUpsert = "INSERT INTO " + metastore.TableRegistry + " (table_name, display_name) VALUES (?, ?) " +
+				"ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)"
+		} else {
+			tableUpsert = "INSERT INTO " + metastore.TableRegistry + " (table_name, display_name) VALUES (?, ?) AS new " +
+				"ON DUPLICATE KEY UPDATE display_name = COALESCE(new.display_name, display_name)"
+		}
+		_, err := r.db.ExecContext(ctx, tableUpsert, t.Name, t.DisplayName)
 		if err != nil {
 			return fmt.Errorf("upsert table %s: %w", t.Name, err)
 		}
@@ -114,14 +154,21 @@ func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.
 		}
 
 		if t.Kafka.Topic != "" {
-			_, err = r.db.ExecContext(ctx,
-				"INSERT INTO "+metastore.TableRegistryKafka+
-					" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?) "+
-					"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), "+
-					"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), "+
-					"record_transformer = VALUES(record_transformer)",
-				t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer,
-			)
+			var kafkaUpsert string
+			if r.isMariaDB {
+				kafkaUpsert = "INSERT INTO " + metastore.TableRegistryKafka +
+					" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?) " +
+					"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), " +
+					"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
+					"record_transformer = VALUES(record_transformer)"
+			} else {
+				kafkaUpsert = "INSERT INTO " + metastore.TableRegistryKafka +
+					" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?) AS new " +
+					"ON DUPLICATE KEY UPDATE kafka_topic = new.kafka_topic, " +
+					"kafka_bootstrap_servers = new.kafka_bootstrap_servers, " +
+					"record_transformer = new.record_transformer"
+			}
+			_, err = r.db.ExecContext(ctx, kafkaUpsert, t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer)
 			if err != nil {
 				return fmt.Errorf("upsert kafka config %s: %w", t.Name, err)
 			}

@@ -19,7 +19,7 @@ func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *node.Coordinato
 	mc.LoadSchema(t)
 
 	log := zap.NewNop()
-	cr := node.NewCoordinatorRegistry(mc.DB, "node-1", log)
+	cr := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
 	return mc, cr
 }
 
@@ -203,8 +203,8 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	ctx := context.Background()
 	log := zap.NewNop()
 
-	node1 := node.NewCoordinatorRegistry(mc.DB, "node-1", log)
-	node2 := node.NewCoordinatorRegistry(mc.DB, "node-2", log)
+	node1 := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
+	node2 := node.NewCoordinatorRegistry(mc.DB, "node-2", true, log)
 
 	node1.UpsertTables(ctx, []config.TableConfig{
 		{Name: "contested", DisplayName: "Contested"},
@@ -248,8 +248,8 @@ func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	ctx := context.Background()
 	log := zap.NewNop()
 
-	node1 := node.NewCoordinatorRegistry(mc.DB, "dead-node", log)
-	node2 := node.NewCoordinatorRegistry(mc.DB, "alive-node", log)
+	node1 := node.NewCoordinatorRegistry(mc.DB, "dead-node", true, log)
+	node2 := node.NewCoordinatorRegistry(mc.DB, "alive-node", true, log)
 
 	// Dead node registers and claims a table
 	node1.UpsertTables(ctx, []config.TableConfig{

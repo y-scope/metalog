@@ -39,9 +39,9 @@ func NewHTTPBackend(baseURL string, timeout time.Duration) *HTTPBackend {
 
 // Get retrieves an object via HTTP GET. The bucket is used as a path prefix.
 func (b *HTTPBackend) Get(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	url := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
+	rawURL := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, &StorageError{Op: "get", Bucket: bucket, Key: key, Err: err}
 	}
@@ -82,9 +82,9 @@ func (b *HTTPBackend) Delete(_ context.Context, bucket, key string) error {
 
 // Exists checks if an object exists via HTTP HEAD.
 func (b *HTTPBackend) Exists(ctx context.Context, bucket, key string) (bool, error) {
-	url := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
+	rawURL := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
 		return false, &StorageError{Op: "exists", Bucket: bucket, Key: key, Err: err}
 	}

@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -148,14 +149,31 @@ func (tw *tableWriter) run(ctx context.Context) {
 		case <-ticker.C:
 			flush()
 		case <-ctx.Done():
-			// Drain remaining
+			// Drain remaining records from the channel.
 			for {
 				select {
 				case rec := <-tw.ch:
 					batch = append(batch, rec)
 				default:
-					flush()
-					return
+					// Flush what we can with a short deadline.
+					flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					tw.flushBatch(flushCtx, batch)
+					flushCancel()
+					batch = batch[:0]
+
+					// Any records that arrive after this drain are orphaned.
+					// Drain once more and notify them with an error.
+					shutdownErr := fmt.Errorf("coordinator shutting down")
+					for {
+						select {
+						case rec := <-tw.ch:
+							if rec.Flushed != nil {
+								rec.Flushed <- shutdownErr
+							}
+						default:
+							return
+						}
+					}
 				}
 			}
 		}

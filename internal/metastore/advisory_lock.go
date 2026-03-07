@@ -39,17 +39,24 @@ func AcquireAdvisoryLock(ctx context.Context, db *sql.DB, name string, timeoutSe
 }
 
 // Release releases the advisory lock and closes the connection.
+// The lock is always released when the connection closes, so l.held is set
+// to false after conn.Close to ensure consistent state even on RELEASE_LOCK errors.
 func (l *AdvisoryLock) Release(ctx context.Context) error {
 	if !l.held {
 		return nil
 	}
-	defer l.conn.Close()
-	l.held = false
 
+	var releaseErr error
 	var result sql.NullInt64
 	err := l.conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", l.name).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("RELEASE_LOCK(%s): %w", l.name, err)
+		releaseErr = fmt.Errorf("RELEASE_LOCK(%s): %w", l.name, err)
 	}
-	return nil
+
+	// Close the connection — this definitively releases the lock server-side
+	// regardless of whether RELEASE_LOCK succeeded.
+	l.conn.Close()
+	l.held = false
+
+	return releaseErr
 }

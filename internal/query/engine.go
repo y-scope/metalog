@@ -116,6 +116,17 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		builder = builder.Where(sq.Eq{metastore.ColState: params.StateFilter})
 	}
 
+	// Validate keyset cursor compatibility: row comparison (col1,col2) > (v1,v2)
+	// only works when all sort directions are the same.
+	if params.HasCursor && len(params.OrderBy) > 1 {
+		firstDesc := params.OrderBy[0].Desc
+		for _, ob := range params.OrderBy[1:] {
+			if ob.Desc != firstDesc {
+				return nil, fmt.Errorf("keyset pagination does not support mixed ASC/DESC order by")
+			}
+		}
+	}
+
 	// Keyset cursor
 	if params.HasCursor && len(params.OrderBy) > 0 {
 		cursorWhere := buildKeysetWhere(params.OrderBy, params.CursorValues, params.CursorID)
@@ -129,9 +140,9 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		if ob.Desc {
 			dir = "DESC"
 		}
-		orderClauses = append(orderClauses, ob.Column+" "+dir)
+		orderClauses = append(orderClauses, db.QuoteIdentifier(ob.Column)+" "+dir)
 	}
-	orderClauses = append(orderClauses, metastore.ColID+" ASC") // implicit tiebreaker
+	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" ASC") // implicit tiebreaker
 	builder = builder.OrderBy(orderClauses...)
 
 	if params.Limit > 0 {
@@ -186,6 +197,7 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64) sq.Sqlizer {
 	// For keyset pagination: (col1, col2, ..., id) > (val1, val2, ..., cursorID)
 	// This creates a row comparison that MySQL can optimize.
+	// All columns must share the same direction (validated upstream).
 	colNames := make([]string, 0, len(orderBy)+1)
 	for _, ob := range orderBy {
 		colNames = append(colNames, ob.Column)
@@ -199,5 +211,11 @@ func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64)
 	lhs := "(" + strings.Join(colNames, ",") + ")"
 	placeholders := "(" + strings.Repeat("?,", len(vals)-1) + "?)"
 
-	return sq.Expr(lhs+" > "+placeholders, vals...)
+	// Use < for DESC ordering, > for ASC.
+	op := ">"
+	if len(orderBy) > 0 && orderBy[0].Desc {
+		op = "<"
+	}
+
+	return sq.Expr(lhs+" "+op+" "+placeholders, vals...)
 }

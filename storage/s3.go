@@ -89,6 +89,12 @@ func (b *S3Backend) Delete(ctx context.Context, bucket, key string) error {
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		// Treat not-found as success (idempotent delete).
+		var nsk *types.NoSuchKey
+		var nf *types.NotFound
+		if errors.As(err, &nsk) || errors.As(err, &nf) {
+			return nil
+		}
 		return fmt.Errorf("s3 delete: %w", err)
 	}
 	return nil

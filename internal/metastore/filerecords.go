@@ -264,7 +264,7 @@ func (fr *FileRecords) getCurrentStatesInTx(ctx context.Context, tx *sql.Tx, irP
 	inClause := ColClpIRPathHash + " IN (" + joinRepeat("UNHEX(MD5(?))", len(irPaths), ",") + ")"
 	query := "SELECT " + ColClpIRPath + ", " + ColState +
 		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
-		" WHERE " + inClause
+		" WHERE " + inClause + " FOR UPDATE"
 
 	hashArgs := make([]any, len(irPaths))
 	for i, p := range irPaths {
@@ -452,6 +452,7 @@ func baseColValues(rec *FileRecord) []any {
 
 func baseSelectCols() []string {
 	return []string{
+		ColID,
 		ColClpIRStorageBackend, ColClpIRBucket, ColClpIRPath,
 		ColClpArchiveStorageBackend, ColClpArchiveBucket, ColClpArchivePath,
 		ColState, ColMinTimestamp, ColMaxTimestamp, ColClpArchiveCreatedAt,
@@ -466,6 +467,7 @@ func scanFileRecords(rows *sql.Rows) ([]*FileRecord, error) {
 		rec := &FileRecord{}
 		var state string
 		if err := rows.Scan(
+			&rec.ID,
 			&rec.ClpIRStorageBackend, &rec.ClpIRBucket, &rec.ClpIRPath,
 			&rec.ClpArchiveStorageBackend, &rec.ClpArchiveBucket, &rec.ClpArchivePath,
 			&state, &rec.MinTimestamp, &rec.MaxTimestamp, &rec.ClpArchiveCreatedAt,

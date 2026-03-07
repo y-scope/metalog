@@ -1,10 +1,12 @@
 package run
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -78,6 +80,9 @@ func APIServer() {
 
 	if healthSrv != nil {
 		healthSrv.SetReady(false)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		healthSrv.Stop(shutdownCtx)
 	}
 
 	log.Info("API server shutdown complete")

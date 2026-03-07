@@ -106,7 +106,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		Log:             log,
 	}
 
-	cr := NewCoordinatorRegistry(pool, nodeID, log)
+	cr := NewCoordinatorRegistry(pool, nodeID, isMariaDB, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -131,7 +131,10 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 
 // Start initializes system tables, provisions configured tables, claims them,
 // starts coordinator and worker units, and begins background goroutines.
-func (n *Node) Start(ctx context.Context) error {
+// Uses the node's internal context for all operations.
+func (n *Node) Start() error {
+	ctx := n.ctx
+
 	// Ensure system tables
 	if err := n.registry.EnsureSystemTables(ctx); err != nil {
 		return err

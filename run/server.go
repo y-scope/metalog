@@ -1,7 +1,6 @@
 package run
 
 import (
-	"context"
 	"flag"
 	"os"
 	"os/signal"
@@ -39,10 +38,7 @@ func Server() {
 		log.Fatal("failed to create node", zap.Error(err))
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := n.Start(ctx); err != nil {
+	if err := n.Start(); err != nil {
 		log.Fatal("failed to start node", zap.Error(err))
 	}
 

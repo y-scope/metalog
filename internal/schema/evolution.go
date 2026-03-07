@@ -31,7 +31,7 @@ func (se *SchemaEvolution) AddColumn(ctx context.Context, tableName, colName, sq
 	}
 
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=NONE",
-		db.QuoteIdentifier(tableName), colName, sqlType)
+		db.QuoteIdentifier(tableName), db.QuoteIdentifier(colName), sqlType)
 
 	_, err := se.db.ExecContext(ctx, ddl)
 	if err != nil {

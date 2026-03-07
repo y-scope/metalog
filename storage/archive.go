@@ -23,9 +23,11 @@ func NewArchiveCreator(registry *Registry, compressor *ClpCompressor, log *zap.L
 }
 
 // CreateArchive downloads IR files, compresses them, and uploads the archive.
+// irBuckets provides a per-file bucket; if a single bucket is used for all files,
+// pass a slice with one element and it will be used for every file.
 func (ac *ArchiveCreator) CreateArchive(
 	ctx context.Context,
-	irBackend, irBucket string, irPaths []string,
+	irBackend string, irBuckets []string, irPaths []string,
 	archiveBackend, archiveBucket, archivePath string,
 ) (int64, error) {
 	tmpDir, err := os.MkdirTemp("", "metalog-archive-*")
@@ -45,9 +47,15 @@ func (ac *ArchiveCreator) CreateArchive(
 		return 0, fmt.Errorf("create archive: get ir backend: %w", err)
 	}
 
-	for _, irPath := range irPaths {
+	for i, irPath := range irPaths {
+		bucket := ""
+		if i < len(irBuckets) {
+			bucket = irBuckets[i]
+		} else if len(irBuckets) == 1 {
+			bucket = irBuckets[0]
+		}
 		localPath := filepath.Join(inputDir, filepath.Base(irPath))
-		if err := downloadFile(ctx, backend, irBucket, irPath, localPath); err != nil {
+		if err := downloadFile(ctx, backend, bucket, irPath, localPath); err != nil {
 			return 0, fmt.Errorf("download IR %s: %w", irPath, err)
 		}
 	}

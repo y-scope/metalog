@@ -254,6 +254,7 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		)
 		if err != nil {
 			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			continue
 		}
 
 		// Delete source IR files from storage (best-effort)

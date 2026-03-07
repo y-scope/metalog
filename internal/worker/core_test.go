@@ -33,7 +33,7 @@ type mockArchiveCreator struct {
 	sizeBytes int64
 }
 
-func (m *mockArchiveCreator) CreateArchive(_ context.Context, _, _ string, _ []string, _, _, _ string) (int64, error) {
+func (m *mockArchiveCreator) CreateArchive(_ context.Context, _ string, _ []string, _ []string, _, _, _ string) (int64, error) {
 	m.calls++
 	if m.failNext {
 		return 0, context.DeadlineExceeded

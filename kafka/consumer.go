@@ -179,14 +179,18 @@ func (c *Consumer) Run(ctx context.Context) {
 
 		// Process first message, then drain all buffered messages.
 		processed := 0
-		c.handleEvent(ctx, ev, &processed)
+		if c.handleEvent(ctx, ev, &processed) {
+			return // fatal error
+		}
 
 		for processed < maxPollBatch {
 			ev = consumer.Poll(0) // non-blocking: returns nil if no buffered messages
 			if ev == nil {
 				break
 			}
-			c.handleEvent(ctx, ev, &processed)
+			if c.handleEvent(ctx, ev, &processed) {
+				return // fatal error
+			}
 		}
 
 		if processed > 0 {
@@ -195,18 +199,21 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *int) {
+// handleEvent processes a single Kafka event. Returns true if a fatal error
+// occurred and the consumer should stop.
+func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *int) bool {
 	switch e := ev.(type) {
 	case *kafka.Message:
 		c.handleMessage(ctx, e)
 		*processed++
 	case kafka.Error:
 		if e.IsFatal() {
-			c.log.Error("fatal kafka error", zap.Error(e))
-		} else {
-			c.log.Warn("kafka error", zap.Error(e))
+			c.log.Error("fatal kafka error, stopping consumer", zap.Error(e))
+			return true
 		}
+		c.log.Warn("kafka error", zap.Error(e))
 	}
+	return false
 }
 
 // handleMessage transforms and ingests a single Kafka message through the IngestionService.

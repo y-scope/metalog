@@ -68,6 +68,7 @@ func TestFileState_CanTransitionTo_InvalidTransitions(t *testing.T) {
 func TestUpsertGuardStates(t *testing.T) {
 	// Verify the guard states are correctly defined
 	expected := map[FileState]bool{
+		StateIRPurging:                     true,
 		StateIRArchiveConsolidationPending: true,
 		StateArchiveClosed:                 true,
 		StateArchivePurging:                true,

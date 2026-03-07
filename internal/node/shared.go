@@ -8,7 +8,6 @@ import (
 
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/storage"
-	"github.com/y-scope/metalog/internal/taskqueue"
 )
 
 // SharedResources holds resources shared across all units in a node.
@@ -20,7 +19,6 @@ type SharedResources struct {
 	ArchiveCreator  *storage.ArchiveCreator
 	ArchiveBackend  string
 	ArchiveBucket   string
-	TaskQueue       *taskqueue.Queue
 	IsMariaDB       bool
 	Log             *zap.Logger
 

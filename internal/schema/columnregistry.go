@@ -207,7 +207,7 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 
 	_, err := cr.db.ExecContext(ctx,
 		fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL",
-			db.QuoteIdentifier(cr.tableName), entry.ColumnName, sqlType))
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(entry.ColumnName), sqlType))
 	if err != nil {
 		return "", fmt.Errorf("expand dim width: %w", err)
 	}
@@ -263,7 +263,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL",
-			db.QuoteIdentifier(cr.tableName), colName, sqlType))
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType))
 	if err != nil {
 		// Column may already exist from a previous crashed attempt — check.
 		if !isDuplicateColumn(err) {
@@ -333,7 +333,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT 0",
-			db.QuoteIdentifier(cr.tableName), colName, sqlType))
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType))
 	if err != nil {
 		if !isDuplicateColumn(err) {
 			return "", fmt.Errorf("alter table add agg: %w", err)
@@ -445,16 +445,30 @@ func (cr *ColumnRegistry) Snapshot() *ColumnRegistryReader {
 		aggByColumn: make(map[string]*AggRegistryEntry, len(cr.aggByColumn)),
 	}
 	for k, v := range cr.dimByKey {
-		snap.dimByKey[k] = v
+		cp := *v
+		snap.dimByKey[k] = &cp
 	}
 	for k, v := range cr.dimByColumn {
-		snap.dimByColumn[k] = v
+		// Re-use the copy already created via dimByKey if it's the same entry.
+		if existing, ok := snap.dimByKey[v.DimKey]; ok {
+			snap.dimByColumn[k] = existing
+		} else {
+			cp := *v
+			snap.dimByColumn[k] = &cp
+		}
 	}
 	for k, v := range cr.aggByKey {
-		snap.aggByKey[k] = v
+		cp := *v
+		snap.aggByKey[k] = &cp
 	}
 	for k, v := range cr.aggByColumn {
-		snap.aggByColumn[k] = v
+		cacheKey := AggCacheKey(v.AggKey, v.AggValue, v.AggregationType)
+		if existing, ok := snap.aggByKey[cacheKey]; ok {
+			snap.aggByColumn[k] = existing
+		} else {
+			cp := *v
+			snap.aggByColumn[k] = &cp
+		}
 	}
 	return snap
 }

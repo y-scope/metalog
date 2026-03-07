@@ -41,7 +41,7 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 	}
 
 	// Check guard condition
-	if !strings.Contains(sql, "state NOT IN ('IR_ARCHIVE_CONSOLIDATION_PENDING','ARCHIVE_CLOSED','ARCHIVE_PURGING')") {
+	if !strings.Contains(sql, "state NOT IN ('IR_PURGING','IR_ARCHIVE_CONSOLIDATION_PENDING','ARCHIVE_CLOSED','ARCHIVE_PURGING')") {
 		t.Error("missing guard condition")
 	}
 

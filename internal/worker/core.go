@@ -18,7 +18,7 @@ type TaskCompleter interface {
 // Archiver creates archives from IR files.
 type Archiver interface {
 	CreateArchive(ctx context.Context,
-		irBackend, irBucket string, irPaths []string,
+		irBackend string, irBuckets []string, irPaths []string,
 		archiveBackend, archiveBucket, archivePath string,
 	) (int64, error)
 }
@@ -78,7 +78,7 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 
 	// Create archive
 	sizeBytes, err := c.archiveCreator.CreateArchive(ctx,
-		payload.IRBackend, payload.IRBuckets[0], payload.IRPaths,
+		payload.IRBackend, payload.IRBuckets, payload.IRPaths,
 		payload.ArchiveBackend, payload.ArchiveBucket, payload.ArchivePath,
 	)
 	if err != nil {
