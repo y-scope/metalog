@@ -310,7 +310,12 @@ func (n *Node) startCoordinator(tableName string) error {
 		}
 	}
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, kafkaCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	tableID, err := n.registry.GetTableID(n.ctx, tableName)
+	if err != nil {
+		return err
+	}
+
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}

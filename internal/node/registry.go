@@ -417,6 +417,21 @@ func (r *CoordinatorRegistry) UpdateProgress(ctx context.Context, tableName stri
 	return err
 }
 
+// GetTableID fetches the table_id UUID for a given table_name from the _table registry.
+// The table_id is used to derive the Kafka consumer group ID, ensuring uniqueness
+// across environments (e.g., prod and staging sharing the same Kafka cluster).
+func (r *CoordinatorRegistry) GetTableID(ctx context.Context, tableName string) (string, error) {
+	var tableID string
+	err := r.db.QueryRowContext(ctx,
+		"SELECT table_id FROM "+metastore.TableRegistry+" WHERE table_name = ?",
+		tableName,
+	).Scan(&tableID)
+	if err != nil {
+		return "", fmt.Errorf("get table_id for %s: %w", tableName, err)
+	}
+	return tableID, nil
+}
+
 // scanTableNames is a helper that executes a query and scans a single string column.
 func (r *CoordinatorRegistry) scanTableNames(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, query, args...)

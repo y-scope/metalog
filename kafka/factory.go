@@ -19,8 +19,10 @@ func NewPollerFactory(service *ingestion.Service, log *zap.Logger) *PollerFactor
 }
 
 // Create builds a Poller for the given table config.
-func (f *PollerFactory) Create(tableConfig config.TableConfig) *Poller {
-	groupID := "metalog-" + tableConfig.Name
+// tableID is the UUID from the _table registry, used to derive a unique Kafka consumer
+// group ID across environments sharing the same Kafka cluster.
+func (f *PollerFactory) Create(tableConfig config.TableConfig, tableID string) *Poller {
+	groupID := "clp-coordinator-" + tableConfig.Name + "-" + tableID
 
 	transformer := NewTransformer(tableConfig.Kafka.RecordTransformer)
 

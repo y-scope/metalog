@@ -39,10 +39,17 @@ type CoordinatorUnit struct {
 	wg        sync.WaitGroup
 }
 
+// kafkaGroupPrefix is the prefix for Kafka consumer group IDs.
+// Matches the Java implementation (clp-coordinator-{table_name}-{table_id}).
+const kafkaGroupPrefix = "clp-coordinator-"
+
 // NewCoordinatorUnit creates a coordinator unit for a table.
+// tableID is the UUID from the _table registry, used to derive a unique Kafka consumer
+// group ID across environments sharing the same Kafka cluster.
 func NewCoordinatorUnit(
 	ctx context.Context,
 	tableName string,
+	tableID string,
 	kafkaCfg config.TableKafkaConfig,
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
@@ -79,7 +86,7 @@ func NewCoordinatorUnit(
 	// for proper dim/agg column resolution.
 	var kc *kafkaconsumer.Consumer
 	if kafkaCfg.Topic != "" && kafkaCfg.BootstrapServers != "" {
-		groupID := "metalog-coordinator-" + tableName
+		groupID := kafkaGroupPrefix + tableName + "-" + tableID
 		kc = kafkaconsumer.NewConsumer(
 			kafkaCfg.BootstrapServers, groupID, kafkaCfg.Topic, tableName,
 			kafkaconsumer.NewTransformer(kafkaCfg.RecordTransformer),

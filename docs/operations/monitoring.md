@@ -129,10 +129,10 @@ Monitor via standard Kafka tooling:
 kafka-consumer-groups.sh \
   --bootstrap-server kafka:9092 \
   --describe \
-  --group metalog-coordinator-clp_spark
+  --group clp-coordinator-clp_spark-<table_id>
 ```
 
-Consumer group IDs follow the pattern `metalog-coordinator-{table_name}`. Lag > 0 during steady state is normal (batch window); lag growing continuously indicates the coordinator is not keeping up.
+Consumer group IDs follow the pattern `clp-coordinator-{table_name}-{table_id}`, where `table_id` is the UUID from `_table.table_id`. The UUID suffix ensures uniqueness across environments sharing the same Kafka cluster. Lag > 0 during steady state is normal (batch window); lag growing continuously indicates the coordinator is not keeping up.
 
 ### Node liveness (heartbeat mode)
 

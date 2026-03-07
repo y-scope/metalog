@@ -70,7 +70,7 @@ The client publishes metadata to a Kafka topic. The coordinator's Kafka Consumer
 - Events persist in the topic regardless of client or coordinator availability
 - Requires single-owner coordination — one Kafka consumer group per table, managed by the HA mechanism (see [Coordinator HA](../design/coordinator-ha.md))
 - Higher throughput — batch-poll drains up to 1000 messages per cycle, reducing per-record overhead
-- Deterministic consumer group ID (`metalog-coordinator-{table_name}`) enables automatic resumption on failover
+- Deterministic consumer group ID (`clp-coordinator-{table_name}-{table_id}`) enables automatic resumption on failover — the UUID suffix ensures uniqueness across environments sharing the same Kafka cluster
 
 ## Choosing a Path
 
