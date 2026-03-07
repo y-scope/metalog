@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 
 	sq "github.com/Masterminds/squirrel"
@@ -190,11 +189,15 @@ func (cr *ColumnRegistry) ResolveAgg(aggKey, aggValue, aggType string) string {
 // ResolveOrAllocateDim resolves an existing dim mapping or allocates a new slot.
 // If a new slot is needed, it inserts into the registry and issues ALTER TABLE ADD COLUMN.
 // If the existing slot is narrower than width, the column is widened via ALTER TABLE MODIFY.
+//
+// Uses a fast-path/slow-path pattern: the fast path (RLock) handles the common
+// case where the dim already exists. The slow path (allocMu) serializes DDL
+// operations and double-checks under the lock to handle concurrent allocations.
 func (cr *ColumnRegistry) ResolveOrAllocateDim(ctx context.Context, dimKey, baseType string, width int) (string, error) {
+	// Fast path: check if already allocated (read-only, concurrent-safe).
 	cr.mu.RLock()
 	if e, ok := cr.dimByKey[dimKey]; ok {
 		cr.mu.RUnlock()
-		// Check if width expansion is needed (only for string types)
 		if width > e.Width && (baseType == "str" || baseType == "str_utf8") {
 			return cr.expandDimWidth(ctx, e, width)
 		}
@@ -202,10 +205,15 @@ func (cr *ColumnRegistry) ResolveOrAllocateDim(ctx context.Context, dimKey, base
 	}
 	cr.mu.RUnlock()
 
+	// Slow path: allocate new slot (serialized via allocMu).
 	return cr.allocateNewDimSlot(ctx, dimKey, baseType, width)
 }
 
 // expandDimWidth widens a VARCHAR dim column via ALTER TABLE MODIFY COLUMN.
+// Widening within the same InnoDB length-prefix tier (≤255 or >255) is an
+// in-place metadata change. Crossing the 255→256 boundary changes the length
+// prefix from 1 to 2 bytes and requires a full table rebuild, so we cap at 255
+// when the current width is ≤255.
 func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistryEntry, newWidth int) (string, error) {
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
@@ -218,10 +226,24 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 		return current.ColumnName, nil
 	}
 
+	// Prevent crossing the 255→256 boundary: InnoDB changes the VARCHAR
+	// length prefix from 1 byte to 2 bytes, forcing a full table rebuild.
+	if entry.Width <= defaultVarcharWidth && newWidth > defaultVarcharWidth {
+		cr.log.Warn("capping dim width at 255 to avoid full table rebuild",
+			zap.String("column", entry.ColumnName),
+			zap.String("dimKey", entry.DimKey),
+			zap.Int("requestedWidth", newWidth),
+		)
+		newWidth = defaultVarcharWidth
+		if newWidth <= entry.Width {
+			return entry.ColumnName, nil
+		}
+	}
+
 	sqlType := dimSQLType(entry.BaseType, newWidth)
 
 	_, err := cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL",
+		fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=NONE",
 			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(entry.ColumnName), sqlType))
 	if err != nil {
 		return "", fmt.Errorf("expand dim width: %w", err)
@@ -263,7 +285,8 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
-	// Double-check after acquiring lock
+	// Double-check: another goroutine may have allocated this dim while we
+	// were waiting for allocMu.
 	cr.mu.RLock()
 	if e, ok := cr.dimByKey[dimKey]; ok {
 		cr.mu.RUnlock()
@@ -313,9 +336,11 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 }
 
 // ResolveOrAllocateAgg resolves an existing agg mapping or allocates a new slot.
+// Same fast-path/slow-path pattern as [ResolveOrAllocateDim].
 func (cr *ColumnRegistry) ResolveOrAllocateAgg(ctx context.Context, aggKey, aggValue, aggType, valueType string) (string, error) {
 	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
 
+	// Fast path: read-only check.
 	cr.mu.RLock()
 	if e, ok := cr.aggByKey[cacheKey]; ok {
 		cr.mu.RUnlock()
@@ -323,6 +348,7 @@ func (cr *ColumnRegistry) ResolveOrAllocateAgg(ctx context.Context, aggKey, aggV
 	}
 	cr.mu.RUnlock()
 
+	// Slow path: allocate new slot.
 	return cr.allocateNewAggSlot(ctx, aggKey, aggValue, aggType, valueType)
 }
 
@@ -330,6 +356,8 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
+	// Double-check: another goroutine may have allocated this agg while we
+	// were waiting for allocMu.
 	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
 	cr.mu.RLock()
 	if e, ok := cr.aggByKey[cacheKey]; ok {
@@ -467,26 +495,16 @@ func (cr *ColumnRegistry) Snapshot() *RegistrySnapshot {
 		snap.dimByKey[k] = &cp
 	}
 	for k, v := range cr.dimByColumn {
-		// Re-use the copy already created via dimByKey if it's the same entry.
-		if existing, ok := snap.dimByKey[v.DimKey]; ok {
-			snap.dimByColumn[k] = existing
-		} else {
-			cp := *v
-			snap.dimByColumn[k] = &cp
-		}
+		cp := *v
+		snap.dimByColumn[k] = &cp
 	}
 	for k, v := range cr.aggByKey {
 		cp := *v
 		snap.aggByKey[k] = &cp
 	}
 	for k, v := range cr.aggByColumn {
-		cacheKey := aggCacheKey(v.AggKey, v.AggValue, v.AggregationType)
-		if existing, ok := snap.aggByKey[cacheKey]; ok {
-			snap.aggByColumn[k] = existing
-		} else {
-			cp := *v
-			snap.aggByColumn[k] = &cp
-		}
+		cp := *v
+		snap.aggByColumn[k] = &cp
 	}
 	return snap
 }
@@ -570,7 +588,7 @@ func parseSlotNumber(colName, prefix string) int {
 
 // isDuplicateColumn checks if an error is a "duplicate column name" DDL error (MySQL error 1060).
 func isDuplicateColumn(err error) bool {
-	return strings.Contains(err.Error(), "Duplicate column name") || strings.Contains(err.Error(), "1060")
+	return db.IsDuplicateColumn(err)
 }
 
 func nullIfEmpty(s string) any {

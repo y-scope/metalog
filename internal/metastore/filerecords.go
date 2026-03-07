@@ -171,26 +171,36 @@ func (fr *FileRecords) MarkArchiveClosed(
 		}
 	}
 
+	// Collect paths that exist in the DB (skip warned-about missing ones).
+	validPaths := make([]string, 0, len(irPaths))
 	for _, p := range irPaths {
-		cs, ok := currentStates[p]
-		if !ok {
-			continue // already warned above
+		if _, ok := currentStates[p]; ok {
+			validPaths = append(validPaths, p)
 		}
-		query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
-			Set(ColClpArchivePath, archivePath).
-			Set(ColClpArchiveStorageBackend, archiveBackend).
-			Set(ColClpArchiveBucket, archiveBucket).
-			Set(ColClpArchiveSizeBytes, archiveSizeBytes).
-			Set(ColClpArchiveCreatedAt, archiveCreatedAt).
-			Set(ColState, string(target)).
-			Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)).
-			Where(ColClpArchivePath + " IS NULL").
-			Where(sq.Eq{ColState: string(cs)}).
-			ToSql()
+	}
+	if len(validPaths) == 0 {
+		return tx.Commit()
+	}
 
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("mark archive closed: %w", err)
-		}
+	// Batch update — all validated files are in the same source state.
+	or := make(sq.Or, len(validPaths))
+	for i, p := range validPaths {
+		or[i] = sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)
+	}
+	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+		Set(ColClpArchivePath, archivePath).
+		Set(ColClpArchiveStorageBackend, archiveBackend).
+		Set(ColClpArchiveBucket, archiveBucket).
+		Set(ColClpArchiveSizeBytes, archiveSizeBytes).
+		Set(ColClpArchiveCreatedAt, archiveCreatedAt).
+		Set(ColState, string(target)).
+		Where(or).
+		Where(ColClpArchivePath + " IS NULL").
+		Where(sq.Eq{ColState: string(StateIRArchiveConsolidationPending)}).
+		ToSql()
+
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("mark archive closed: %w", err)
 	}
 
 	return tx.Commit()
@@ -223,24 +233,39 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		}
 	}
 
-	var totalAffected int64
+	// Collect valid source states for the WHERE clause.
+	sourceStates := make(map[FileState]bool)
+	validPaths := make([]string, 0, len(irPaths))
 	for _, p := range irPaths {
-		cs, ok := currentStates[p]
-		if !ok {
-			continue
+		if cs, ok := currentStates[p]; ok {
+			validPaths = append(validPaths, p)
+			sourceStates[cs] = true
 		}
-		query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
-			Set(ColState, string(newState)).
-			Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)).
-			Where(sq.Eq{ColState: string(cs)}).
-			ToSql()
-		res, err := tx.ExecContext(ctx, query, args...)
-		if err != nil {
-			return totalAffected, fmt.Errorf("update state: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		totalAffected += n
 	}
+	if len(validPaths) == 0 {
+		_ = tx.Commit()
+		return 0, nil
+	}
+
+	// Batch update with OR-ed hash conditions.
+	or := make(sq.Or, len(validPaths))
+	for i, p := range validPaths {
+		or[i] = sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)
+	}
+	stateList := make([]string, 0, len(sourceStates))
+	for s := range sourceStates {
+		stateList = append(stateList, string(s))
+	}
+	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+		Set(ColState, string(newState)).
+		Where(or).
+		Where(sq.Eq{ColState: stateList}).
+		ToSql()
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("update state: %w", err)
+	}
+	totalAffected, _ := res.RowsAffected()
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("update state: commit: %w", err)
@@ -328,16 +353,19 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 		return result, tx.Commit()
 	}
 
-	// Delete by hash
-	for _, h := range hashes {
-		delQuery, delArgs, _ := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
-			Where(sq.Eq{ColClpIRPathHash: h}).
-			ToSql()
-		if _, err := tx.ExecContext(ctx, delQuery, delArgs...); err != nil {
-			return nil, fmt.Errorf("delete expired: %w", err)
-		}
-		result.DeletedCount++
+	// Delete by hash (batched)
+	hashArgs := make([]any, len(hashes))
+	for i, h := range hashes {
+		hashArgs[i] = h
 	}
+	delQuery, delArgs, _ := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
+		Where(sq.Eq{ColClpIRPathHash: hashArgs}).
+		ToSql()
+	res, err := tx.ExecContext(ctx, delQuery, delArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("delete expired: %w", err)
+	}
+	result.DeletedCount, _ = res.RowsAffected()
 
 	return result, tx.Commit()
 }

@@ -189,7 +189,12 @@ CREATE TABLE IF NOT EXISTS _table_kafka (
     FOREIGN KEY (table_name) REFERENCES _table(table_name)
 ) ENGINE=InnoDB;
 
--- Feature config: typed columns instead of JSON blob
+-- Feature config: typed columns instead of JSON blob.
+-- Note: DDL DEFAULT values are used for columns not explicitly set by INSERT.
+-- The TableProvisioner (tableprovisioner.go) may override specific defaults
+-- (e.g., kafka_poller_enabled defaults to TRUE here but is inserted as FALSE
+-- during table provisioning). Check both DDL defaults and insertRegistryRows()
+-- when changing defaults.
 CREATE TABLE IF NOT EXISTS _table_config (
     table_name                          VARCHAR(64) NOT NULL PRIMARY KEY,
     kafka_poller_enabled                BOOLEAN NOT NULL DEFAULT TRUE,
@@ -288,15 +293,29 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- LIFECYCLE STATE
     -- ========================================================================
 
+    -- Two independent lifecycle chains — a file enters ONE chain at creation
+    -- and never crosses to the other:
+    --
+    --   IR-only chain (no consolidation):
+    --     IR_BUFFERING → IR_CLOSED → IR_PURGING
+    --
+    --   Hybrid chain (IR ingested, then consolidated into archive):
+    --     IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
+    --
+    -- The starting state is chosen by the producer at file creation time.
+    -- There is NO transition between chains (e.g., IR_BUFFERING cannot
+    -- become IR_ARCHIVE_BUFFERING).
     state ENUM(
-        'IR_BUFFERING',                      -- IR file still being written
-        'IR_CLOSED',                         -- IR file closed, queryable (IR-only, never consolidated)
+        -- IR-only chain
+        'IR_BUFFERING',                      -- IR file still being written (entry point)
+        'IR_CLOSED',                         -- IR file closed, queryable
         'IR_PURGING',                        -- IR file scheduled for deletion
-        'ARCHIVE_CLOSED',                    -- Archive created (no IR intermediate)
+
+        -- Hybrid chain
+        'ARCHIVE_CLOSED',                    -- Archive created (entry point for archive-only, or post-consolidation)
         'ARCHIVE_PURGING',                   -- Archive scheduled for deletion
-        'IR_ARCHIVE_BUFFERING',              -- Both IR and archive being written
-        'IR_ARCHIVE_CONSOLIDATION_PENDING'   -- IR closed, awaiting consolidation
-        -- After consolidation, transitions directly to ARCHIVE_CLOSED
+        'IR_ARCHIVE_BUFFERING',              -- IR file being written, will be consolidated (entry point)
+        'IR_ARCHIVE_CONSOLIDATION_PENDING'   -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
     ) NOT NULL,
 
     -- ========================================================================
@@ -370,6 +389,10 @@ CREATE TABLE IF NOT EXISTS _clp_template (
 
     -- IR path uniqueness via VIRTUAL column (per-partition due to MySQL constraint)
     -- NULL paths (archive-only entries) don't conflict in unique index
+    -- Note: the guarded UPSERT reads state and max_timestamp after the duplicate
+    -- key check. Including them as covering columns would avoid a row fetch on
+    -- every UPSERT, but at the cost of a wider index (10 extra bytes/entry).
+    -- At current volumes (~14-19K UPSERT/sec) the row fetch is not a bottleneck.
     UNIQUE KEY idx_clp_ir_hash (clp_ir_path_hash, min_timestamp),
 
     -- Archive path lookup via VIRTUAL column (non-unique: multiple IR files consolidate to one archive)
@@ -461,6 +484,8 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     table_name          VARCHAR(64) NOT NULL,
     state               ENUM('pending', 'processing', 'completed', 'failed', 'timed_out', 'dead_letter')
                         NOT NULL DEFAULT 'pending',
+    -- No FK to _node_registry: workers may deregister before their tasks are
+    -- reclaimed. Orphaned worker_id values are handled by stale task detection.
     worker_id           VARCHAR(64) NULL,
     created_at          INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
     claimed_at          INT UNSIGNED NULL,
@@ -479,10 +504,19 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     -- Cleanup: Find old completed/failed/timed_out tasks
     INDEX idx_cleanup (table_name, state, completed_at),
 
+    -- worker_id is intentionally not indexed. Stale task detection uses
+    -- idx_stale (by table + state + claimed_at), not by worker_id.
+    -- The task queue is small (hundreds to low thousands of rows per table)
+    -- and cleaned up aggressively, so a worker_id index would add write
+    -- overhead without meaningful query benefit.
+
     FOREIGN KEY (table_name) REFERENCES _table(table_name)
 ) ENGINE=InnoDB;
 
 -- Schema migrations for existing installations
+-- Note: IF EXISTS / IF NOT EXISTS in ALTER TABLE is MariaDB-only syntax.
+-- On MySQL 8.0 these will produce a syntax error, but EnsureSystemTables
+-- catches and skips ALTER TABLE errors gracefully.
 ALTER TABLE _task_queue CHANGE COLUMN IF EXISTS payload input MEDIUMBLOB NOT NULL;
 ALTER TABLE _task_queue ADD COLUMN IF NOT EXISTS output MEDIUMBLOB NULL;
 

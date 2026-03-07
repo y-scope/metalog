@@ -10,6 +10,7 @@ import (
 const (
 	errDeadlock        = 1213
 	errDupEntry        = 1062
+	errDupColumn       = 1060
 	errLockWaitTimeout = 1205
 	errTableExists     = 1050
 )
@@ -27,6 +28,11 @@ func IsDuplicateKey(err error) bool {
 // IsLockWaitTimeout returns true if the error is a lock wait timeout.
 func IsLockWaitTimeout(err error) bool {
 	return isMySQLError(err, errLockWaitTimeout)
+}
+
+// IsDuplicateColumn returns true if the error is a MySQL duplicate column name (ER_DUP_FIELDNAME).
+func IsDuplicateColumn(err error) bool {
+	return isMySQLError(err, errDupColumn)
 }
 
 // IsTableExists returns true if the error is "table already exists".

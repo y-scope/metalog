@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -29,6 +30,11 @@ func NewPool(cfg config.DatabaseConfig) (*sql.DB, error) {
 	db.SetMaxIdleConns(minIdle)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	db.SetConnMaxLifetime(30 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
 
 	return db, nil
 }

@@ -18,7 +18,11 @@ func ValidateSQLIdentifier(name string) error {
 }
 
 // QuoteIdentifier wraps a SQL identifier in backticks.
-// The identifier MUST be validated first via ValidateSQLIdentifier.
+// Panics if name fails [ValidateSQLIdentifier] — this is a programming error,
+// not a runtime condition.
 func QuoteIdentifier(name string) string {
+	if err := ValidateSQLIdentifier(name); err != nil {
+		panic("db.QuoteIdentifier: " + err.Error())
+	}
 	return "`" + name + "`"
 }

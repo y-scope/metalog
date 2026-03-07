@@ -22,6 +22,10 @@ const rowAlias = "new"
 // When useValuesFunc is true, uses VALUES(col) syntax (fully supported in MariaDB).
 // Otherwise uses the MySQL 8.0.20+ alias form: INSERT ... AS new ... new.col.
 //
+// floatAggCols is reserved for future accumulation support (SUM/AVG aggregation
+// types require type-aware arithmetic). Currently unused — all agg columns use
+// simple guarded overwrites.
+//
 // Returns the SQL string, an empty args slice (caller fills in), and the
 // number of parameters per row.
 func BuildGuardedUpsertSQL(

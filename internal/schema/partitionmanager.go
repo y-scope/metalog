@@ -107,7 +107,7 @@ func (pm *PartitionManager) createLookaheadPartitions(ctx context.Context) (int,
 
 		alterSQL := fmt.Sprintf(
 			"ALTER TABLE %s REORGANIZE PARTITION p_future INTO (PARTITION %s VALUES LESS THAN (%d), PARTITION p_future VALUES LESS THAN MAXVALUE)",
-			db.QuoteIdentifier(pm.tableName), partName, boundary,
+			db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(partName), boundary,
 		)
 
 		_, err := pm.db.ExecContext(ctx, alterSQL)
@@ -152,7 +152,7 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 		}
 
 		alterSQL := fmt.Sprintf("ALTER TABLE %s DROP PARTITION %s",
-			db.QuoteIdentifier(pm.tableName), p.Name)
+			db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(p.Name))
 		_, err := pm.db.ExecContext(ctx, alterSQL)
 		if err != nil {
 			pm.log.Warn("failed to drop partition", zap.String("partition", p.Name), zap.Error(err))

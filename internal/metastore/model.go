@@ -5,12 +5,23 @@ import (
 )
 
 // FileState represents the lifecycle state of a metadata file record.
+//
+// Two independent lifecycle chains — a file enters ONE chain at creation
+// and never crosses to the other:
+//
+//	IR-only chain:    IR_BUFFERING → IR_CLOSED → IR_PURGING
+//	Hybrid chain:     IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
+//
+// The starting state is chosen by the producer at file creation time.
 type FileState string
 
 const (
-	StateIRBuffering                   FileState = "IR_BUFFERING"
-	StateIRClosed                      FileState = "IR_CLOSED"
-	StateIRPurging                     FileState = "IR_PURGING"
+	// IR-only chain
+	StateIRBuffering FileState = "IR_BUFFERING"
+	StateIRClosed    FileState = "IR_CLOSED"
+	StateIRPurging   FileState = "IR_PURGING"
+
+	// Hybrid chain
 	StateArchiveClosed                 FileState = "ARCHIVE_CLOSED"
 	StateArchivePurging                FileState = "ARCHIVE_PURGING"
 	StateIRArchiveBuffering            FileState = "IR_ARCHIVE_BUFFERING"
