@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -31,10 +30,14 @@ func NewQueue(database *sql.DB, log *zap.Logger) *Queue {
 
 // CreateTask inserts a new pending task and returns its ID.
 func (q *Queue) CreateTask(ctx context.Context, tableName string, input []byte) (int64, error) {
-	res, err := q.db.ExecContext(ctx,
-		"INSERT INTO "+TableName+" (table_name, input) VALUES (?, ?)",
-		tableName, input,
-	)
+	query, args, err := sq.Insert(TableName).
+		Columns("table_name", "input").
+		Values(tableName, input).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("create task: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("create task: %w", err)
 	}
@@ -73,12 +76,13 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	}
 	defer tx.Rollback()
 
-	// SELECT ... FOR UPDATE
+	// SELECT ... FOR UPDATE SKIP LOCKED
 	builder := sq.Select("task_id", "table_name", "state", "retry_count", "input").
 		From(TableName).
 		Where(sq.Eq{"state": string(TaskStatePending)}).
 		OrderBy("task_id ASC").
-		Limit(uint64(batchSize))
+		Limit(uint64(batchSize)).
+		Suffix("FOR UPDATE SKIP LOCKED")
 
 	if tableName != "" {
 		builder = builder.Where(sq.Eq{"table_name": tableName})
@@ -88,7 +92,6 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	if err != nil {
 		return nil, fmt.Errorf("claim tasks: build query: %w", err)
 	}
-	query += " FOR UPDATE SKIP LOCKED"
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -117,16 +120,16 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	}
 
 	// UPDATE claimed tasks to processing
-	placeholders := joinRepeat("?", len(taskIDs), ",")
-	updateArgs := make([]any, 0, 2+len(taskIDs))
-	updateArgs = append(updateArgs, workerID)
-	updateArgs = append(updateArgs, taskIDs...)
-
-	_, err = tx.ExecContext(ctx,
-		"UPDATE "+TableName+" SET state = 'processing', worker_id = ?, claimed_at = UNIX_TIMESTAMP() WHERE task_id IN ("+placeholders+")",
-		updateArgs...,
-	)
+	updateQuery, updateArgs, err := sq.Update(TableName).
+		Set("state", string(TaskStateProcessing)).
+		Set("worker_id", workerID).
+		Set("claimed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Where(sq.Eq{"task_id": taskIDs}).
+		ToSql()
 	if err != nil {
+		return nil, fmt.Errorf("update claimed: build query: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
 		return nil, fmt.Errorf("update claimed: %w", err)
 	}
 
@@ -145,19 +148,18 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 
 // CompleteTask marks a task as completed with optional output.
 func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (int64, error) {
-	var res sql.Result
-	var err error
+	builder := sq.Update(TableName).
+		Set("state", string(TaskStateCompleted)).
+		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)})
 	if output != nil {
-		res, err = q.db.ExecContext(ctx,
-			"UPDATE "+TableName+" SET state = 'completed', completed_at = UNIX_TIMESTAMP(), output = ? WHERE task_id = ? AND state = 'processing'",
-			output, taskID,
-		)
-	} else {
-		res, err = q.db.ExecContext(ctx,
-			"UPDATE "+TableName+" SET state = 'completed', completed_at = UNIX_TIMESTAMP() WHERE task_id = ? AND state = 'processing'",
-			taskID,
-		)
+		builder = builder.Set("output", output)
 	}
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("complete task: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("complete task: %w", err)
 	}
@@ -173,14 +175,16 @@ func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (
 // count, it is moved to dead_letter instead.
 // Uses a single atomic UPDATE with conditional state selection to avoid TOCTOU races.
 func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
-	res, err := q.db.ExecContext(ctx,
-		"UPDATE "+TableName+" SET "+
-			"retry_count = retry_count + 1, "+
-			"state = IF(retry_count >= ?, 'dead_letter', 'failed'), "+
-			"completed_at = UNIX_TIMESTAMP() "+
-			"WHERE task_id = ? AND state = 'processing'",
-		defaultMaxRetries, taskID,
-	)
+	query, args, err := sq.Update(TableName).
+		Set("retry_count", sq.Expr("retry_count + 1")).
+		Set("state", sq.Expr("IF(retry_count >= ?, 'dead_letter', 'failed')", defaultMaxRetries)).
+		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("fail task: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("fail task: %w", err)
 	}
@@ -190,10 +194,12 @@ func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	}
 
 	// Check if it ended up in dead_letter for logging purposes.
+	checkQuery, checkArgs, _ := sq.Select("state").
+		From(TableName).
+		Where(sq.Eq{"task_id": taskID}).
+		ToSql()
 	var state string
-	if scanErr := q.db.QueryRowContext(ctx,
-		"SELECT state FROM "+TableName+" WHERE task_id = ?", taskID,
-	).Scan(&state); scanErr == nil && state == "dead_letter" {
+	if scanErr := q.db.QueryRowContext(ctx, checkQuery, checkArgs...).Scan(&state); scanErr == nil && state == "dead_letter" {
 		q.log.Warn("task moved to dead letter on failure", zap.Int64("taskId", taskID))
 	}
 
@@ -202,11 +208,15 @@ func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 
 // FindStaleTasks returns processing tasks older than timeoutSeconds.
 func (q *Queue) FindStaleTasks(ctx context.Context, tableName string, timeoutSeconds int) ([]*Task, error) {
-	rows, err := q.db.QueryContext(ctx,
-		"SELECT task_id, table_name, state, retry_count, input, worker_id FROM "+TableName+
-			" WHERE table_name = ? AND state = 'processing' AND claimed_at <= UNIX_TIMESTAMP() - ?",
-		tableName, timeoutSeconds,
-	)
+	query, args, err := sq.Select("task_id", "table_name", "state", "retry_count", "input", "worker_id").
+		From(TableName).
+		Where(sq.Eq{"table_name": tableName, "state": string(TaskStateProcessing)}).
+		Where("claimed_at <= UNIX_TIMESTAMP() - ?", timeoutSeconds).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("find stale tasks: build query: %w", err)
+	}
+	rows, err := q.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("find stale tasks: %w", err)
 	}
@@ -241,10 +251,15 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 		newState = "dead_letter"
 	}
 
-	res, err := tx.ExecContext(ctx,
-		"UPDATE "+TableName+" SET state = ?, completed_at = UNIX_TIMESTAMP() WHERE task_id = ? AND state = 'processing'",
-		newState, taskID,
-	)
+	updateQuery, updateArgs, err := sq.Update(TableName).
+		Set("state", newState).
+		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("reclaim update: build query: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, updateQuery, updateArgs...)
 	if err != nil {
 		return fmt.Errorf("reclaim update: %w", err)
 	}
@@ -262,12 +277,18 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 	}
 
 	// Re-enqueue: copy input from old task into new pending task
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO "+TableName+" (table_name, input, retry_count) "+
-			"SELECT table_name, input, retry_count + 1 FROM "+TableName+" WHERE task_id = ?",
-		taskID,
-	)
+	insertQuery, insertArgs, err := sq.Insert(TableName).
+		Columns("table_name", "input", "retry_count").
+		Select(
+			sq.Select("table_name", "input", "retry_count + 1").
+				From(TableName).
+				Where(sq.Eq{"task_id": taskID}),
+		).
+		ToSql()
 	if err != nil {
+		return fmt.Errorf("reclaim re-enqueue: build query: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return fmt.Errorf("reclaim re-enqueue: %w", err)
 	}
 
@@ -281,11 +302,18 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 // CleanupOldTasks deletes completed/failed/timed_out tasks older than maxAge.
 func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-maxAge).Unix()
-	res, err := q.db.ExecContext(ctx,
-		"DELETE FROM "+TableName+
-			" WHERE table_name = ? AND state IN ('completed','failed','timed_out') AND completed_at < ? LIMIT 1000",
-		tableName, cutoff,
-	)
+	query, args, err := sq.Delete(TableName).
+		Where(sq.Eq{
+			"table_name": tableName,
+			"state":      []string{string(TaskStateCompleted), string(TaskStateFailed), string(TaskStateTimedOut)},
+		}).
+		Where(sq.Lt{"completed_at": cutoff}).
+		Suffix("LIMIT 1000").
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("cleanup old tasks: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("cleanup old tasks: %w", err)
 	}
@@ -295,10 +323,15 @@ func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge ti
 
 // GetTaskCounts returns task counts grouped by state for a table.
 func (q *Queue) GetTaskCounts(ctx context.Context, tableName string) (*TaskCounts, error) {
-	rows, err := q.db.QueryContext(ctx,
-		"SELECT state, COUNT(*) FROM "+TableName+" WHERE table_name = ? GROUP BY state",
-		tableName,
-	)
+	query, args, err := sq.Select("state", "COUNT(*)").
+		From(TableName).
+		Where(sq.Eq{"table_name": tableName}).
+		GroupBy("state").
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("get task counts: build query: %w", err)
+	}
+	rows, err := q.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get task counts: %w", err)
 	}
@@ -334,24 +367,16 @@ func (q *Queue) GetTaskCounts(ctx context.Context, tableName string) (*TaskCount
 
 // DeleteAllTasks removes all tasks for a table (used on coordinator restart).
 func (q *Queue) DeleteAllTasks(ctx context.Context, tableName string) (int64, error) {
-	res, err := q.db.ExecContext(ctx,
-		"DELETE FROM "+TableName+" WHERE table_name = ?", tableName,
-	)
+	query, args, err := sq.Delete(TableName).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("delete all tasks: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete all tasks: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
-}
-
-// joinRepeat repeats s n times, separated by sep.
-func joinRepeat(s string, n int, sep string) string {
-	if n <= 0 {
-		return ""
-	}
-	parts := make([]string, n)
-	for i := range parts {
-		parts[i] = s
-	}
-	return strings.Join(parts, sep)
 }
