@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	schemadef "github.com/y-scope/metalog/schema"
@@ -115,26 +116,29 @@ func loadTemplateDDL() (string, error) {
 
 func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string) error {
 	// _table: identity row
-	_, err := database.ExecContext(ctx,
-		"INSERT IGNORE INTO "+metastore.TableRegistry+" (table_name, display_name) VALUES (?, ?)",
-		tableName, tableName)
-	if err != nil {
+	q1, a1, _ := sq.Insert(metastore.TableRegistry).Options("IGNORE").
+		Columns("table_name", "display_name").
+		Values(tableName, tableName).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q1, a1...); err != nil {
 		return fmt.Errorf("insert _table: %w", err)
 	}
 
 	// _table_config
-	_, err = database.ExecContext(ctx,
-		"INSERT IGNORE INTO "+metastore.TableRegistryConfig+" (table_name, kafka_poller_enabled) VALUES (?, FALSE)",
-		tableName)
-	if err != nil {
+	q2, a2, _ := sq.Insert(metastore.TableRegistryConfig).Options("IGNORE").
+		Columns("table_name", "kafka_poller_enabled").
+		Values(tableName, false).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q2, a2...); err != nil {
 		return fmt.Errorf("insert _table_config: %w", err)
 	}
 
 	// _table_assignment: node_id NULL — to be claimed via leader election
-	_, err = database.ExecContext(ctx,
-		"INSERT IGNORE INTO "+metastore.TableRegistryAssignment+" (table_name) VALUES (?)",
-		tableName)
-	if err != nil {
+	q3, a3, _ := sq.Insert(metastore.TableRegistryAssignment).Options("IGNORE").
+		Columns("table_name").
+		Values(tableName).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q3, a3...); err != nil {
 		return fmt.Errorf("insert _table_assignment: %w", err)
 	}
 
@@ -144,11 +148,11 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
 	for i := 1; i <= sketchSlotCount; i++ {
 		member := fmt.Sprintf("s%02d", i)
-		_, err := database.ExecContext(ctx,
-			"INSERT IGNORE INTO "+metastore.SketchRegistryTable+
-				" (table_name, sketch_name, state) VALUES (?, ?, 'AVAILABLE')",
-			tableName, member)
-		if err != nil {
+		query, args, _ := sq.Insert(metastore.SketchRegistryTable).Options("IGNORE").
+			Columns("table_name", "sketch_name", "state").
+			Values(tableName, member, "AVAILABLE").
+			ToSql()
+		if _, err := database.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("insert sketch slot: %w", err)
 		}
 	}

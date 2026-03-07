@@ -127,50 +127,49 @@ func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 }
 
 // UpsertTables registers tables from the config into the registry.
-// INSERT ... ON DUPLICATE KEY UPDATE is MySQL-specific and not supported by squirrel.
 // Note: VALUES() in ON DUPLICATE KEY UPDATE is deprecated in MySQL 8.0.20+ but
 // fully supported in MariaDB 10.6+ (our target). If migrating to MySQL 8.0.20+,
-// use the alias form: INSERT INTO ... AS new_row ... ON DUPLICATE KEY UPDATE col = new_row.col.
+// use the alias form: INSERT INTO ... AS new ON DUPLICATE KEY UPDATE col = new.col.
 func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.TableConfig) error {
 	for _, t := range tables {
-		var tableUpsert string
+		tableInsert := sq.Insert(metastore.TableRegistry).
+			Columns("table_name", "display_name").
+			Values(t.Name, t.DisplayName)
 		if r.isMariaDB {
-			tableUpsert = "INSERT INTO " + metastore.TableRegistry + " (table_name, display_name) VALUES (?, ?) " +
-				"ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)"
+			tableInsert = tableInsert.Suffix("ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)")
 		} else {
-			tableUpsert = "INSERT INTO " + metastore.TableRegistry + " (table_name, display_name) VALUES (?, ?) AS new " +
-				"ON DUPLICATE KEY UPDATE display_name = COALESCE(new.display_name, display_name)"
+			tableInsert = tableInsert.Suffix("AS new ON DUPLICATE KEY UPDATE display_name = COALESCE(new.display_name, display_name)")
 		}
-		_, err := r.db.ExecContext(ctx, tableUpsert, t.Name, t.DisplayName)
-		if err != nil {
+		query, args, _ := tableInsert.ToSql()
+		if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("upsert table %s: %w", t.Name, err)
 		}
 
-		_, err = r.db.ExecContext(ctx,
-			"INSERT IGNORE INTO "+metastore.TableRegistryAssignment+" (table_name) VALUES (?)",
-			t.Name,
-		)
-		if err != nil {
+		assignQuery, assignArgs, _ := sq.Insert(metastore.TableRegistryAssignment).Options("IGNORE").
+			Columns("table_name").
+			Values(t.Name).
+			ToSql()
+		if _, err := r.db.ExecContext(ctx, assignQuery, assignArgs...); err != nil {
 			return fmt.Errorf("ensure assignment %s: %w", t.Name, err)
 		}
 
 		if t.Kafka.Topic != "" {
-			var kafkaUpsert string
+			kafkaInsert := sq.Insert(metastore.TableRegistryKafka).
+				Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
+				Values(t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer)
 			if r.isMariaDB {
-				kafkaUpsert = "INSERT INTO " + metastore.TableRegistryKafka +
-					" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?) " +
+				kafkaInsert = kafkaInsert.Suffix(
 					"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), " +
-					"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
-					"record_transformer = VALUES(record_transformer)"
+						"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
+						"record_transformer = VALUES(record_transformer)")
 			} else {
-				kafkaUpsert = "INSERT INTO " + metastore.TableRegistryKafka +
-					" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?) AS new " +
-					"ON DUPLICATE KEY UPDATE kafka_topic = new.kafka_topic, " +
-					"kafka_bootstrap_servers = new.kafka_bootstrap_servers, " +
-					"record_transformer = new.record_transformer"
+				kafkaInsert = kafkaInsert.Suffix(
+					"AS new ON DUPLICATE KEY UPDATE kafka_topic = new.kafka_topic, " +
+						"kafka_bootstrap_servers = new.kafka_bootstrap_servers, " +
+						"record_transformer = new.record_transformer")
 			}
-			_, err = r.db.ExecContext(ctx, kafkaUpsert, t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer)
-			if err != nil {
+			kQuery, kArgs, _ := kafkaInsert.ToSql()
+			if _, err := r.db.ExecContext(ctx, kQuery, kArgs...); err != nil {
 				return fmt.Errorf("upsert kafka config %s: %w", t.Name, err)
 			}
 		}
@@ -266,13 +265,13 @@ func (r *CoordinatorRegistry) ReleaseAllTables(ctx context.Context) error {
 }
 
 // SendHeartbeat updates the heartbeat timestamp for this node.
-// INSERT ... ON DUPLICATE KEY UPDATE is MySQL-specific and not supported by squirrel.
 func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO "+metastore.NodeRegistryTable+" (node_id, last_heartbeat_at) VALUES (?, UNIX_TIMESTAMP()) "+
-			"ON DUPLICATE KEY UPDATE last_heartbeat_at = UNIX_TIMESTAMP()",
-		r.nodeID,
-	)
+	query, args, _ := sq.Insert(metastore.NodeRegistryTable).
+		Columns("node_id", "last_heartbeat_at").
+		Values(r.nodeID, sq.Expr("UNIX_TIMESTAMP()")).
+		Suffix("ON DUPLICATE KEY UPDATE last_heartbeat_at = UNIX_TIMESTAMP()").
+		ToSql()
+	_, err := r.db.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -312,12 +311,13 @@ func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThr
 	var claimed []string
 	for _, o := range orphans {
 		now := time.Now().Unix()
-		res, err := r.db.ExecContext(ctx,
-			"UPDATE "+metastore.TableRegistryAssignment+
-				" SET node_id = ?, node_assigned_at = ?, assignment_updated_at = ?"+
-				" WHERE table_name = ? AND node_id = ?",
-			r.nodeID, now, now, o.tableName, o.deadOwner,
-		)
+		claimQuery, claimArgs, _ := sq.Update(metastore.TableRegistryAssignment).
+			Set("node_id", r.nodeID).
+			Set("node_assigned_at", now).
+			Set("assignment_updated_at", now).
+			Where(sq.Eq{"table_name": o.tableName, "node_id": o.deadOwner}).
+			ToSql()
+		res, err := r.db.ExecContext(ctx, claimQuery, claimArgs...)
 		if err != nil {
 			r.log.Warn("failed to claim orphan", zap.String("table", o.tableName), zap.Error(err))
 			continue
@@ -346,12 +346,15 @@ func (r *CoordinatorRegistry) ClaimOrphansLease(ctx context.Context, leaseTTLSec
 	var claimed []string
 	now := time.Now().Unix()
 	for _, t := range orphans {
-		res, err := r.db.ExecContext(ctx,
-			"UPDATE "+metastore.TableRegistryAssignment+
-				" SET node_id = ?, node_assigned_at = ?, assignment_updated_at = ?, lease_expiry = ?"+
-				" WHERE table_name = ? AND (lease_expiry < UNIX_TIMESTAMP() OR lease_expiry IS NULL)",
-			r.nodeID, now, now, now+int64(leaseTTLSeconds), t,
-		)
+		claimQuery, claimArgs, _ := sq.Update(metastore.TableRegistryAssignment).
+			Set("node_id", r.nodeID).
+			Set("node_assigned_at", now).
+			Set("assignment_updated_at", now).
+			Set("lease_expiry", now+int64(leaseTTLSeconds)).
+			Where(sq.Eq{"table_name": t}).
+			Where("(lease_expiry < UNIX_TIMESTAMP() OR lease_expiry IS NULL)").
+			ToSql()
+		res, err := r.db.ExecContext(ctx, claimQuery, claimArgs...)
 		if err != nil {
 			r.log.Warn("failed to claim orphan", zap.String("table", t), zap.Error(err))
 			continue
@@ -366,12 +369,14 @@ func (r *CoordinatorRegistry) ClaimOrphansLease(ctx context.Context, leaseTTLSec
 
 // RenewLeases extends lease_expiry for all tables owned by this node.
 func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTLSeconds int) error {
-	_, err := r.db.ExecContext(ctx,
-		"UPDATE "+metastore.TableRegistryAssignment+
-			" SET lease_expiry = UNIX_TIMESTAMP() + ? WHERE node_id = ?",
-		leaseTTLSeconds, r.nodeID,
-	)
+	query, args, err := sq.Update(metastore.TableRegistryAssignment).
+		Set("lease_expiry", sq.Expr("UNIX_TIMESTAMP() + ?", leaseTTLSeconds)).
+		Where(sq.Eq{"node_id": r.nodeID}).
+		ToSql()
 	if err != nil {
+		return fmt.Errorf("renew leases: build query: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("renew leases: %w", err)
 	}
 	return nil
@@ -379,41 +384,44 @@ func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTLSeconds i
 
 // CountActiveNodes returns the number of nodes with a recent heartbeat.
 func (r *CoordinatorRegistry) CountActiveNodes(ctx context.Context, deadThresholdSeconds int) (int, error) {
+	query, args, _ := sq.Select("COUNT(*)").
+		From(metastore.NodeRegistryTable).
+		Where("last_heartbeat_at >= UNIX_TIMESTAMP() - ?", deadThresholdSeconds).
+		ToSql()
 	var count int
-	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+metastore.NodeRegistryTable+
-			" WHERE last_heartbeat_at >= UNIX_TIMESTAMP() - ?",
-		deadThresholdSeconds,
-	).Scan(&count)
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
 // CountAssignedTables returns the number of tables assigned to any node.
 func (r *CoordinatorRegistry) CountAssignedTables(ctx context.Context) (int, error) {
+	query, args, _ := sq.Select("COUNT(*)").
+		From(metastore.TableRegistryAssignment).
+		Where("node_id IS NOT NULL").
+		ToSql()
 	var count int
-	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+metastore.TableRegistryAssignment+" WHERE node_id IS NOT NULL",
-	).Scan(&count)
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
 // CountMyTables returns the number of tables assigned to this node.
 func (r *CoordinatorRegistry) CountMyTables(ctx context.Context) (int, error) {
+	query, args, _ := sq.Select("COUNT(*)").
+		From(metastore.TableRegistryAssignment).
+		Where(sq.Eq{"node_id": r.nodeID}).
+		ToSql()
 	var count int
-	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+metastore.TableRegistryAssignment+" WHERE node_id = ?",
-		r.nodeID,
-	).Scan(&count)
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
 // UpdateProgress writes last_progress_at for operator visibility.
 func (r *CoordinatorRegistry) UpdateProgress(ctx context.Context, tableName string) error {
-	_, err := r.db.ExecContext(ctx,
-		"UPDATE "+metastore.TableRegistryAssignment+
-			" SET last_progress_at = UNIX_TIMESTAMP() WHERE table_name = ? AND node_id = ?",
-		tableName, r.nodeID,
-	)
+	query, args, _ := sq.Update(metastore.TableRegistryAssignment).
+		Set("last_progress_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Where(sq.Eq{"table_name": tableName, "node_id": r.nodeID}).
+		ToSql()
+	_, err := r.db.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -421,12 +429,12 @@ func (r *CoordinatorRegistry) UpdateProgress(ctx context.Context, tableName stri
 // The table_id is used to derive the Kafka consumer group ID, ensuring uniqueness
 // across environments (e.g., prod and staging sharing the same Kafka cluster).
 func (r *CoordinatorRegistry) GetTableID(ctx context.Context, tableName string) (string, error) {
+	query, args, _ := sq.Select("table_id").
+		From(metastore.TableRegistry).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
 	var tableID string
-	err := r.db.QueryRowContext(ctx,
-		"SELECT table_id FROM "+metastore.TableRegistry+" WHERE table_name = ?",
-		tableName,
-	).Scan(&tableID)
-	if err != nil {
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&tableID); err != nil {
 		return "", fmt.Errorf("get table_id for %s: %w", tableName, err)
 	}
 	return tableID, nil

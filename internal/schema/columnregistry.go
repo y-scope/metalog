@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/db"
@@ -97,9 +98,11 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, log *z
 
 func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	// Load dims
-	rows, err := cr.db.QueryContext(ctx,
-		"SELECT column_name, base_type, width, dim_key, alias_column FROM "+metastore.DimRegistryTable+
-			" WHERE table_name = ? AND state = '"+statusActive+"'", cr.tableName)
+	dimQuery, dimArgs, _ := sq.Select("column_name", "base_type", "width", "dim_key", "alias_column").
+		From(metastore.DimRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
+		ToSql()
+	rows, err := cr.db.QueryContext(ctx, dimQuery, dimArgs...)
 	if err != nil {
 		return fmt.Errorf("load dim registry: %w", err)
 	}
@@ -130,9 +133,11 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	}
 
 	// Load aggs
-	rows2, err := cr.db.QueryContext(ctx,
-		"SELECT column_name, agg_key, agg_value, aggregation_type, value_type, alias_column FROM "+metastore.AggRegistryTable+
-			" WHERE table_name = ? AND state = '"+statusActive+"'", cr.tableName)
+	aggQuery, aggArgs, _ := sq.Select("column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column").
+		From(metastore.AggRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
+		ToSql()
+	rows2, err := cr.db.QueryContext(ctx, aggQuery, aggArgs...)
 	if err != nil {
 		return fmt.Errorf("load agg registry: %w", err)
 	}
@@ -223,10 +228,11 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 	}
 
 	// Update registry
-	_, err = cr.db.ExecContext(ctx,
-		"UPDATE "+metastore.DimRegistryTable+" SET width = ? WHERE table_name = ? AND column_name = ?",
-		newWidth, cr.tableName, entry.ColumnName)
-	if err != nil {
+	updateQuery, updateArgs, _ := sq.Update(metastore.DimRegistryTable).
+		Set("width", newWidth).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": entry.ColumnName}).
+		ToSql()
+	if _, err = cr.db.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
 		return "", fmt.Errorf("update dim width registry: %w", err)
 	}
 
@@ -282,12 +288,11 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	}
 
 	// INSERT into registry (safe now — the physical column exists)
-	_, err = cr.db.ExecContext(ctx,
-		"INSERT INTO "+metastore.DimRegistryTable+
-			" (table_name, column_name, base_type, width, dim_key, state) VALUES (?, ?, ?, ?, ?, '"+statusActive+"')",
-		cr.tableName, colName, baseType, width, dimKey,
-	)
-	if err != nil {
+	insertQuery, insertArgs, _ := sq.Insert(metastore.DimRegistryTable).
+		Columns("table_name", "column_name", "base_type", "width", "dim_key", "state").
+		Values(cr.tableName, colName, baseType, width, dimKey, statusActive).
+		ToSql()
+	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert dim registry: %w", err)
 	}
 
@@ -351,12 +356,11 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	}
 
 	// INSERT into registry (safe now — the physical column exists)
-	_, err = cr.db.ExecContext(ctx,
-		"INSERT INTO "+metastore.AggRegistryTable+
-			" (table_name, column_name, agg_key, agg_value, aggregation_type, value_type, state) VALUES (?, ?, ?, ?, ?, ?, '"+statusActive+"')",
-		cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType,
-	)
-	if err != nil {
+	insertQuery, insertArgs, _ := sq.Insert(metastore.AggRegistryTable).
+		Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "state").
+		Values(cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType, statusActive).
+		ToSql()
+	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert agg registry: %w", err)
 	}
 

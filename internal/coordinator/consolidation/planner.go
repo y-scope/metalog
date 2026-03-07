@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
@@ -205,11 +206,18 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		output []byte
 	}
 
-	rows, err := p.db.QueryContext(ctx,
-		"SELECT task_id, input, output FROM "+taskqueue.TableName+
-			" WHERE table_name = ? AND state IN ('completed', 'failed', 'dead_letter') LIMIT 100",
-		p.tableName,
-	)
+	query, qArgs, err := sq.Select("task_id", "input", "output").
+		From(taskqueue.TableName).
+		Where(sq.Eq{
+			"table_name": p.tableName,
+			"state":      []string{"completed", "failed", "dead_letter"},
+		}).
+		Limit(100).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("process completed: build query: %w", err)
+	}
+	rows, err := p.db.QueryContext(ctx, query, qArgs...)
 	if err != nil {
 		return fmt.Errorf("process completed: query: %w", err)
 	}
@@ -286,10 +294,13 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 
 // markTaskProcessed deletes a terminal task after the planner has fully processed it.
 func (p *Planner) markTaskProcessed(ctx context.Context, taskID int64) {
-	_, err := p.db.ExecContext(ctx,
-		"DELETE FROM "+taskqueue.TableName+" WHERE task_id = ? AND state IN ('completed', 'failed', 'dead_letter')",
-		taskID,
-	)
+	query, args, _ := sq.Delete(taskqueue.TableName).
+		Where(sq.Eq{
+			"task_id": taskID,
+			"state":   []string{"completed", "failed", "dead_letter"},
+		}).
+		ToSql()
+	_, err := p.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		p.log.Warn("delete processed task failed", zap.Int64("taskId", taskID), zap.Error(err))
 	}

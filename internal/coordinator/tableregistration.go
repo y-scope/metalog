@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/db"
@@ -36,12 +37,12 @@ func (s *TableRegistration) RegisterTable(
 	}
 
 	// Check if table already exists
+	existsQuery, existsArgs, _ := sq.Select("COUNT(*) > 0").
+		From(metastore.TableRegistry).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
 	var exists bool
-	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) > 0 FROM "+metastore.TableRegistry+" WHERE table_name = ?",
-		tableName,
-	).Scan(&exists)
-	if err != nil {
+	if err := s.db.QueryRowContext(ctx, existsQuery, existsArgs...).Scan(&exists); err != nil {
 		return false, err
 	}
 
@@ -52,23 +53,24 @@ func (s *TableRegistration) RegisterTable(
 
 	// Update display name if provided
 	if displayName != "" {
-		_, err := s.db.ExecContext(ctx,
-			"UPDATE "+metastore.TableRegistry+" SET display_name = ? WHERE table_name = ?",
-			displayName, tableName,
-		)
-		if err != nil {
+		updateQuery, updateArgs, _ := sq.Update(metastore.TableRegistry).
+			Set("display_name", displayName).
+			Where(sq.Eq{"table_name": tableName}).
+			ToSql()
+		if _, err := s.db.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
 			return false, err
 		}
 	}
 
 	// Upsert Kafka config
-	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO "+metastore.TableRegistryKafka+
-			" (table_name, kafka_topic, kafka_bootstrap_servers, record_transformer) VALUES (?, ?, ?, ?)"+
-			" ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), record_transformer = VALUES(record_transformer)",
-		tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer,
-	)
-	if err != nil {
+	kafkaQuery, kafkaArgs, _ := sq.Insert(metastore.TableRegistryKafka).
+		Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
+		Values(tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer).
+		Suffix("ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), " +
+			"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
+			"record_transformer = VALUES(record_transformer)").
+		ToSql()
+	if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
 		return false, err
 	}
 

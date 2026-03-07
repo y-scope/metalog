@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -117,32 +116,22 @@ func (fr *FileRecords) GetCurrentStates(ctx context.Context, irPaths []string) (
 		return map[string]FileState{}, nil
 	}
 
-	hashArgs := make([]any, len(irPaths))
-	for i, p := range irPaths {
-		hashArgs[i] = p
+	builder := sq.Select(ColClpIRPath, ColState).
+		From(dbutil.QuoteIdentifier(fr.tableName))
+	builder = whereIRPathHashIn(builder, irPaths)
+
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("get current states: build query: %w", err)
 	}
 
-	inClause := ColClpIRPathHash + " IN (" + joinRepeat("UNHEX(MD5(?))", len(irPaths), ",") + ")"
-	query := "SELECT " + ColClpIRPath + ", " + ColState +
-		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
-		" WHERE " + inClause
-
-	rows, err := fr.db.QueryContext(ctx, query, hashArgs...)
+	rows, err := fr.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get current states: %w", err)
 	}
 	defer rows.Close()
 
-	states := make(map[string]FileState)
-	for rows.Next() {
-		var path string
-		var state string
-		if err := rows.Scan(&path, &state); err != nil {
-			return nil, err
-		}
-		states[path] = FileState(state)
-	}
-	return states, rows.Err()
+	return scanStateMap(rows)
 }
 
 // MarkArchiveClosed transitions files to ARCHIVE_CLOSED after consolidation completes.
@@ -187,23 +176,19 @@ func (fr *FileRecords) MarkArchiveClosed(
 		if !ok {
 			continue // already warned above
 		}
-		query := "UPDATE " + dbutil.QuoteIdentifier(fr.tableName) +
-			" SET " + ColClpArchivePath + " = ?, " +
-			ColClpArchiveStorageBackend + " = ?, " +
-			ColClpArchiveBucket + " = ?, " +
-			ColClpArchiveSizeBytes + " = ?, " +
-			ColClpArchiveCreatedAt + " = ?, " +
-			ColState + " = ? " +
-			"WHERE " + ColClpIRPathHash + " = UNHEX(MD5(?)) " +
-			"AND " + ColClpArchivePath + " IS NULL " +
-			"AND " + ColState + " = ?"
+		query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+			Set(ColClpArchivePath, archivePath).
+			Set(ColClpArchiveStorageBackend, archiveBackend).
+			Set(ColClpArchiveBucket, archiveBucket).
+			Set(ColClpArchiveSizeBytes, archiveSizeBytes).
+			Set(ColClpArchiveCreatedAt, archiveCreatedAt).
+			Set(ColState, string(target)).
+			Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)).
+			Where(ColClpArchivePath + " IS NULL").
+			Where(sq.Eq{ColState: string(cs)}).
+			ToSql()
 
-		_, err := tx.ExecContext(ctx, query,
-			archivePath, archiveBackend, archiveBucket,
-			archiveSizeBytes, archiveCreatedAt,
-			string(target), p, string(cs),
-		)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("mark archive closed: %w", err)
 		}
 	}
@@ -244,11 +229,12 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		if !ok {
 			continue
 		}
-		res, err := tx.ExecContext(ctx,
-			"UPDATE "+dbutil.QuoteIdentifier(fr.tableName)+
-				" SET "+ColState+" = ? WHERE "+ColClpIRPathHash+" = UNHEX(MD5(?)) AND "+ColState+" = ?",
-			string(newState), p, string(cs),
-		)
+		query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+			Set(ColState, string(newState)).
+			Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)).
+			Where(sq.Eq{ColState: string(cs)}).
+			ToSql()
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return totalAffected, fmt.Errorf("update state: %w", err)
 		}
@@ -264,32 +250,23 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 
 // getCurrentStatesInTx is like GetCurrentStates but executes within an existing transaction.
 func (fr *FileRecords) getCurrentStatesInTx(ctx context.Context, tx *sql.Tx, irPaths []string) (map[string]FileState, error) {
-	inClause := ColClpIRPathHash + " IN (" + joinRepeat("UNHEX(MD5(?))", len(irPaths), ",") + ")"
-	query := "SELECT " + ColClpIRPath + ", " + ColState +
-		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
-		" WHERE " + inClause + " FOR UPDATE"
+	builder := sq.Select(ColClpIRPath, ColState).
+		From(dbutil.QuoteIdentifier(fr.tableName)).
+		Suffix("FOR UPDATE")
+	builder = whereIRPathHashIn(builder, irPaths)
 
-	hashArgs := make([]any, len(irPaths))
-	for i, p := range irPaths {
-		hashArgs[i] = p
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("get current states: build query: %w", err)
 	}
 
-	rows, err := tx.QueryContext(ctx, query, hashArgs...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get current states: %w", err)
 	}
 	defer rows.Close()
 
-	states := make(map[string]FileState)
-	for rows.Next() {
-		var path string
-		var state string
-		if err := rows.Scan(&path, &state); err != nil {
-			return nil, err
-		}
-		states[path] = FileState(state)
-	}
-	return states, rows.Err()
+	return scanStateMap(rows)
 }
 
 // DeleteExpiredFiles removes files past their expiration and returns their storage paths.
@@ -301,16 +278,18 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 	defer tx.Rollback()
 
 	// Select expired files
-	rows, err := tx.QueryContext(ctx,
-		"SELECT "+ColClpIRStorageBackend+", "+ColClpIRBucket+", "+ColClpIRPath+", "+
-			ColClpArchiveStorageBackend+", "+ColClpArchiveBucket+", "+ColClpArchivePath+", "+
-			ColClpIRPathHash+
-			" FROM "+dbutil.QuoteIdentifier(fr.tableName)+
-			" WHERE "+ColExpiresAt+" > 0 AND "+ColExpiresAt+" < ?"+
-			" AND "+ColState+" IN ('"+string(StateIRPurging)+"','"+string(StateArchivePurging)+"')"+
-			fmt.Sprintf(" LIMIT %d", MaxExpirationBatch),
-		currentNanos,
-	)
+	expQuery, expArgs, _ := sq.Select(
+		ColClpIRStorageBackend, ColClpIRBucket, ColClpIRPath,
+		ColClpArchiveStorageBackend, ColClpArchiveBucket, ColClpArchivePath,
+		ColClpIRPathHash,
+	).
+		From(dbutil.QuoteIdentifier(fr.tableName)).
+		Where(sq.Gt{ColExpiresAt: 0}).
+		Where(sq.Lt{ColExpiresAt: currentNanos}).
+		Where(sq.Eq{ColState: []string{string(StateIRPurging), string(StateArchivePurging)}}).
+		Limit(MaxExpirationBatch).
+		ToSql()
+	rows, err := tx.QueryContext(ctx, expQuery, expArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query expired files: %w", err)
 	}
@@ -351,9 +330,10 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 
 	// Delete by hash
 	for _, h := range hashes {
-		_, err := tx.ExecContext(ctx,
-			"DELETE FROM "+dbutil.QuoteIdentifier(fr.tableName)+" WHERE "+ColClpIRPathHash+" = ?", h)
-		if err != nil {
+		delQuery, delArgs, _ := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
+			Where(sq.Eq{ColClpIRPathHash: h}).
+			ToSql()
+		if _, err := tx.ExecContext(ctx, delQuery, delArgs...); err != nil {
 			return nil, fmt.Errorf("delete expired: %w", err)
 		}
 		result.DeletedCount++
@@ -391,11 +371,13 @@ func (fr *FileRecords) FindByID(ctx context.Context, id int64) (*FileRecord, err
 
 // FindByIRPath returns a single file record by its IR path (via UNHEX(MD5()) hash).
 func (fr *FileRecords) FindByIRPath(ctx context.Context, irPath string) (*FileRecord, error) {
-	query := "SELECT " + joinCols(baseSelectCols()) +
-		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
-		" WHERE " + ColClpIRPathHash + " = UNHEX(MD5(?)) LIMIT 1"
+	query, args, _ := sq.Select(baseSelectCols()...).
+		From(dbutil.QuoteIdentifier(fr.tableName)).
+		Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", irPath)).
+		Limit(1).
+		ToSql()
 
-	rows, err := fr.db.QueryContext(ctx, query, irPath)
+	rows, err := fr.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("find by ir path: %w", err)
 	}
@@ -413,11 +395,13 @@ func (fr *FileRecords) FindByIRPath(ctx context.Context, irPath string) (*FileRe
 
 // FindByArchivePath returns a single file record by its archive path (via UNHEX(MD5()) hash).
 func (fr *FileRecords) FindByArchivePath(ctx context.Context, archivePath string) (*FileRecord, error) {
-	query := "SELECT " + joinCols(baseSelectCols()) +
-		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
-		" WHERE " + ColClpArchivePathHash + " = UNHEX(MD5(?)) LIMIT 1"
+	query, args, _ := sq.Select(baseSelectCols()...).
+		From(dbutil.QuoteIdentifier(fr.tableName)).
+		Where(sq.Expr(ColClpArchivePathHash+" = UNHEX(MD5(?))", archivePath)).
+		Limit(1).
+		ToSql()
 
-	rows, err := fr.db.QueryContext(ctx, query, archivePath)
+	rows, err := fr.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("find by archive path: %w", err)
 	}
@@ -487,17 +471,29 @@ func scanFileRecords(rows *sql.Rows) ([]*FileRecord, error) {
 	return records, rows.Err()
 }
 
-func joinCols(cols []string) string {
-	return strings.Join(cols, ", ")
+// whereIRPathHashIn adds a WHERE clause matching IR path hashes via UNHEX(MD5(?)).
+// Squirrel doesn't natively support UNHEX(MD5(?)) in Eq, so we build the clause
+// with sq.Expr for each path and combine with sq.Or.
+func whereIRPathHashIn(builder sq.SelectBuilder, irPaths []string) sq.SelectBuilder {
+	if len(irPaths) == 1 {
+		return builder.Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", irPaths[0]))
+	}
+	or := make(sq.Or, len(irPaths))
+	for i, p := range irPaths {
+		or[i] = sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)
+	}
+	return builder.Where(or)
 }
 
-func joinRepeat(s string, n int, sep string) string {
-	if n <= 0 {
-		return ""
+// scanStateMap scans rows of (path, state) into a map.
+func scanStateMap(rows *sql.Rows) (map[string]FileState, error) {
+	states := make(map[string]FileState)
+	for rows.Next() {
+		var path, state string
+		if err := rows.Scan(&path, &state); err != nil {
+			return nil, err
+		}
+		states[path] = FileState(state)
 	}
-	parts := make([]string, n)
-	for i := range parts {
-		parts[i] = s
-	}
-	return strings.Join(parts, sep)
+	return states, rows.Err()
 }
