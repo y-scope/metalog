@@ -26,9 +26,9 @@ const (
 	ColExt                      = "ext"
 )
 
-// BaseCols are the fixed columns used in standard INSERT/UPSERT operations.
+// baseCols are the fixed columns used in standard INSERT/UPSERT operations.
 // Order matters — these correspond to the VALUES placeholders.
-var BaseCols = []string{
+var baseCols = []string{
 	ColMinTimestamp,
 	ColMaxTimestamp,
 	ColClpArchiveCreatedAt,
@@ -47,8 +47,8 @@ var BaseCols = []string{
 	ColExpiresAt,
 }
 
-// GuardedUpdateCols are columns that use IF(guard, ...) in ON DUPLICATE KEY UPDATE.
-var GuardedUpdateCols = []string{
+// guardedUpdateCols are columns that use IF(guard, ...) in ON DUPLICATE KEY UPDATE.
+var guardedUpdateCols = []string{
 	ColMaxTimestamp,
 	ColClpArchiveCreatedAt,
 	ColClpIRStorageBackend,

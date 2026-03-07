@@ -18,7 +18,7 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 	}
 
 	// Check all base columns + dim + agg are in the column list
-	for _, col := range BaseCols {
+	for _, col := range baseCols {
 		if !strings.Contains(sql, col) {
 			t.Errorf("missing column %q in SQL", col)
 		}
@@ -53,7 +53,7 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 	}
 
 	// Check paramsPerRow = baseCols + dimCols + aggCols
-	expectedParams := len(BaseCols) + len(dimCols) + len(aggCols)
+	expectedParams := len(baseCols) + len(dimCols) + len(aggCols)
 	if paramsPerRow != expectedParams {
 		t.Errorf("paramsPerRow = %d, want %d", paramsPerRow, expectedParams)
 	}
@@ -65,8 +65,8 @@ func TestBuildGuardedUpsertSQLNoDynamic(t *testing.T) {
 	if !strings.Contains(sql, "INSERT INTO `my_table`") {
 		t.Error("wrong table name")
 	}
-	if paramsPerRow != len(BaseCols) {
-		t.Errorf("paramsPerRow = %d, want %d", paramsPerRow, len(BaseCols))
+	if paramsPerRow != len(baseCols) {
+		t.Errorf("paramsPerRow = %d, want %d", paramsPerRow, len(baseCols))
 	}
 	// Should have exactly 1 value row
 	valuesIdx := strings.Index(sql, "VALUES ")

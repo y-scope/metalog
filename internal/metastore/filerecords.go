@@ -445,7 +445,7 @@ func (fr *FileRecords) FindByArchivePath(ctx context.Context, archivePath string
 	return records[0], nil
 }
 
-// baseColValues returns the ordered values for BaseCols from a FileRecord.
+// baseColValues returns the ordered values for baseCols from a FileRecord.
 func baseColValues(rec *FileRecord) []any {
 	return []any{
 		rec.MinTimestamp,

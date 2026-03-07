@@ -37,13 +37,13 @@ func BuildGuardedUpsertSQL(
 	useValuesFunc bool,
 ) (string, []any, int) {
 
-	allCols := make([]string, 0, len(BaseCols)+len(dimCols)+len(aggCols))
-	allCols = append(allCols, BaseCols...)
+	allCols := make([]string, 0, len(baseCols)+len(dimCols)+len(aggCols))
+	allCols = append(allCols, baseCols...)
 	allCols = append(allCols, dimCols...)
 	allCols = append(allCols, aggCols...)
 
 	// Validate all dynamic column names before interpolation.
-	// BaseCols/GuardedUpdateCols are internal constants; dimCols/aggCols come
+	// baseCols/guardedUpdateCols are internal constants; dimCols/aggCols come
 	// from ColumnRegistry which uses validated dim_fNN/agg_fNN names.
 	for _, col := range allCols {
 		if err := dbutil.ValidateSQLIdentifier(col); err != nil {
@@ -103,7 +103,7 @@ func BuildGuardedUpsertSQL(
 
 	// Guarded columns: everything except max_timestamp (which goes last)
 	first := true
-	for _, col := range GuardedUpdateCols {
+	for _, col := range guardedUpdateCols {
 		if col == ColMaxTimestamp {
 			continue // goes last
 		}
