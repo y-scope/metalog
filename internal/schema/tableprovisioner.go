@@ -65,8 +65,14 @@ func createPhysicalTable(ctx context.Context, database *sql.DB, tableName string
 		compressionClause = ""
 	case "page_compressed":
 		compressionClause = "\n  PAGE_COMPRESSED=1"
+	case "lz4":
+		compressionClause = "\n  COMPRESSION='lz4'"
+	case "zlib":
+		compressionClause = "\n  COMPRESSION='zlib'"
+	case "zstd":
+		compressionClause = "\n  COMPRESSION='zstd'"
 	default:
-		compressionClause = "\n  COMPRESSION='" + compression + "'"
+		return fmt.Errorf("unsupported compression %q: must be none, page_compressed, lz4, zlib, or zstd", compression)
 	}
 
 	if compressionClause != "" {

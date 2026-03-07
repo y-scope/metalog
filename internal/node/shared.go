@@ -18,6 +18,8 @@ type SharedResources struct {
 	WorkerDB        *sql.DB // optional separate pool for workers; falls back to DB
 	StorageRegistry *storage.Registry
 	ArchiveCreator  *storage.ArchiveCreator
+	ArchiveBackend  string
+	ArchiveBucket   string
 	TaskQueue       *taskqueue.Queue
 	IsMariaDB       bool
 	Log             *zap.Logger

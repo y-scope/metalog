@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -219,9 +220,19 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 		return "", fmt.Errorf("update dim width registry: %w", err)
 	}
 
-	// Update cache
+	// Replace entry with a new immutable copy to avoid data races with readers.
+	updated := &DimRegistryEntry{
+		TableName:  entry.TableName,
+		ColumnName: entry.ColumnName,
+		BaseType:   entry.BaseType,
+		Width:      newWidth,
+		DimKey:     entry.DimKey,
+		AliasCol:   entry.AliasCol,
+		Status:     entry.Status,
+	}
 	cr.mu.Lock()
-	entry.Width = newWidth
+	cr.dimByKey[entry.DimKey] = updated
+	cr.dimByColumn[entry.ColumnName] = updated
 	cr.mu.Unlock()
 
 	cr.log.Info("expanded dim column width",
@@ -249,8 +260,19 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	// Determine SQL type
 	sqlType := dimSQLType(baseType, width)
 
-	// INSERT into registry
+	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL",
+			db.QuoteIdentifier(cr.tableName), colName, sqlType))
+	if err != nil {
+		// Column may already exist from a previous crashed attempt — check.
+		if !isDuplicateColumn(err) {
+			return "", fmt.Errorf("alter table add dim: %w", err)
+		}
+	}
+
+	// INSERT into registry (safe now — the physical column exists)
+	_, err = cr.db.ExecContext(ctx,
 		"INSERT INTO "+metastore.DimRegistryTable+
 			" (table_name, column_name, base_type, width, dim_key, state) VALUES (?, ?, ?, ?, ?, 'ACTIVE')",
 		cr.tableName, colName, baseType, width, dimKey,
@@ -259,15 +281,6 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 		return "", fmt.Errorf("insert dim registry: %w", err)
 	}
 
-	// ALTER TABLE ADD COLUMN (online DDL)
-	_, err = cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL",
-			db.QuoteIdentifier(cr.tableName), colName, sqlType))
-	if err != nil {
-		return "", fmt.Errorf("alter table add dim: %w", err)
-	}
-
-	// Increment only after both DB operations succeed.
 	cr.nextDimSlot++
 
 	// Update cache
@@ -317,8 +330,18 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 		sqlType = "DOUBLE"
 	}
 
-	// INSERT into registry
+	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT 0",
+			db.QuoteIdentifier(cr.tableName), colName, sqlType))
+	if err != nil {
+		if !isDuplicateColumn(err) {
+			return "", fmt.Errorf("alter table add agg: %w", err)
+		}
+	}
+
+	// INSERT into registry (safe now — the physical column exists)
+	_, err = cr.db.ExecContext(ctx,
 		"INSERT INTO "+metastore.AggRegistryTable+
 			" (table_name, column_name, agg_key, agg_value, aggregation_type, value_type, state) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE')",
 		cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType,
@@ -327,15 +350,6 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 		return "", fmt.Errorf("insert agg registry: %w", err)
 	}
 
-	// ALTER TABLE ADD COLUMN
-	_, err = cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT 0",
-			db.QuoteIdentifier(cr.tableName), colName, sqlType))
-	if err != nil {
-		return "", fmt.Errorf("alter table add agg: %w", err)
-	}
-
-	// Increment only after both DB operations succeed.
 	cr.nextAggSlot++
 
 	entry := &AggRegistryEntry{
@@ -520,6 +534,11 @@ func parseSlotNumber(colName, prefix string) int {
 		}
 	}
 	return n
+}
+
+// isDuplicateColumn checks if an error is a "duplicate column name" DDL error (MySQL error 1060).
+func isDuplicateColumn(err error) bool {
+	return strings.Contains(err.Error(), "Duplicate column name") || strings.Contains(err.Error(), "1060")
 }
 
 func nullIfEmpty(s string) any {

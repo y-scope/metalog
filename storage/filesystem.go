@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func init() {
@@ -26,8 +27,28 @@ func NewFilesystemBackend() *FilesystemBackend {
 	return &FilesystemBackend{}
 }
 
-func (b *FilesystemBackend) Get(_ context.Context, bucket, key string) (io.ReadCloser, error) {
+// safePath constructs a path within bucket and verifies it doesn't escape via traversal.
+func safePath(bucket, key string) (string, error) {
 	path := filepath.Join(bucket, key)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	bucketAbs, err := filepath.Abs(bucket)
+	if err != nil {
+		return "", fmt.Errorf("resolve bucket: %w", err)
+	}
+	if !strings.HasPrefix(abs, bucketAbs+string(filepath.Separator)) && abs != bucketAbs {
+		return "", fmt.Errorf("path traversal detected: %q", key)
+	}
+	return path, nil
+}
+
+func (b *FilesystemBackend) Get(_ context.Context, bucket, key string) (io.ReadCloser, error) {
+	path, err := safePath(bucket, key)
+	if err != nil {
+		return nil, fmt.Errorf("fs get: %w", err)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -39,7 +60,10 @@ func (b *FilesystemBackend) Get(_ context.Context, bucket, key string) (io.ReadC
 }
 
 func (b *FilesystemBackend) Put(_ context.Context, bucket, key string, body io.Reader, _ int64) error {
-	path := filepath.Join(bucket, key)
+	path, err := safePath(bucket, key)
+	if err != nil {
+		return fmt.Errorf("fs put: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("fs put: mkdir: %w", err)
 	}
@@ -58,14 +82,22 @@ func (b *FilesystemBackend) Put(_ context.Context, bucket, key string, body io.R
 }
 
 func (b *FilesystemBackend) Delete(_ context.Context, bucket, key string) error {
-	if err := os.Remove(filepath.Join(bucket, key)); err != nil && !os.IsNotExist(err) {
+	path, err := safePath(bucket, key)
+	if err != nil {
+		return fmt.Errorf("fs delete: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("fs delete: %w", err)
 	}
 	return nil
 }
 
 func (b *FilesystemBackend) Exists(_ context.Context, bucket, key string) (bool, error) {
-	_, err := os.Stat(filepath.Join(bucket, key))
+	path, err := safePath(bucket, key)
+	if err != nil {
+		return false, fmt.Errorf("fs exists: %w", err)
+	}
+	_, err = os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -38,7 +39,7 @@ func NewHTTPBackend(baseURL string, timeout time.Duration) *HTTPBackend {
 
 // Get retrieves an object via HTTP GET. The bucket is used as a path prefix.
 func (b *HTTPBackend) Get(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	url := fmt.Sprintf("%s/%s/%s", b.baseURL, bucket, key)
+	url := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -81,7 +82,7 @@ func (b *HTTPBackend) Delete(_ context.Context, bucket, key string) error {
 
 // Exists checks if an object exists via HTTP HEAD.
 func (b *HTTPBackend) Exists(ctx context.Context, bucket, key string) (bool, error) {
-	url := fmt.Sprintf("%s/%s/%s", b.baseURL, bucket, key)
+	url := fmt.Sprintf("%s/%s/%s", b.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {

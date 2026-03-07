@@ -110,11 +110,15 @@ func (c *NodeConfig) validate() error {
 	if c.Node.Database.Port < 1 || c.Node.Database.Port > 65535 {
 		return fmt.Errorf("node.database.port must be 1-65535, got %d", c.Node.Database.Port)
 	}
-	if c.Node.Health.Port < 1 || c.Node.Health.Port > 65535 {
-		return fmt.Errorf("node.health.port must be 1-65535, got %d", c.Node.Health.Port)
+	if c.Node.Health.Enabled {
+		if c.Node.Health.Port < 1 || c.Node.Health.Port > 65535 {
+			return fmt.Errorf("node.health.port must be 1-65535, got %d", c.Node.Health.Port)
+		}
 	}
-	if c.Node.GRPC.Port < 1 || c.Node.GRPC.Port > 65535 {
-		return fmt.Errorf("node.grpc.port must be 1-65535, got %d", c.Node.GRPC.Port)
+	if c.Node.GRPC.Enabled {
+		if c.Node.GRPC.Port < 1 || c.Node.GRPC.Port > 65535 {
+			return fmt.Errorf("node.grpc.port must be 1-65535, got %d", c.Node.GRPC.Port)
+		}
 	}
 	for i, t := range c.Tables {
 		if t.Name == "" {

@@ -61,6 +61,7 @@ func NewCoordinatorUnit(
 	planner, err := consolidation.NewPlanner(
 		shared.DB, tableName, policy, inFlight, taskQueue,
 		shared.StorageRegistry,
+		shared.ArchiveBackend, shared.ArchiveBucket,
 		config.DefaultPlannerInterval,
 		log,
 	)

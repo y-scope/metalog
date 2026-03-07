@@ -54,7 +54,7 @@ func (im *IndexManager) EnsureIndex(ctx context.Context, tableName, colName stri
 
 	// Create index (online DDL)
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD INDEX %s (%s), ALGORITHM=INPLACE, LOCK=NONE",
-		db.QuoteIdentifier(tableName), indexName, colName)
+		db.QuoteIdentifier(tableName), db.QuoteIdentifier(indexName), db.QuoteIdentifier(colName))
 
 	_, err = im.db.ExecContext(ctx, ddl)
 	if err != nil {
@@ -70,10 +70,13 @@ func (im *IndexManager) DropIndex(ctx context.Context, tableName, colName string
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
 		return err
 	}
+	if err := db.ValidateSQLIdentifier(colName); err != nil {
+		return err
+	}
 
 	indexName := "idx_" + colName
 	ddl := fmt.Sprintf("ALTER TABLE %s DROP INDEX %s",
-		db.QuoteIdentifier(tableName), indexName)
+		db.QuoteIdentifier(tableName), db.QuoteIdentifier(indexName))
 
 	_, err := im.db.ExecContext(ctx, ddl)
 	if err != nil {

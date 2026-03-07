@@ -23,6 +23,9 @@ type AuditPolicy struct {
 
 // NewAuditPolicy creates an AuditPolicy.
 func NewAuditPolicy(minFiles, maxFiles int) *AuditPolicy {
+	if maxFiles <= 0 {
+		maxFiles = 100
+	}
 	return &AuditPolicy{
 		MinFilesPerDay:   minFiles,
 		MaxFilesPerGroup: maxFiles,

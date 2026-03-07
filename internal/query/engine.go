@@ -73,13 +73,23 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		cols = []string{"*"}
 	}
 
-	// Resolve ORDER BY columns
+	// Resolve ORDER BY columns and validate they are safe identifiers
 	for i, ob := range params.OrderBy {
 		resolved, err := ResolveColumnRef(ob.Column, params.Registry)
 		if err != nil {
 			return nil, fmt.Errorf("resolve order by: %w", err)
 		}
+		if err := db.ValidateSQLIdentifier(resolved); err != nil {
+			return nil, fmt.Errorf("order by: %w", err)
+		}
 		params.OrderBy[i].Column = resolved
+	}
+
+	// Validate filter expression (defense-in-depth — gRPC handler also validates)
+	if params.FilterExpr != "" {
+		if err := ValidateFilterExpression(params.FilterExpr); err != nil {
+			return nil, fmt.Errorf("filter validation: %w", err)
+		}
 	}
 
 	// Rewrite filter expression columns (cached to avoid repeated parsing)

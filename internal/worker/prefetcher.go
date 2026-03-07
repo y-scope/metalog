@@ -77,10 +77,16 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 
 		backoff = config.DefaultWorkerPollInterval
 
-		for _, task := range claimed {
+		for i, task := range claimed {
 			select {
 			case pf.tasks <- task:
 			case <-ctx.Done():
+				// Log abandoned tasks so operators know they'll be reclaimed after stale timeout.
+				remaining := len(claimed) - i
+				if remaining > 0 {
+					pf.log.Warn("prefetcher cancelled, abandoning claimed tasks",
+						zap.Int("abandoned", remaining))
+				}
 				return
 			}
 		}

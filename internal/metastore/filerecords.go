@@ -114,12 +114,8 @@ func (fr *FileRecords) GetCurrentStates(ctx context.Context, irPaths []string) (
 		return map[string]FileState{}, nil
 	}
 
-	// Build WHERE clp_ir_path_hash IN (UNHEX(MD5(?)), ...)
-	// Since we use interpolateParams=true, we build this with squirrel placeholders.
-	hashExprs := make([]string, len(irPaths))
 	hashArgs := make([]any, len(irPaths))
 	for i, p := range irPaths {
-		hashExprs[i] = "UNHEX(MD5(?))"
 		hashArgs[i] = p
 	}
 
@@ -160,7 +156,13 @@ func (fr *FileRecords) MarkArchiveClosed(
 		return nil
 	}
 
-	currentStates, err := fr.GetCurrentStates(ctx, irPaths)
+	tx, err := fr.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	currentStates, err := fr.getCurrentStatesInTx(ctx, tx, irPaths)
 	if err != nil {
 		return err
 	}
@@ -176,12 +178,6 @@ func (fr *FileRecords) MarkArchiveClosed(
 			return fmt.Errorf("cannot transition %s from %s to %s", p, cs, target)
 		}
 	}
-
-	tx, err := fr.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 
 	for _, p := range irPaths {
 		cs, ok := currentStates[p]
@@ -218,7 +214,13 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		return 0, nil
 	}
 
-	currentStates, err := fr.GetCurrentStates(ctx, irPaths)
+	tx, err := fr.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("update state: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	currentStates, err := fr.getCurrentStatesInTx(ctx, tx, irPaths)
 	if err != nil {
 		return 0, err
 	}
@@ -239,7 +241,7 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		if !ok {
 			continue
 		}
-		res, err := fr.db.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx,
 			"UPDATE "+dbutil.QuoteIdentifier(fr.tableName)+
 				" SET "+ColState+" = ? WHERE "+ColClpIRPathHash+" = UNHEX(MD5(?)) AND "+ColState+" = ?",
 			string(newState), p, string(cs),
@@ -247,11 +249,44 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		if err != nil {
 			return totalAffected, fmt.Errorf("update state: %w", err)
 		}
-		n, _ := res.RowsAffected() // error always nil for MySQL/MariaDB driver
+		n, _ := res.RowsAffected()
 		totalAffected += n
 	}
 
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("update state: commit: %w", err)
+	}
 	return totalAffected, nil
+}
+
+// getCurrentStatesInTx is like GetCurrentStates but executes within an existing transaction.
+func (fr *FileRecords) getCurrentStatesInTx(ctx context.Context, tx *sql.Tx, irPaths []string) (map[string]FileState, error) {
+	inClause := ColClpIRPathHash + " IN (" + joinRepeat("UNHEX(MD5(?))", len(irPaths), ",") + ")"
+	query := "SELECT " + ColClpIRPath + ", " + ColState +
+		" FROM " + dbutil.QuoteIdentifier(fr.tableName) +
+		" WHERE " + inClause
+
+	hashArgs := make([]any, len(irPaths))
+	for i, p := range irPaths {
+		hashArgs[i] = p
+	}
+
+	rows, err := tx.QueryContext(ctx, query, hashArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("get current states: %w", err)
+	}
+	defer rows.Close()
+
+	states := make(map[string]FileState)
+	for rows.Next() {
+		var path string
+		var state string
+		if err := rows.Scan(&path, &state); err != nil {
+			return nil, err
+		}
+		states[path] = FileState(state)
+	}
+	return states, rows.Err()
 }
 
 // DeleteExpiredFiles removes files past their expiration and returns their storage paths.

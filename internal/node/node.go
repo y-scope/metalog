@@ -100,6 +100,8 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		WorkerDB:        workerPool,
 		StorageRegistry: storageReg,
 		ArchiveCreator:  archiveCreator,
+		ArchiveBackend:  cfg.Node.Storage.DefaultBackend,
+		ArchiveBucket:   cfg.Node.Storage.ArchiveBucket,
 		IsMariaDB:       isMariaDB,
 		Log:             log,
 	}
@@ -442,17 +444,26 @@ func (n *Node) reconcile() {
 		assignedSet[t] = true
 	}
 
-	// Stop coordinators for tables no longer assigned to this node.
-	var toStop []string
+	// Collect coordinators to stop, then release the lock before stopping them.
+	// cu.Stop() blocks on wg.Wait() which can take seconds under load.
+	var toStopUnits []*CoordinatorUnit
+	var toStopNames []string
 	n.coordMu.Lock()
 	for name, cu := range n.coordinators {
 		if !assignedSet[name] {
 			n.log.Warn("assignment lost, stopping coordinator", zap.String("table", name))
-			cu.Stop()
-			toStop = append(toStop, name)
+			toStopUnits = append(toStopUnits, cu)
+			toStopNames = append(toStopNames, name)
 		}
 	}
-	for _, name := range toStop {
+	n.coordMu.Unlock()
+
+	for _, cu := range toStopUnits {
+		cu.Stop()
+	}
+
+	n.coordMu.Lock()
+	for _, name := range toStopNames {
 		delete(n.coordinators, name)
 	}
 	// Identify newly assigned tables that need coordinators.

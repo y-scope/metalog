@@ -1,67 +1,99 @@
 package query
 
 import (
+	"container/list"
 	"sync"
 	"time"
 )
 
-// Cache provides a simple TTL-based in-memory cache for query metadata.
+// Cache provides a TTL + LRU-capped in-memory cache for query metadata.
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string]*cacheEntry
+	mu      sync.Mutex
+	entries map[string]*list.Element
+	order   *list.List // front = most recently used
 	ttl     time.Duration
+	maxSize int
 }
 
 type cacheEntry struct {
+	key       string
 	value     any
 	expiresAt time.Time
 }
 
-// NewCache creates a Cache with the given TTL.
+// NewCache creates a Cache with the given TTL and a maximum of 10000 entries.
 func NewCache(ttl time.Duration) *Cache {
+	return NewCacheWithSize(ttl, 10000)
+}
+
+// NewCacheWithSize creates a Cache with the given TTL and max entry count.
+func NewCacheWithSize(ttl time.Duration, maxSize int) *Cache {
 	return &Cache{
-		entries: make(map[string]*cacheEntry),
+		entries: make(map[string]*list.Element),
+		order:   list.New(),
 		ttl:     ttl,
+		maxSize: maxSize,
 	}
 }
 
 // Get retrieves a cached value. Returns the value and true if found and not expired.
 func (c *Cache) Get(key string) (any, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	e, ok := c.entries[key]
-	if !ok || time.Now().After(e.expiresAt) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok {
 		return nil, false
 	}
+	e := el.Value.(*cacheEntry)
+	if time.Now().After(e.expiresAt) {
+		c.removeLocked(el)
+		return nil, false
+	}
+	c.order.MoveToFront(el)
 	return e.value, true
 }
 
 // Set stores a value in the cache with the default TTL.
 func (c *Cache) Set(key string, value any) {
 	c.mu.Lock()
-	c.entries[key] = &cacheEntry{
-		value:     value,
-		expiresAt: time.Now().Add(c.ttl),
+	defer c.mu.Unlock()
+
+	if el, ok := c.entries[key]; ok {
+		e := el.Value.(*cacheEntry)
+		e.value = value
+		e.expiresAt = time.Now().Add(c.ttl)
+		c.order.MoveToFront(el)
+		return
 	}
-	c.mu.Unlock()
+
+	// Evict LRU entries if at capacity.
+	for c.order.Len() >= c.maxSize {
+		c.removeLocked(c.order.Back())
+	}
+
+	e := &cacheEntry{key: key, value: value, expiresAt: time.Now().Add(c.ttl)}
+	el := c.order.PushFront(e)
+	c.entries[key] = el
 }
 
 // Delete removes a key from the cache.
 func (c *Cache) Delete(key string) {
 	c.mu.Lock()
-	delete(c.entries, key)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[key]; ok {
+		c.removeLocked(el)
+	}
 }
 
 // Clear removes all entries.
 func (c *Cache) Clear() {
 	c.mu.Lock()
-	c.entries = make(map[string]*cacheEntry)
+	c.entries = make(map[string]*list.Element)
+	c.order.Init()
 	c.mu.Unlock()
 }
 
 // GetOrCompute retrieves a cached value, or calls supplier to compute and cache it.
-// This is the primary method for caching expensive computations like filter parsing.
 func (c *Cache) GetOrCompute(key string, supplier func() (any, error)) (any, error) {
 	if val, ok := c.Get(key); ok {
 		return val, nil
@@ -76,19 +108,28 @@ func (c *Cache) GetOrCompute(key string, supplier func() (any, error)) (any, err
 
 // Len returns the number of entries (including expired ones not yet evicted).
 func (c *Cache) Len() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.entries)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.order.Len()
 }
 
-// EvictExpired removes expired entries. Call periodically if needed.
+// EvictExpired removes expired entries.
 func (c *Cache) EvictExpired() {
 	now := time.Now()
 	c.mu.Lock()
-	for k, e := range c.entries {
+	defer c.mu.Unlock()
+	for el := c.order.Back(); el != nil; {
+		prev := el.Prev()
+		e := el.Value.(*cacheEntry)
 		if now.After(e.expiresAt) {
-			delete(c.entries, k)
+			c.removeLocked(el)
 		}
+		el = prev
 	}
-	c.mu.Unlock()
+}
+
+func (c *Cache) removeLocked(el *list.Element) {
+	e := el.Value.(*cacheEntry)
+	delete(c.entries, e.key)
+	c.order.Remove(el)
 }

@@ -28,6 +28,8 @@ type Planner struct {
 	taskQueue       *taskqueue.Queue
 	fileRecs        *metastore.FileRecords
 	storageRegistry *storage.Registry
+	archiveBackend  string
+	archiveBucket   string
 	interval        time.Duration
 	log             *zap.Logger
 }
@@ -40,6 +42,8 @@ func NewPlanner(
 	inFlight *InFlightSet,
 	taskQueue *taskqueue.Queue,
 	storageRegistry *storage.Registry,
+	archiveBackend string,
+	archiveBucket string,
 	interval time.Duration,
 	log *zap.Logger,
 ) (*Planner, error) {
@@ -55,6 +59,8 @@ func NewPlanner(
 		taskQueue:       taskQueue,
 		fileRecs:        fr,
 		storageRegistry: storageRegistry,
+		archiveBackend:  archiveBackend,
+		archiveBucket:   archiveBucket,
 		interval:        interval,
 		log:             log.With(zap.String("table", tableName)),
 	}, nil
@@ -140,8 +146,10 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		}
 
 		payload := &taskqueue.TaskPayload{
-			TableName: p.tableName,
-			IRPaths:   irPaths,
+			TableName:      p.tableName,
+			IRPaths:        irPaths,
+			ArchiveBackend: p.archiveBackend,
+			ArchiveBucket:  p.archiveBucket,
 		}
 		for _, rec := range group {
 			payload.FileIDs = append(payload.FileIDs, rec.ID)
@@ -184,7 +192,14 @@ func (p *Planner) planOnce(ctx context.Context) error {
 }
 
 func (p *Planner) processCompletedTasks(ctx context.Context) error {
-	// Single query fetches both input and output — avoids N+1.
+	// Collect all completed tasks first, then close the cursor before processing.
+	// This avoids holding a DB connection open during potentially slow storage operations.
+	type completedTask struct {
+		taskID int64
+		input  []byte
+		output []byte
+	}
+
 	rows, err := p.db.QueryContext(ctx,
 		"SELECT task_id, input, output FROM "+taskqueue.TableName+
 			" WHERE table_name = ? AND state = 'completed' AND output IS NOT NULL LIMIT 100",
@@ -193,29 +208,38 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("process completed: query: %w", err)
 	}
-	defer rows.Close()
 
+	var tasks []completedTask
 	for rows.Next() {
-		var taskID int64
-		var input, output []byte
-		if err := rows.Scan(&taskID, &input, &output); err != nil {
+		var t completedTask
+		if err := rows.Scan(&t.taskID, &t.input, &t.output); err != nil {
+			rows.Close()
 			return fmt.Errorf("process completed: scan: %w", err)
 		}
+		tasks = append(tasks, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("process completed: rows: %w", err)
+	}
 
-		result, err := taskqueue.UnmarshalResult(output)
+	for _, t := range tasks {
+		result, err := taskqueue.UnmarshalResult(t.output)
 		if err != nil {
-			p.log.Error("unmarshal task result failed", zap.Int64("taskId", taskID), zap.Error(err))
+			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			continue
+		}
+
+		payload, err := taskqueue.UnmarshalPayload(t.input)
+		if err != nil {
+			p.log.Error("unmarshal task payload failed", zap.Int64("taskId", t.taskID), zap.Error(err))
 			continue
 		}
 
 		if result.Error != "" {
-			p.log.Warn("task completed with error", zap.Int64("taskId", taskID), zap.String("error", result.Error))
-			continue
-		}
-
-		payload, err := taskqueue.UnmarshalPayload(input)
-		if err != nil {
-			p.log.Error("unmarshal task payload failed", zap.Int64("taskId", taskID), zap.Error(err))
+			p.log.Warn("task completed with error", zap.Int64("taskId", t.taskID), zap.String("error", result.Error))
+			p.inFlight.Remove(payload.IRPaths)
+			p.markTaskProcessed(ctx, t.taskID)
 			continue
 		}
 
@@ -229,19 +253,29 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 			timeutil.EpochNanos(),
 		)
 		if err != nil {
-			p.log.Error("mark archive closed failed", zap.Int64("taskId", taskID), zap.Error(err))
+			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.taskID), zap.Error(err))
 		}
 
 		// Delete source IR files from storage (best-effort)
 		p.deleteIRFiles(ctx, payload)
 
-		// Remove from in-flight set
+		// Remove from in-flight set and mark task processed
 		p.inFlight.Remove(payload.IRPaths)
+		p.markTaskProcessed(ctx, t.taskID)
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("process completed: rows: %w", err)
-	}
+
 	return nil
+}
+
+// markTaskProcessed deletes a completed task after the planner has fully processed it.
+func (p *Planner) markTaskProcessed(ctx context.Context, taskID int64) {
+	_, err := p.db.ExecContext(ctx,
+		"DELETE FROM "+taskqueue.TableName+" WHERE task_id = ? AND state = 'completed'",
+		taskID,
+	)
+	if err != nil {
+		p.log.Warn("delete processed task failed", zap.Int64("taskId", taskID), zap.Error(err))
+	}
 }
 
 // deleteIRFiles removes source IR files from storage after successful archiving.

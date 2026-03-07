@@ -30,6 +30,7 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 
 	planner, err := consolidation.NewPlanner(
 		mc.DB, plannerTable, policy, inFlight, taskQueue,
+		nil, "", "",
 		1*time.Second, log,
 	)
 	if err != nil {
@@ -97,6 +98,7 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 
 	planner, err := consolidation.NewPlanner(
 		mc.DB, plannerTable, policy, inFlight, taskQueue,
+		nil, "", "",
 		1*time.Second, log,
 	)
 	if err != nil {
