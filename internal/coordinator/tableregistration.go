@@ -66,9 +66,7 @@ func (s *TableRegistration) RegisterTable(
 	kafkaQuery, kafkaArgs, _ := sq.Insert(metastore.TableRegistryKafka).
 		Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
 		Values(tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer).
-		Suffix("ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), " +
-			"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
-			"record_transformer = VALUES(record_transformer)").
+		Suffix(db.OnDuplicateKeyUpdateValues("kafka_topic", "kafka_bootstrap_servers", "record_transformer")).
 		ToSql()
 	if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
 		return false, err

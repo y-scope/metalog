@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
+	db "github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/metastore"
 	schemadef "github.com/y-scope/metalog/schema"
 )
@@ -157,16 +158,11 @@ func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.
 			kafkaInsert := sq.Insert(metastore.TableRegistryKafka).
 				Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
 				Values(t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer)
+			kafkaCols := []string{"kafka_topic", "kafka_bootstrap_servers", "record_transformer"}
 			if r.isMariaDB {
-				kafkaInsert = kafkaInsert.Suffix(
-					"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), " +
-						"kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers), " +
-						"record_transformer = VALUES(record_transformer)")
+				kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateValues(kafkaCols...))
 			} else {
-				kafkaInsert = kafkaInsert.Suffix(
-					"AS new ON DUPLICATE KEY UPDATE kafka_topic = new.kafka_topic, " +
-						"kafka_bootstrap_servers = new.kafka_bootstrap_servers, " +
-						"record_transformer = new.record_transformer")
+				kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateAlias("new", kafkaCols...))
 			}
 			kQuery, kArgs, _ := kafkaInsert.ToSql()
 			if _, err := r.db.ExecContext(ctx, kQuery, kArgs...); err != nil {
