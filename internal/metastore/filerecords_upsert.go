@@ -19,7 +19,7 @@ const rowAlias = "new"
 // Each guarded column uses: col = IF(guard, <new_value>, col)
 // max_timestamp MUST be the last assignment because the guard references it.
 //
-// When isMariaDB is true, uses VALUES(col) syntax (fully supported in MariaDB).
+// When useValuesFunc is true, uses VALUES(col) syntax (fully supported in MariaDB).
 // Otherwise uses the MySQL 8.0.20+ alias form: INSERT ... AS new ... new.col.
 //
 // Returns the SQL string, an empty args slice (caller fills in), and the
@@ -30,9 +30,8 @@ func BuildGuardedUpsertSQL(
 	aggCols []string,
 	floatAggCols map[string]bool,
 	rowCount int,
-	isMariaDB ...bool,
+	useValuesFunc bool,
 ) (string, []any, int) {
-	useValuesFunc := len(isMariaDB) > 0 && isMariaDB[0]
 
 	allCols := make([]string, 0, len(BaseCols)+len(dimCols)+len(aggCols))
 	allCols = append(allCols, BaseCols...)

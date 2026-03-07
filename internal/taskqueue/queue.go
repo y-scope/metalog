@@ -184,15 +184,16 @@ func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 		return 0, fmt.Errorf("fail task: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, fmt.Errorf("fail task %d: no matching task in processing state", taskID)
+	}
 
-	if n > 0 {
-		// Check if it ended up in dead_letter for logging purposes.
-		var state string
-		if scanErr := q.db.QueryRowContext(ctx,
-			"SELECT state FROM "+TableName+" WHERE task_id = ?", taskID,
-		).Scan(&state); scanErr == nil && state == "dead_letter" {
-			q.log.Warn("task moved to dead letter on failure", zap.Int64("taskId", taskID))
-		}
+	// Check if it ended up in dead_letter for logging purposes.
+	var state string
+	if scanErr := q.db.QueryRowContext(ctx,
+		"SELECT state FROM "+TableName+" WHERE task_id = ?", taskID,
+	).Scan(&state); scanErr == nil && state == "dead_letter" {
+		q.log.Warn("task moved to dead letter on failure", zap.Int64("taskId", taskID))
 	}
 
 	return n, nil

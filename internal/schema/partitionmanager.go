@@ -37,7 +37,7 @@ func NewPartitionManager(db *sql.DB, tableName string, lookaheadDays, cleanupAge
 }
 
 // RunMaintenance acquires an advisory lock and runs partition maintenance.
-// Non-blocking: returns immediately if another node holds the lock.
+// Returns immediately without waiting if another node holds the lock.
 func (pm *PartitionManager) RunMaintenance(ctx context.Context) error {
 	lockName := "pm_" + pm.tableName
 	lock, err := metastore.AcquireAdvisoryLock(ctx, pm.db, lockName, 0)

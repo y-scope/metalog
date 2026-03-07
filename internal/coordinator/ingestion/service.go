@@ -58,8 +58,8 @@ func (s *Service) Ingest(ctx context.Context, tableName string, record *pb.Metad
 }
 
 // IngestWithCallback validates and submits a single record. If flushed is
-// non-nil, it receives nil on successful DB write or an error on failure.
-// The channel must be buffered (cap >= 1).
+// non-nil, the channel receives nil on successful DB write or a non-nil error
+// on failure. The flushed channel must be buffered (cap >= 1).
 func (s *Service) IngestWithCallback(ctx context.Context, tableName string, record *pb.MetadataRecord, flushed chan error) error {
 	if tableName == "" {
 		return fmt.Errorf("table_name is required")
@@ -131,8 +131,11 @@ func (s *Service) resolveDims(ctx context.Context, dims []*pb.DimEntry, rec *met
 
 // validateRecord checks that a MetadataRecord has all required fields and valid values.
 func validateRecord(record *pb.MetadataRecord) error {
-	if record == nil || record.File == nil {
-		return fmt.Errorf("record with file fields is required")
+	if record == nil {
+		return fmt.Errorf("record is required")
+	}
+	if record.File == nil {
+		return fmt.Errorf("record.File is required")
 	}
 	f := record.File
 	if f.State == "" {

@@ -19,10 +19,10 @@ var systemColumns = []string{
 }
 
 const (
-	prefixFile = "__FILE."
-	prefixDim  = "__DIM."
-	prefixAgg  = "__AGG."
-	prefixAggT = "__AGG_" // __AGG_EQ., __AGG_GTE., etc.
+	prefixFile     = "__FILE."
+	prefixDim      = "__DIM."
+	prefixAgg      = "__AGG."
+	prefixAggTyped = "__AGG_" // __AGG_EQ., __AGG_GTE., etc.
 )
 
 // fileColumns are the physical columns exposed via __FILE.<col>.
@@ -141,7 +141,7 @@ func ResolveProjectionColumns(requested []string, registry *schema.ColumnRegistr
 				add(e.ColumnName)
 			}
 
-		case strings.HasPrefix(col, prefixAggT):
+		case strings.HasPrefix(col, prefixAggTyped):
 			resolved, err := resolveAggPattern(col, registry)
 			if err != nil {
 				return nil, err
@@ -242,7 +242,7 @@ func ResolveColumnRef(col string, registry *schema.ColumnRegistry) (string, erro
 		}
 		return phys, nil
 
-	case strings.HasPrefix(col, prefixAggT):
+	case strings.HasPrefix(col, prefixAggTyped):
 		resolved, err := resolveAggPattern(col, registry)
 		if err != nil {
 			return "", err
@@ -298,7 +298,7 @@ func rewriteExpr(node sqlparser.Expr, registry *schema.ColumnRegistry) (sqlparse
 	switch n := node.(type) {
 	case *sqlparser.ColName:
 		name := colNameToString(n)
-		if !hasMagicPrefix(name) {
+		if !hasVirtualColumnPrefix(name) {
 			return n, nil
 		}
 		resolved, err := ResolveColumnRef(name, registry)
@@ -391,11 +391,11 @@ func rewriteExpr(node sqlparser.Expr, registry *schema.ColumnRegistry) (sqlparse
 //
 //	Qualifier.Qualifier="__AGG_EQ", Qualifier.Name="key", Name="value"
 //
-// We reconstruct all parts to preserve the full reference.
+// All parts are reconstructed to preserve the full reference.
 func colNameToString(col *sqlparser.ColName) string {
 	var parts []string
-	if schema := col.Qualifier.Qualifier.String(); schema != "" {
-		parts = append(parts, schema)
+	if qualifier := col.Qualifier.Qualifier.String(); qualifier != "" {
+		parts = append(parts, qualifier)
 	}
 	if table := col.Qualifier.Name.String(); table != "" {
 		parts = append(parts, table)
@@ -425,8 +425,8 @@ func isPhysicalColumn(name string) bool {
 	return true
 }
 
-// hasMagicPrefix checks if a column name uses one of the __FILE/__DIM/__AGG prefixes.
-func hasMagicPrefix(name string) bool {
+// hasVirtualColumnPrefix reports whether name uses a virtual column prefix (__FILE, __DIM, __AGG).
+func hasVirtualColumnPrefix(name string) bool {
 	return strings.HasPrefix(name, "__FILE.") ||
 		strings.HasPrefix(name, "__DIM.") ||
 		strings.HasPrefix(name, "__AGG.") ||

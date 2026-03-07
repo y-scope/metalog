@@ -18,6 +18,9 @@ const MaxMultiRowInsert = 1000
 // MaxConsolidationBatch limits the number of pending files returned per query.
 const MaxConsolidationBatch = 10000
 
+// MaxExpirationBatch limits rows fetched per expiration cycle.
+const MaxExpirationBatch = 1000
+
 // FileRecords is the repository for metadata table operations.
 type FileRecords struct {
 	db        *sql.DB
@@ -55,10 +58,10 @@ func (fr *FileRecords) UpsertBatch(
 		}
 		batch := records[start:end]
 
-		query, args, _ := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch))
+		query, _, paramsPerRow := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch), false)
 
 		// Fill args for each row
-		allArgs := make([]any, 0, len(args))
+		allArgs := make([]any, 0, len(batch)*paramsPerRow)
 		for _, rec := range batch {
 			allArgs = append(allArgs, baseColValues(rec)...)
 			for _, dc := range dimCols {
@@ -305,7 +308,7 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 			" FROM "+dbutil.QuoteIdentifier(fr.tableName)+
 			" WHERE "+ColExpiresAt+" > 0 AND "+ColExpiresAt+" < ?"+
 			" AND "+ColState+" IN ('"+string(StateIRPurging)+"','"+string(StateArchivePurging)+"')"+
-			" LIMIT 1000",
+			fmt.Sprintf(" LIMIT %d", MaxExpirationBatch),
 		currentNanos,
 	)
 	if err != nil {
@@ -492,9 +495,9 @@ func joinRepeat(s string, n int, sep string) string {
 	if n <= 0 {
 		return ""
 	}
-	result := s
-	for i := 1; i < n; i++ {
-		result += sep + s
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = s
 	}
-	return result
+	return strings.Join(parts, sep)
 }

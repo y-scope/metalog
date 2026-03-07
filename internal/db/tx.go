@@ -35,7 +35,7 @@ func WithTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions, fn func(tx *sq
 }
 
 // WithDeadlockRetry wraps fn in a retry loop that retries on MySQL deadlocks.
-// Uses random jitter between minBackoff and maxBackoff on each retry.
+// Uses random jitter in [DefaultDeadlockMinBackoff, DefaultDeadlockMaxBackoff] on each retry.
 func WithDeadlockRetry(ctx context.Context, maxRetries int, fn func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := fn()

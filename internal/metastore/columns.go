@@ -72,7 +72,7 @@ const (
 	TableRegistryKafka      = "_table_kafka"
 	TableRegistryConfig     = "_table_config"
 	TableRegistryAssignment = "_table_assignment"
-	NodeRegistry            = "_node_registry"
+	NodeRegistryTable       = "_node_registry"
 	DimRegistryTable        = "_dim_registry"
 	AggRegistryTable        = "_agg_registry"
 	SketchRegistryTable     = "_sketch_registry"

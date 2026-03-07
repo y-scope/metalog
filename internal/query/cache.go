@@ -93,12 +93,12 @@ func (c *Cache) Clear() {
 	c.mu.Unlock()
 }
 
-// GetOrCompute retrieves a cached value, or calls supplier to compute and cache it.
-func (c *Cache) GetOrCompute(key string, supplier func() (any, error)) (any, error) {
+// GetOrCompute retrieves a cached value, or calls compute to compute and cache it.
+func (c *Cache) GetOrCompute(key string, compute func() (any, error)) (any, error) {
 	if val, ok := c.Get(key); ok {
 		return val, nil
 	}
-	val, err := supplier()
+	val, err := compute()
 	if err != nil {
 		return nil, err
 	}

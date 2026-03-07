@@ -42,6 +42,12 @@ type AggRegistryEntry struct {
 
 // ColumnRegistry maps physical placeholder columns (dim_fNN, agg_fNN) to field metadata.
 // Thread-safe: RWMutex guards map reads/writes; a separate Mutex serializes slot allocation.
+//
+// SQL safety: DDL and DML in this type use fmt.Sprintf with interpolated identifiers.
+// This is safe because all table/column names are validated via [db.ValidateSQLIdentifier]
+// (restricted to ^[a-z_][a-z0-9_]{0,63}$) and quoted via [db.QuoteIdentifier] before
+// interpolation. SQL types come from internal [dimSQLType] / hardcoded strings, never
+// from user input.
 type ColumnRegistry struct {
 	db        *sql.DB
 	tableName string
@@ -93,7 +99,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	// Load dims
 	rows, err := cr.db.QueryContext(ctx,
 		"SELECT column_name, base_type, width, dim_key, alias_column FROM "+metastore.DimRegistryTable+
-			" WHERE table_name = ? AND state = 'ACTIVE'", cr.tableName)
+			" WHERE table_name = ? AND state = '"+statusActive+"'", cr.tableName)
 	if err != nil {
 		return fmt.Errorf("load dim registry: %w", err)
 	}
@@ -126,7 +132,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 	// Load aggs
 	rows2, err := cr.db.QueryContext(ctx,
 		"SELECT column_name, agg_key, agg_value, aggregation_type, value_type, alias_column FROM "+metastore.AggRegistryTable+
-			" WHERE table_name = ? AND state = 'ACTIVE'", cr.tableName)
+			" WHERE table_name = ? AND state = '"+statusActive+"'", cr.tableName)
 	if err != nil {
 		return fmt.Errorf("load agg registry: %w", err)
 	}
@@ -278,7 +284,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	// INSERT into registry (safe now — the physical column exists)
 	_, err = cr.db.ExecContext(ctx,
 		"INSERT INTO "+metastore.DimRegistryTable+
-			" (table_name, column_name, base_type, width, dim_key, state) VALUES (?, ?, ?, ?, ?, 'ACTIVE')",
+			" (table_name, column_name, base_type, width, dim_key, state) VALUES (?, ?, ?, ?, ?, '"+statusActive+"')",
 		cr.tableName, colName, baseType, width, dimKey,
 	)
 	if err != nil {
@@ -347,7 +353,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	// INSERT into registry (safe now — the physical column exists)
 	_, err = cr.db.ExecContext(ctx,
 		"INSERT INTO "+metastore.AggRegistryTable+
-			" (table_name, column_name, agg_key, agg_value, aggregation_type, value_type, state) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE')",
+			" (table_name, column_name, agg_key, agg_value, aggregation_type, value_type, state) VALUES (?, ?, ?, ?, ?, ?, '"+statusActive+"')",
 		cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType,
 	)
 	if err != nil {
@@ -431,9 +437,9 @@ func (cr *ColumnRegistry) FloatAggColumns() map[string]bool {
 	return result
 }
 
-// ColumnRegistryReader provides read-only access to column registry data.
+// RegistrySnapshot is an immutable point-in-time copy of a ColumnRegistry.
 // Used by the query path to avoid lock contention with the ingestion path.
-type ColumnRegistryReader struct {
+type RegistrySnapshot struct {
 	dimByKey    map[string]*DimRegistryEntry
 	dimByColumn map[string]*DimRegistryEntry
 	aggByKey    map[string]*AggRegistryEntry
@@ -442,11 +448,11 @@ type ColumnRegistryReader struct {
 
 // Snapshot creates a read-only snapshot of the current registry state.
 // The snapshot is safe to use concurrently without locks.
-func (cr *ColumnRegistry) Snapshot() *ColumnRegistryReader {
+func (cr *ColumnRegistry) Snapshot() *RegistrySnapshot {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
 
-	snap := &ColumnRegistryReader{
+	snap := &RegistrySnapshot{
 		dimByKey:    make(map[string]*DimRegistryEntry, len(cr.dimByKey)),
 		dimByColumn: make(map[string]*DimRegistryEntry, len(cr.dimByColumn)),
 		aggByKey:    make(map[string]*AggRegistryEntry, len(cr.aggByKey)),
@@ -482,7 +488,7 @@ func (cr *ColumnRegistry) Snapshot() *ColumnRegistryReader {
 }
 
 // ResolveDim returns the column name for a dimension key, or empty string if not found.
-func (r *ColumnRegistryReader) ResolveDim(dimKey string) string {
+func (r *RegistrySnapshot) ResolveDim(dimKey string) string {
 	if e, ok := r.dimByKey[dimKey]; ok {
 		return e.ColumnName
 	}
@@ -490,7 +496,7 @@ func (r *ColumnRegistryReader) ResolveDim(dimKey string) string {
 }
 
 // ResolveAgg returns the column name for an aggregation, or empty string if not found.
-func (r *ColumnRegistryReader) ResolveAgg(aggKey, aggValue, aggType string) string {
+func (r *RegistrySnapshot) ResolveAgg(aggKey, aggValue, aggType string) string {
 	key := aggCacheKey(aggKey, aggValue, aggType)
 	if e, ok := r.aggByKey[key]; ok {
 		return e.ColumnName
@@ -499,7 +505,7 @@ func (r *ColumnRegistryReader) ResolveAgg(aggKey, aggValue, aggType string) stri
 }
 
 // AllDimEntries returns all dim entries in the snapshot.
-func (r *ColumnRegistryReader) AllDimEntries() []*DimRegistryEntry {
+func (r *RegistrySnapshot) AllDimEntries() []*DimRegistryEntry {
 	entries := make([]*DimRegistryEntry, 0, len(r.dimByKey))
 	for _, e := range r.dimByKey {
 		entries = append(entries, e)
@@ -508,7 +514,7 @@ func (r *ColumnRegistryReader) AllDimEntries() []*DimRegistryEntry {
 }
 
 // AllAggEntries returns all agg entries in the snapshot.
-func (r *ColumnRegistryReader) AllAggEntries() []*AggRegistryEntry {
+func (r *RegistrySnapshot) AllAggEntries() []*AggRegistryEntry {
 	entries := make([]*AggRegistryEntry, 0, len(r.aggByKey))
 	for _, e := range r.aggByKey {
 		entries = append(entries, e)

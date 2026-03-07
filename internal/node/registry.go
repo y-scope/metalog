@@ -101,12 +101,13 @@ func splitSQLStatements(sqlText string) []string {
 func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 	requiredTables := []string{
 		metastore.TableRegistry,
+		metastore.TableRegistryKafka,
 		metastore.TableRegistryAssignment,
 		metastore.TableRegistryConfig,
 		metastore.DimRegistryTable,
 		metastore.AggRegistryTable,
 		metastore.SketchRegistryTable,
-		metastore.NodeRegistry,
+		metastore.NodeRegistryTable,
 	}
 	for _, tbl := range requiredTables {
 		var count int
@@ -268,7 +269,7 @@ func (r *CoordinatorRegistry) ReleaseAllTables(ctx context.Context) error {
 // INSERT ... ON DUPLICATE KEY UPDATE is MySQL-specific and not supported by squirrel.
 func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO "+metastore.NodeRegistry+" (node_id, last_heartbeat_at) VALUES (?, UNIX_TIMESTAMP()) "+
+		"INSERT INTO "+metastore.NodeRegistryTable+" (node_id, last_heartbeat_at) VALUES (?, UNIX_TIMESTAMP()) "+
 			"ON DUPLICATE KEY UPDATE last_heartbeat_at = UNIX_TIMESTAMP()",
 		r.nodeID,
 	)
@@ -281,7 +282,7 @@ func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThr
 	// Find orphans: owner is dead (stale heartbeat) or never registered (LEFT JOIN NULL)
 	query := "SELECT a.table_name, a.node_id FROM " + metastore.TableRegistryAssignment + " a " +
 		"JOIN " + metastore.TableRegistry + " t ON a.table_name = t.table_name " +
-		"LEFT JOIN " + metastore.NodeRegistry + " n ON a.node_id = n.node_id " +
+		"LEFT JOIN " + metastore.NodeRegistryTable + " n ON a.node_id = n.node_id " +
 		"WHERE t.active = true AND a.node_id IS NOT NULL AND a.node_id != ? " +
 		"AND (n.node_id IS NULL OR n.last_heartbeat_at < UNIX_TIMESTAMP() - ?)"
 
@@ -380,7 +381,7 @@ func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTLSeconds i
 func (r *CoordinatorRegistry) CountActiveNodes(ctx context.Context, deadThresholdSeconds int) (int, error) {
 	var count int
 	err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+metastore.NodeRegistry+
+		"SELECT COUNT(*) FROM "+metastore.NodeRegistryTable+
 			" WHERE last_heartbeat_at >= UNIX_TIMESTAMP() - ?",
 		deadThresholdSeconds,
 	).Scan(&count)

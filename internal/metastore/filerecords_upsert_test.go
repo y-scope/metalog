@@ -10,7 +10,7 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 	aggCols := []string{"agg_f01"}
 	floatAggCols := map[string]bool{}
 
-	sql, _, paramsPerRow := BuildGuardedUpsertSQL("test_table", dimCols, aggCols, floatAggCols, 2)
+	sql, _, paramsPerRow := BuildGuardedUpsertSQL("test_table", dimCols, aggCols, floatAggCols, 2, false)
 
 	// Check INSERT INTO
 	if !strings.HasPrefix(sql, "INSERT INTO `test_table` (") {
@@ -60,7 +60,7 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 }
 
 func TestBuildGuardedUpsertSQLNoDynamic(t *testing.T) {
-	sql, _, paramsPerRow := BuildGuardedUpsertSQL("my_table", nil, nil, nil, 1)
+	sql, _, paramsPerRow := BuildGuardedUpsertSQL("my_table", nil, nil, nil, 1, false)
 
 	if !strings.Contains(sql, "INSERT INTO `my_table`") {
 		t.Error("wrong table name")

@@ -14,16 +14,15 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
-const (
-	sketchSlotCount         = 32
-	partitionLookaheadDays  = 7
-	partitionCleanupAgeDays = 180
-)
+const sketchSlotCount = 32
 
 // EnsureTable idempotently provisions a metadata table and all registry rows.
 // Steps: create physical table, insert registry rows, pre-populate sketch slots,
 // create lookahead partitions.
 // compressionOverride can be "lz4", "none", or "" (auto-detect from isMariaDB).
+//
+// SQL safety: tableName is validated via [db.ValidateSQLIdentifier] before any interpolation.
+// Compression values come from a closed switch statement, not user input.
 func EnsureTable(ctx context.Context, database *sql.DB, tableName string, isMariaDB bool, compressionOverride string, log *zap.Logger) error {
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
 		return err
@@ -143,8 +142,8 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 }
 
 func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
-	for i := 1; i <= sketchSlotCount; i++ {
-		member := fmt.Sprintf("s%02d", i)
+	for i := 0; i < sketchSlotCount; i++ {
+		member := fmt.Sprintf("b%02d", i)
 		_, err := database.ExecContext(ctx,
 			"INSERT IGNORE INTO "+metastore.SketchRegistryTable+
 				" (table_name, sketch_name, state) VALUES (?, ?, 'AVAILABLE')",

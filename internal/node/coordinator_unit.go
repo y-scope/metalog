@@ -17,6 +17,9 @@ import (
 	kafkaconsumer "github.com/y-scope/metalog/kafka"
 )
 
+// partitionMaintenanceInterval is how often partition lookahead/cleanup runs.
+const partitionMaintenanceInterval = time.Hour
+
 // CoordinatorUnit manages coordinator goroutines for a single table.
 type CoordinatorUnit struct {
 	tableName     string
@@ -165,7 +168,7 @@ func (u *CoordinatorUnit) runPartitionMaintenance() {
 		u.log.Warn("initial partition maintenance failed", zap.Error(err))
 	}
 
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(partitionMaintenanceInterval)
 	defer ticker.Stop()
 
 	for {

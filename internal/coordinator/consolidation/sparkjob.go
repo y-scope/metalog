@@ -20,6 +20,9 @@ func init() {
 	})
 }
 
+// ungroupedKey is the sentinel key for records missing the grouping dimension.
+const ungroupedKey = "\x00ungrouped"
+
 // SparkJobPolicy groups files by a dimension value (e.g., application_id)
 // to consolidate all IR files belonging to the same job together.
 type SparkJobPolicy struct {
@@ -64,7 +67,7 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*me
 			}
 		}
 		if key == "" {
-			key = "_ungrouped"
+			key = ungroupedKey
 		}
 		groups[key] = append(groups[key], rec)
 	}

@@ -22,7 +22,11 @@ func NewEvolver(db *sql.DB, log *zap.Logger) *Evolver {
 }
 
 // AddColumn adds a new column to the table using online DDL (ALGORITHM=INPLACE, LOCK=NONE).
-func (se *Evolver) AddColumn(ctx context.Context, tableName, colName, sqlType string) error {
+//
+// SQL safety: tableName and colName are validated via [db.ValidateSQLIdentifier] and quoted
+// via [db.QuoteIdentifier] before interpolation. sqlType must come from internal callers
+// (e.g., [dimSQLType]), never from user input.
+func (e *Evolver) AddColumn(ctx context.Context, tableName, colName, sqlType string) error {
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
 		return err
 	}
@@ -33,12 +37,12 @@ func (se *Evolver) AddColumn(ctx context.Context, tableName, colName, sqlType st
 	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=NONE",
 		db.QuoteIdentifier(tableName), db.QuoteIdentifier(colName), sqlType)
 
-	_, err := se.db.ExecContext(ctx, ddl)
+	_, err := e.db.ExecContext(ctx, ddl)
 	if err != nil {
 		return fmt.Errorf("add column %s.%s: %w", tableName, colName, err)
 	}
 
-	se.log.Info("added column via online DDL",
+	e.log.Info("added column via online DDL",
 		zap.String("table", tableName),
 		zap.String("column", colName),
 		zap.String("type", sqlType),

@@ -141,6 +141,10 @@ func (p *Planner) planOnce(ctx context.Context) error {
 			}
 		}
 
+		if len(irPaths) == 0 {
+			continue
+		}
+
 		if !p.inFlight.TryAdd(irPaths) {
 			continue
 		}

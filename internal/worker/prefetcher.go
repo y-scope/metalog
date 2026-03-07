@@ -66,11 +66,9 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 
 		if len(claimed) == 0 {
 			sleep(ctx, backoff)
-			if backoff < config.DefaultWorkerBackoffMax {
-				backoff = backoff * 2
-				if backoff > config.DefaultWorkerBackoffMax {
-					backoff = config.DefaultWorkerBackoffMax
-				}
+			backoff *= 2
+			if backoff > config.DefaultWorkerBackoffMax {
+				backoff = config.DefaultWorkerBackoffMax
 			}
 			continue
 		}

@@ -15,8 +15,8 @@ func init() {
 // AuditPolicy groups files by exact day boundaries for compliance-oriented
 // consolidation. Files are never merged across day boundaries.
 type AuditPolicy struct {
-	// MinFilesPerDay is the minimum number of files to form a group for a given day.
-	MinFilesPerDay int
+	// MinFilesPerGroup is the minimum number of files to form a group for a given day.
+	MinFilesPerGroup int
 	// MaxFilesPerGroup is the maximum number of files per consolidation task.
 	MaxFilesPerGroup int
 }
@@ -27,7 +27,7 @@ func NewAuditPolicy(minFiles, maxFiles int) *AuditPolicy {
 		maxFiles = 100
 	}
 	return &AuditPolicy{
-		MinFilesPerDay:   minFiles,
+		MinFilesPerGroup: minFiles,
 		MaxFilesPerGroup: maxFiles,
 	}
 }
@@ -47,7 +47,7 @@ func (p *AuditPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metas
 
 	var result [][]*metastore.FileRecord
 	for _, group := range groups {
-		if len(group) < p.MinFilesPerDay {
+		if len(group) < p.MinFilesPerGroup {
 			continue
 		}
 
@@ -57,7 +57,7 @@ func (p *AuditPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metas
 				end = len(group)
 			}
 			chunk := group[i:end]
-			if len(chunk) >= p.MinFilesPerDay {
+			if len(chunk) >= p.MinFilesPerGroup {
 				result = append(result, chunk)
 			}
 		}

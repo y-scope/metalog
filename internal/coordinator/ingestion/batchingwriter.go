@@ -14,6 +14,9 @@ import (
 	"github.com/y-scope/metalog/internal/schema"
 )
 
+// shutdownFlushTimeout is the deadline for the final flush when shutting down.
+const shutdownFlushTimeout = 5 * time.Second
+
 // tableWriter is a goroutine that batches and flushes records for a single table.
 type tableWriter struct {
 	tableName string
@@ -156,7 +159,7 @@ func (tw *tableWriter) run(ctx context.Context) {
 					batch = append(batch, rec)
 				default:
 					// Flush what we can with a short deadline.
-					flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					flushCtx, flushCancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
 					tw.flushBatch(flushCtx, batch)
 					flushCancel()
 					batch = batch[:0]
