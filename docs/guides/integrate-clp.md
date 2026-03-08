@@ -236,8 +236,7 @@ minio:
 MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
-MINIO_IR_BUCKET=logs
-MINIO_ARCHIVE_BUCKET=logs
+MINIO_BUCKET=logs
 ```
 
 ### S3 Client Configuration
@@ -257,8 +256,7 @@ Up to 16 IR file downloads run in parallel (semaphore-gated via a buffered chann
 
 | Bucket | Purpose |
 |--------|---------|
-| `logs` (default) | IR files (input) — configured via `MINIO_IR_BUCKET` |
-| `logs` (default) | Archives (output) — configured via `MINIO_ARCHIVE_BUCKET` |
+| `logs` (default) | IR files and archives — configured via `storage.backends.<name>.bucket` |
 
 Access MinIO console at http://localhost:9001 (minioadmin/minioadmin)
 

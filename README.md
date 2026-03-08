@@ -65,13 +65,10 @@ Prerequisites: Docker, Go 1.25+
 ./docker/start.sh -d
 
 # Build
-go build ./cmd/metalog-server
+go build ./cmd/metalog
 
 # Run the node (coordinator + workers in one process)
-./metalog-server
-
-# Or specify a config file
-./metalog-server --config config/node.yaml
+./metalog serve --config config/node.yaml
 ```
 
 See [Quickstart](docs/getting-started/quickstart.md) for detailed setup, validation, and an end-to-end tutorial.
@@ -216,9 +213,7 @@ go test -tags=integration ./internal/...
 
 ```
 cmd/
-  metalog-server/     Unified entry point (coordinator + workers + gRPC)
-  metalog-worker/     Standalone worker binary
-  metalog-apiserver/  Standalone query API server
+  metalog/            Unified entry point (coordinator + workers + gRPC + query API)
 internal/
   config/             YAML config, env vars, defaults
   db/                 Database pool, dialect detection, tx helpers, SQL identifiers

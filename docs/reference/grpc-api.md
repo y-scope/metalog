@@ -635,6 +635,36 @@ grpcurl -plaintext -d '{
 | `INVALID_ARGUMENT` | `table_name` blank, `kafka` absent, `kafka.topic` blank, `kafka.bootstrap_servers` blank |
 | `INTERNAL` | Database error |
 
+### CLI: `metalog admin register-table`
+
+A convenience wrapper that calls `AdminService.RegisterTable` via gRPC.
+
+```bash
+metalog admin register-table [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--addr` | `localhost:9090` | gRPC server address |
+| `--table` | _(required)_ | Table name |
+| `--display-name` | | Human-readable display name |
+| `--kafka-topic` | | Kafka topic for ingestion |
+| `--kafka-bootstrap-servers` | | Kafka bootstrap servers |
+| `--transformer` | | Record transformer name (empty = default) |
+| `--kafka-poller-enabled` | | Enable Kafka consumer (`true`/`false`, omit for DB default) |
+| `--consolidation-enabled` | | Enable consolidation planner (`true`/`false`, omit for DB default) |
+
+**Example:**
+
+```bash
+metalog admin register-table \
+  --addr coordinator:9090 \
+  --table clp_spark \
+  --display-name "Spark Logs" \
+  --kafka-topic spark-ir \
+  --kafka-bootstrap-servers kafka:29092
+```
+
 ---
 
 ## Error Codes

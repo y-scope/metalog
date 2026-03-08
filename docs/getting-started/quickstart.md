@@ -30,10 +30,10 @@ All services should report healthy status.
 ### 2. Build the Service
 
 ```bash
-go build ./cmd/metalog-server
+go build ./cmd/metalog
 ```
 
-Produces a `metalog-server` binary in the current directory.
+Produces a `metalog` binary in the current directory.
 
 ### 3. Run the Node (Coordinator + Workers)
 
@@ -41,10 +41,10 @@ Produces a `metalog-server` binary in the current directory.
 
 ```bash
 # Run with default config path (/etc/clp/node.yaml)
-./metalog-server
+./metalog serve
 
 # Or specify a config file
-./metalog-server --config config/node.yaml
+./metalog serve --config config/node.yaml
 ```
 
 Expected output (zap structured logging):
@@ -56,18 +56,35 @@ Expected output (zap structured logging):
 {"level":"info","msg":"node started","coordinators":1,"workers":4}
 ```
 
-### 4. Run the API Server (Optional)
+### 4. Run as API Server Only (Optional)
 
-The API server provides read-only gRPC access to metadata (query + catalog).
+For a read-only query API node, configure only `database.replica` and enable `grpc`:
 
 ```bash
-./metalog-apiserver --config config/coordinator-node.yaml
+./metalog serve --config config/apiserver.yaml
 ```
+
+Where `apiserver.yaml` sets `database.replica` (no primary) and enables `grpc.query: true` / `grpc.metadata: true`. See [Deployment](../operations/deployment.md) for details.
+
+### 5. Register a Table via CLI (Optional)
+
+Tables declared in the `tables:` YAML section are registered automatically on startup. You can also register (or update) a table from the command line without starting a server:
+
+```bash
+./metalog admin register-table \
+  --addr localhost:9090 \
+  --table clp_spark \
+  --display-name "Spark Logs" \
+  --kafka-topic spark-ir \
+  --kafka-bootstrap-servers localhost:9092
+```
+
+This calls the coordinator's AdminService gRPC endpoint to UPSERT the table. Only the fields you specify are updated; omitted fields keep their database defaults.
 
 Expected output:
 
 ```
-{"level":"info","msg":"API server started","grpcPort":9090}
+table "clp_spark" created
 ```
 
 ---
@@ -120,16 +137,17 @@ go test -tags=integration ./internal/...
 
 ### Node Configuration (YAML)
 
-Settings are organized by role: `database`, `storage`, `server`, `coordinator`, `tables`, and `worker`. Per-table configuration lives in the database, but tables can be declared in YAML for automatic registration on startup:
+Settings are organized by role: `database` (primary + optional replica), `storage`, `grpc`, `health`, `coordinator`, `tables`, and `worker`. Per-table configuration lives in the database, but tables can be declared in YAML for automatic registration on startup:
 
 ```yaml
 database:
-  host: localhost
-  port: 3306
-  database: metalog_metastore
-  user: root
-  password: password
-  poolSize: 5
+  primary:
+    host: localhost
+    port: 3306
+    database: metalog_metastore
+    user: root
+    password: password
+    poolSize: 5
 
 storage:
   defaultBackend: minio
@@ -138,12 +156,12 @@ storage:
       endpoint: http://localhost:9000
       accessKey: minioadmin
       secretKey: minioadmin
+      bucket: logs
       forcePathStyle: true
 
-server:
-  health:
-    enabled: true
-    port: 8081
+health:
+  enabled: true
+  port: 8081
 
 coordinator:
   nodeIdEnvVar: HOSTNAME       # env var for _table_assignment.node_id
@@ -196,7 +214,7 @@ What it tests:
 4. Only one coordinator runs per table (verified via logs)
 5. Reconciliation: a table added after startup is picked up within seconds
 
-Prerequisites: Docker, a built binary (`go build ./cmd/metalog-server`), and port `3307` free (or set `DB_PORT`).
+Prerequisites: Docker, a built binary (`go build ./cmd/metalog`), and port `3307` free (or set `DB_PORT`).
 
 ## Troubleshooting
 

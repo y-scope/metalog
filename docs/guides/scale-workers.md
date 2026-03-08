@@ -6,8 +6,8 @@ How to configure, scale, and troubleshoot the consolidation worker pool. Workers
 
 There are two worker deployment modes with different claiming strategies:
 
-- **In-process workers (`WorkerUnit`)** — run as goroutines inside the Node process. A single `Prefetcher` goroutine batch-claims tasks from any table into a buffered channel; worker goroutines receive from the channel instead of hitting the database directly. Used for development and testing.
-- **Standalone workers (`metalog-worker`)** — run as separate processes on dedicated machines. Each process runs its own Prefetcher + worker goroutines with the same architecture. Used in production for fault isolation and independent scaling.
+- **In-process workers** — run as goroutines inside the Node process alongside coordinators (`worker.concurrency > 0` in the same config). A single `Prefetcher` goroutine batch-claims tasks from any table into a buffered channel; worker goroutines receive from the channel instead of hitting the database directly. Used for development and testing.
+- **Dedicated worker nodes** — run `./metalog serve` with a worker-only config (`worker.concurrency > 0`, no coordinator settings) on dedicated machines. Each process runs its own Prefetcher + worker goroutines with the same architecture. Used in production for fault isolation and independent scaling.
 
 ## Overview
 
@@ -15,7 +15,7 @@ There are two worker deployment modes with different claiming strategies:
 |-----------|------|
 | **Coordinator** | Per-table goroutines + Node-level goroutines (BatchingWriter, watchdog, HA, reconciliation) |
 | **Workers (in-process)** | Goroutines inside the Node process, sharing resources (dev/test) |
-| **Workers (standalone)** | Separate processes on dedicated machines (production) |
+| **Workers (dedicated)** | `./metalog serve` with worker-only config on dedicated machines (production) |
 | **Communication** | Database polling (`_task_queue` table) |
 | **Storage** | Workers access object storage directly (no coordinator bottleneck) |
 
@@ -24,7 +24,7 @@ There are two worker deployment modes with different claiming strategies:
 | Decision | Rationale |
 |----------|-----------|
 | In-process mode | Simple deployment for dev/test, shared connection pool, single config |
-| Standalone mode | Fault isolation, independent scaling (production) |
+| Dedicated worker nodes | Fault isolation, independent scaling (production) |
 | Prefetcher + channel | One DB claim transaction per batch instead of one per worker; workers wake via channel receive at zero CPU cost |
 | `FOR UPDATE` + `UPDATE` | Transactional task claiming in READ COMMITTED isolation; correct fan-out without SKIP LOCKED |
 | Direct storage access | Workers bypass coordinator for data transfer |
@@ -53,7 +53,7 @@ There are two worker deployment modes with different claiming strategies:
 
 2. **Task Claiming**
    - A single `Prefetcher` goroutine executes `SELECT ... FOR UPDATE` + `UPDATE` in a READ COMMITTED transaction to batch-claim tasks. Claimed tasks are sent to a buffered channel. Worker goroutines receive from the channel (blocking). Prefetcher backs off (1 s → 32 s) when no tasks are available.
-   - Both in-process (`WorkerUnit`) and standalone (`metalog-worker`) use the same Prefetcher + channel architecture.
+   - Both in-process and dedicated worker nodes use the same Prefetcher + channel architecture.
 
 3. **Task Execution** (Worker)
    - Deserializes `TaskPayload` from task
@@ -105,7 +105,7 @@ worker:
     MINIO_ACCESS_KEY: minioadmin
     MINIO_SECRET_KEY: minioadmin
   entrypoint: >
-    sh -c "sleep 5 && /app/metalog-worker"
+    sh -c "sleep 5 && /app/metalog serve --config /etc/clp/worker.yaml"
   deploy:
     replicas: 2  # Scale here
 ```
@@ -159,8 +159,7 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 | `MINIO_ENDPOINT` | `http://localhost:9000` | MinIO URL |
 | `MINIO_ACCESS_KEY` | `minioadmin` | Access key |
 | `MINIO_SECRET_KEY` | `minioadmin` | Secret key |
-| `MINIO_IR_BUCKET` | `logs` | IR files bucket |
-| `MINIO_ARCHIVE_BUCKET` | `logs` | Archives bucket |
+| `MINIO_BUCKET` | `logs` | Storage bucket |
 
 ## Error Handling
 

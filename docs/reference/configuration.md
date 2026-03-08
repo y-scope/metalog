@@ -8,39 +8,53 @@ Configuration is loaded from `node.yaml` (node-level settings). Per-table config
 
 ## node.yaml — Node Settings
 
-Settings are organized by role: shared resources (`database`, `storage`), network (`server`), coordinator logic (`coordinator`), declarative tables (`tables`), and worker pool (`worker`).
+Settings are organized by role: shared resources (`database`, `storage`), network (`grpc`, `health`), coordinator logic (`coordinator`), declarative tables (`tables`), and worker pool (`worker`).
 
 ```yaml
 database:
-  host: localhost
-  port: 3306                     # Default: 3306
-  database: metalog_metastore
-  user: root
-  password: ""
-  poolSize: 5                    # Max open connections (default: 5)
-  poolMinIdle: 2                 # Min idle connections (default: 2)
+  # Primary (RW). Required for coordinator and worker roles.
+  primary:
+    host: localhost
+    port: 3306                     # Required
+    database: metalog_metastore
+    user: root
+    password: ""
+    poolSize: 5                    # Max open connections (default: 5)
+    poolMinIdle: 2                 # Min idle connections (default: 2)
+
+  # Replica (RO, optional). Query and metadata services use this pool when
+  # configured. Falls back to primary if omitted. For replica-only deployments
+  # (API server), omit primary entirely and configure only replica.
+  # replica:
+  #   host: replica-db
+  #   port: 3306
+  #   database: metalog_metastore
+  #   user: reader
+  #   password: secret
+  #   poolSize: 10
+  #   poolMinIdle: 2
 
 storage:
   defaultBackend: minio
-  irBucket: logs                 # Default bucket for IR files
-  archiveBucket: logs            # Default bucket for archive files
-  clpBinaryPath: /usr/bin/clp-s  # Path to the clp-s binary for consolidation
-  clpProcessTimeoutSeconds: 300  # Default: 300 (5 minutes)
   backends:
     minio:
       endpoint: http://localhost:9000
       accessKey: minioadmin
       secretKey: minioadmin
       region: ""                 # AWS region (optional, for S3)
+      bucket: logs               # Storage bucket for this backend
       forcePathStyle: true       # Required for MinIO
 
-server:
-  health:
-    enabled: true
-    port: 8081                   # Default: 8081
-  grpc:
-    enabled: true
-    port: 9090                   # Default: 9090
+health:
+  enabled: true
+  port: 8081                     # Default: 8081
+
+grpc:
+  port: 9090                     # Default: 9090
+  ingestion: true                # Requires database.primary
+  admin: true                    # Requires database.primary
+  query: true                    # Uses database.replica, falls back to primary
+  metadata: true                 # Uses database.replica, falls back to primary
 
 coordinator:
   nodeIdEnvVar: HOSTNAME         # Env var whose value becomes node_id in _table_assignment
@@ -65,29 +79,37 @@ tables:
 
 # Shared worker pool (claims tasks from all tables).
 worker:
-  concurrency: 4                 # 0 = workers disabled. Standalone binary defaults to 4.
+  concurrency: 4                 # 0 = workers disabled
+  # clpBinaryPath: /usr/bin/clp-s  # Auto-resolved from $PATH if omitted
+  # clpProcessTimeoutSeconds: 300  # Default: 300 (5 minutes)
 ```
 
 ### Configuration Reference Table
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `database.host` | — | **Required.** Database hostname |
-| `database.port` | `3306` | Database port (1-65535) |
-| `database.database` | — | Database name |
-| `database.user` | — | Database user |
-| `database.password` | — | Database password |
-| `database.poolSize` | `5` | Max open connections |
-| `database.poolMinIdle` | `2` | Min idle connections |
+| `database.primary.host` | — | Primary (RW) database hostname. Required for coordinator/worker roles |
+| `database.primary.port` | — | **Required.** Primary port (1-65535) |
+| `database.primary.database` | — | Primary database name |
+| `database.primary.user` | — | Primary database user |
+| `database.primary.password` | — | Primary database password |
+| `database.primary.poolSize` | `5` | Primary max open connections |
+| `database.primary.poolMinIdle` | `2` | Primary min idle connections |
+| `database.replica.host` | — | Replica (RO) database hostname. Optional; falls back to primary |
+| `database.replica.port` | — | **Required.** Replica port (1-65535) |
+| `database.replica.database` | — | Replica database name |
+| `database.replica.user` | — | Replica database user |
+| `database.replica.password` | — | Replica database password |
+| `database.replica.poolSize` | `5` | Replica max open connections |
+| `database.replica.poolMinIdle` | `2` | Replica min idle connections |
 | `storage.defaultBackend` | — | Default storage backend name |
-| `storage.irBucket` | — | Default IR file bucket |
-| `storage.archiveBucket` | — | Default archive file bucket |
-| `storage.clpBinaryPath` | — | Path to clp-s binary |
-| `storage.clpProcessTimeoutSeconds` | `300` | CLP process timeout |
-| `server.health.enabled` | `false` | Enable HTTP health endpoint |
-| `server.health.port` | `8081` | Health endpoint port |
-| `server.grpc.enabled` | `false` | Enable gRPC server |
-| `server.grpc.port` | `9090` | gRPC server port |
+| `health.enabled` | `false` | Enable HTTP health endpoint |
+| `health.port` | `8081` | Health endpoint port |
+| `grpc.port` | `9090` | gRPC server port (server starts if any service is enabled) |
+| `grpc.ingestion` | `false` | Enable ingestion gRPC service (requires `database.primary`) |
+| `grpc.admin` | `false` | Enable admin gRPC service (requires `database.primary`) |
+| `grpc.query` | `false` | Enable query gRPC service (uses `database.replica`, falls back to primary) |
+| `grpc.metadata` | `false` | Enable metadata gRPC service (uses `database.replica`, falls back to primary) |
 | `coordinator.nodeIdEnvVar` | `HOSTNAME` | Env var for node identity |
 | `coordinator.reconciliationIntervalSeconds` | `60` | Table assignment reconciliation interval |
 | `coordinator.haStrategy` | `heartbeat` | HA mode: `heartbeat` or `lease` |
@@ -95,12 +117,14 @@ worker:
 | `coordinator.deadNodeThresholdSeconds` | `180` | Heartbeat mode: seconds before node is dead |
 | `coordinator.leaseTtlSeconds` | `180` | Lease mode: lease duration in seconds |
 | `coordinator.leaseRenewalIntervalSeconds` | `30` | Lease mode: renewal interval (must be < TTL) |
-| `worker.concurrency` | `0` (disabled) | Concurrent task goroutines. Standalone worker binary defaults to `4` |
+| `worker.concurrency` | `0` (disabled) | Concurrent task goroutines |
+| `worker.clpBinaryPath` | `$PATH` lookup | Path to clp-s binary. Auto-resolved from `$PATH` if omitted |
+| `worker.clpProcessTimeoutSeconds` | `300` | CLP process timeout |
 | `tables[].name` | — | **Required.** Table name |
 | `tables[].displayName` | — | Human-readable name |
 | `tables[].kafka.topic` | — | Kafka topic for this table |
 | `tables[].kafka.bootstrapServers` | — | Kafka bootstrap servers |
-| `tables[].kafka.recordTransformer` | `""` (default) | Transformer name |
+| `tables[].kafka.recordTransformer` | `""` (default) | Transformer name. Empty or omitted uses the default transformer |
 
 ### Internal Constants
 

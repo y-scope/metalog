@@ -56,9 +56,8 @@ ERROR GrpcServer - Address already in use: 9090
 Change ports in config:
 
 ```yaml
-server:
-  health:
-    port: 8082        # health check HTTP port
+health:
+  port: 8082          # health check HTTP port
 ```
 
 ```bash

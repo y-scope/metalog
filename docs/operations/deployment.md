@@ -17,7 +17,7 @@ All components run in one process. Suitable for development, testing, and small 
 ./docker/start.sh -d
 
 # Or run the binary directly against the running infrastructure
-./metalog-node --config config/node.yaml
+./metalog serve --config config/node.yaml
 ```
 
 In `node.yaml`:
@@ -29,38 +29,49 @@ worker:
 
 ### Production: Separate Coordinator and Worker Pools
 
-In production, run coordinators and workers as **separate processes** on dedicated machine pools for fault isolation and independent scaling. Workers access the database and object storage directly — they do not route through the coordinator.
+In production, run coordinators and workers as **separate processes** on dedicated machine pools for fault isolation and independent scaling. All nodes use the same `./metalog` binary with different configuration. Workers access the database and object storage directly — they do not route through the coordinator.
 
 ```
-┌──────────────────────────────┐   ┌──────────────────────────────┐
-│  Coordinator Node(s)         │   │  Worker Pool                 │
-│                              │   │                              │
-│  ./metalog-node              │   │  ./metalog-worker            │
-│    --config node.yaml        │   │    (standalone worker mode)   │
-│                              │   │                              │
-│  worker.concurrency: 0       │   │  DB_HOST=db                  │
-│  (coordinator-only)          │   │  WORKER_TABLE_NAME=clp_spark │
-└──────────────────────────────┘   └──────────────────────────────┘
+┌──────────────────────────────────┐   ┌──────────────────────────────────┐
+│  Coordinator Node(s)             │   │  Worker Node(s)                  │
+│                                  │   │                                  │
+│  ./metalog serve                 │   │  ./metalog serve                 │
+│    --config coordinator.yaml     │   │    --config worker.yaml          │
+│                                  │   │                                  │
+│  worker.concurrency: 0           │   │  worker.concurrency: 8           │
+│  (coordinator-only)              │   │  (worker-only)                   │
+└──────────────────────────────────┘   └──────────────────────────────────┘
           │                                     │
           └──────────────── Database ───────────┘
 ```
 
-Set `worker.concurrency: 0` on coordinator nodes to disable in-process workers.
+Set `worker.concurrency: 0` on coordinator nodes to disable in-process workers. On worker-only nodes, set `worker.concurrency > 0` and omit coordinator settings.
 
 ### Production: Separate API Server
 
 The query API server runs as a separate process, connecting to **read replicas** for scalability:
 
 ```bash
-./metalog-server --config config/server.yaml
+./metalog serve --config config/apiserver.yaml
 ```
 
-Configure via environment variables (see [Configuration Reference](../reference/configuration.md#api-server-configuration)):
+For API-server-only deployments, configure only `database.replica` (no primary needed since there are no writes):
 
-```bash
-API_GRPC_PORT=9090
-DB_DSN="root:@tcp(replica:3306)/metalog_metastore?parseTime=true&interpolateParams=true"
-DB_POOL_SIZE=20
+```yaml
+database:
+  replica:
+    host: replica-db
+    port: 3306
+    database: metalog_metastore
+    user: reader
+    password: secret
+    poolSize: 10
+    poolMinIdle: 2
+
+grpc:
+  port: 9090
+  query: true
+  metadata: true
 ```
 
 ### Multi-Coordinator HA
@@ -134,7 +145,7 @@ This is set automatically by `DatabaseConfig.DSN()` — verify it is not overrid
 
 ### Replication
 
-For the coordinator/ingestion path, point to the **primary** (writes required). For the API server, point to a **read replica** to offload query traffic.
+Use `database.primary` for the primary (RW) and `database.replica` for a read replica (RO). The coordinator and workers require `database.primary`; query and metadata services automatically use `database.replica` when configured, falling back to `database.primary` if not.
 
 `_task_queue` can optionally be excluded from semi-sync replication for very high task churn (see [Performance Tuning: Task Queue](performance-tuning.md#replication-considerations)), but this is not recommended for most deployments.
 
@@ -156,6 +167,7 @@ storage:
       endpoint: http://minio:9000
       accessKey: minioadmin
       secretKey: minioadmin
+      bucket: logs
       forcePathStyle: true  # required for MinIO
 ```
 
@@ -169,6 +181,7 @@ storage:
       endpoint: https://s3.amazonaws.com
       accessKey: AKIAIOSFODNN7EXAMPLE
       secretKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      bucket: my-clp-logs
       forcePathStyle: false
 ```
 
@@ -184,18 +197,18 @@ Ensure both coordinator and worker nodes have access to object storage. Workers 
 services:
   coordinator:
     image: metalog:latest
-    command: ["./metalog-node", "--config", "/etc/clp/node.yaml"]
+    command: ["./metalog", "serve", "--config", "/etc/clp/coordinator.yaml"]
     environment:
       DB_HOST: mariadb
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     volumes:
-      - ./config/node.yaml:/etc/clp/node.yaml:ro
+      - ./config/coordinator.yaml:/etc/clp/coordinator.yaml:ro
     ports:
       - "8081:8081"   # health checks
 
   api-server:
     image: metalog:latest
-    entrypoint: ["./metalog-server", "--config", "/etc/clp/server.yaml"]
+    entrypoint: ["./metalog", "serve", "--config", "/etc/clp/apiserver.yaml"]
     environment:
       API_GRPC_PORT: "9090"
       DB_HOST: mariadb
@@ -204,10 +217,9 @@ services:
 
   worker:
     image: metalog:latest
-    entrypoint: ["./metalog-worker"]
+    entrypoint: ["./metalog", "serve", "--config", "/etc/clp/worker.yaml"]
     environment:
       DB_HOST: mariadb
-      WORKER_TABLE_NAME: clp_spark
     deploy:
       replicas: 4
 ```
