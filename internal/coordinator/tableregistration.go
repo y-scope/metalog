@@ -25,12 +25,20 @@ func NewTableRegistration(db *sql.DB, isMariaDB bool, compressionOverride string
 	return &TableRegistration{db: db, isMariaDB: isMariaDB, compressionOverride: compressionOverride, log: log}
 }
 
+// RegisterTableOpts holds optional fields for RegisterTable.
+// Nil pointers mean "don't update" (keep DB default or existing value).
+type RegisterTableOpts struct {
+	KafkaPollerEnabled   *bool
+	ConsolidationEnabled *bool
+}
+
 // RegisterTable provisions a table and upserts its Kafka config.
 // Returns (created bool, err error). created is true if the table was newly provisioned.
 func (s *TableRegistration) RegisterTable(
 	ctx context.Context,
 	tableName, displayName string,
 	kafkaTopic, kafkaBootstrapServers, recordTransformer string,
+	opts RegisterTableOpts,
 ) (bool, error) {
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
 		return false, err
@@ -70,6 +78,22 @@ func (s *TableRegistration) RegisterTable(
 		ToSql()
 	if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
 		return false, err
+	}
+
+	// Update table config flags if explicitly set
+	if opts.KafkaPollerEnabled != nil || opts.ConsolidationEnabled != nil {
+		update := sq.Update(metastore.TableRegistryConfig).
+			Where(sq.Eq{"table_name": tableName})
+		if opts.KafkaPollerEnabled != nil {
+			update = update.Set("kafka_poller_enabled", *opts.KafkaPollerEnabled)
+		}
+		if opts.ConsolidationEnabled != nil {
+			update = update.Set("consolidation_enabled", *opts.ConsolidationEnabled)
+		}
+		configQuery, configArgs, _ := update.ToSql()
+		if _, err := s.db.ExecContext(ctx, configQuery, configArgs...); err != nil {
+			return false, err
+		}
 	}
 
 	created := !exists

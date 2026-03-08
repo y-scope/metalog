@@ -3,11 +3,6 @@
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
 // source: coordinator.proto
-//
-// TODO: Regenerate with protoc after CoordinatorService → AdminService rename.
-// The rawDesc byte string still encodes the old service name. The _grpc.pb.go
-// file was updated manually and is correct; this file needs protoc to update
-// the embedded wire descriptor.
 
 package coordinatorpb
 
@@ -87,16 +82,14 @@ func (x *KafkaConfig) GetRecordTransformer() string {
 }
 
 type RegisterTableRequest struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	TableName              string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
-	DisplayName            string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // optional — defaults to table_name
-	Kafka                  *KafkaConfig           `protobuf:"bytes,3,opt,name=kafka,proto3" json:"kafka,omitempty"`                                // required
-	KafkaPollerEnabled     *bool                  `protobuf:"varint,4,opt,name=kafka_poller_enabled,json=kafkaPollerEnabled,proto3,oneof" json:"kafka_poller_enabled,omitempty"`
-	ConsolidationEnabled   *bool                  `protobuf:"varint,5,opt,name=consolidation_enabled,json=consolidationEnabled,proto3,oneof" json:"consolidation_enabled,omitempty"`
-	SchemaEvolutionEnabled *bool                  `protobuf:"varint,6,opt,name=schema_evolution_enabled,json=schemaEvolutionEnabled,proto3,oneof" json:"schema_evolution_enabled,omitempty"`
-	LoopIntervalMs         *int32                 `protobuf:"varint,7,opt,name=loop_interval_ms,json=loopIntervalMs,proto3,oneof" json:"loop_interval_ms,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	TableName            string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
+	DisplayName          string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // optional — defaults to table_name
+	Kafka                *KafkaConfig           `protobuf:"bytes,3,opt,name=kafka,proto3" json:"kafka,omitempty"`                                // required
+	KafkaPollerEnabled   *bool                  `protobuf:"varint,4,opt,name=kafka_poller_enabled,json=kafkaPollerEnabled,proto3,oneof" json:"kafka_poller_enabled,omitempty"`
+	ConsolidationEnabled *bool                  `protobuf:"varint,5,opt,name=consolidation_enabled,json=consolidationEnabled,proto3,oneof" json:"consolidation_enabled,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RegisterTableRequest) Reset() {
@@ -164,20 +157,6 @@ func (x *RegisterTableRequest) GetConsolidationEnabled() bool {
 	return false
 }
 
-func (x *RegisterTableRequest) GetSchemaEvolutionEnabled() bool {
-	if x != nil && x.SchemaEvolutionEnabled != nil {
-		return *x.SchemaEvolutionEnabled
-	}
-	return false
-}
-
-func (x *RegisterTableRequest) GetLoopIntervalMs() int32 {
-	if x != nil && x.LoopIntervalMs != nil {
-		return *x.LoopIntervalMs
-	}
-	return 0
-}
-
 type RegisterTableResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
@@ -238,25 +217,21 @@ const file_coordinator_proto_rawDesc = "" +
 	"\vKafkaConfig\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12+\n" +
 	"\x11bootstrap_servers\x18\x02 \x01(\tR\x10bootstrapServers\x12-\n" +
-	"\x12record_transformer\x18\x03 \x01(\tR\x11recordTransformer\"\xe4\x03\n" +
+	"\x12record_transformer\x18\x03 \x01(\tR\x11recordTransformer\"\xc4\x02\n" +
 	"\x14RegisterTableRequest\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12F\n" +
 	"\x05kafka\x18\x03 \x01(\v20.com.yscope.metalog.coordinator.grpc.KafkaConfigR\x05kafka\x125\n" +
 	"\x14kafka_poller_enabled\x18\x04 \x01(\bH\x00R\x12kafkaPollerEnabled\x88\x01\x01\x128\n" +
-	"\x15consolidation_enabled\x18\x05 \x01(\bH\x01R\x14consolidationEnabled\x88\x01\x01\x12=\n" +
-	"\x18schema_evolution_enabled\x18\x06 \x01(\bH\x02R\x16schemaEvolutionEnabled\x88\x01\x01\x12-\n" +
-	"\x10loop_interval_ms\x18\a \x01(\x05H\x03R\x0eloopIntervalMs\x88\x01\x01B\x17\n" +
+	"\x15consolidation_enabled\x18\x05 \x01(\bH\x01R\x14consolidationEnabled\x88\x01\x01B\x17\n" +
 	"\x15_kafka_poller_enabledB\x18\n" +
-	"\x16_consolidation_enabledB\x1b\n" +
-	"\x19_schema_evolution_enabledB\x13\n" +
-	"\x11_loop_interval_ms\"P\n" +
+	"\x16_consolidation_enabled\"P\n" +
 	"\x15RegisterTableResponse\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x18\n" +
-	"\acreated\x18\x02 \x01(\bR\acreated2\x9d\x01\n" +
-	"\x12CoordinatorService\x12\x86\x01\n" +
+	"\acreated\x18\x02 \x01(\bR\acreated2\x97\x01\n" +
+	"\fAdminService\x12\x86\x01\n" +
 	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponseBa\n" +
 	")com.yscope.metalog.coordinator.grpc.protoP\x01Z2github.com/y-scope/metalog/gen/proto/coordinatorpbb\x06proto3"
 
@@ -280,8 +255,8 @@ var file_coordinator_proto_goTypes = []any{
 }
 var file_coordinator_proto_depIdxs = []int32{
 	0, // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest.kafka:type_name -> com.yscope.metalog.coordinator.grpc.KafkaConfig
-	1, // 1: com.yscope.metalog.coordinator.grpc.CoordinatorService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	2, // 2: com.yscope.metalog.coordinator.grpc.CoordinatorService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	1, // 1: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	2, // 2: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
 	2, // [2:3] is the sub-list for method output_type
 	1, // [1:2] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

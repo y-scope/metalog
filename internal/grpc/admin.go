@@ -40,6 +40,10 @@ func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableR
 	created, err := h.registration.RegisterTable(ctx,
 		req.GetTableName(), req.GetDisplayName(),
 		kafkaTopic, kafkaBootstrap, transformer,
+		coordinator.RegisterTableOpts{
+			KafkaPollerEnabled:   req.KafkaPollerEnabled,
+			ConsolidationEnabled: req.ConsolidationEnabled,
+		},
 	)
 	if err != nil {
 		h.log.Error("register table failed", zap.Error(err))
