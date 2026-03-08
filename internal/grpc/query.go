@@ -35,6 +35,20 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 	if req.GetTable() == "" {
 		return status.Error(codes.InvalidArgument, "table is required")
 	}
+	if len(req.GetOrderBy()) == 0 {
+		return status.Error(codes.InvalidArgument, "order_by is required (must have at least one field)")
+	}
+	for _, ob := range req.GetOrderBy() {
+		if ob.GetColumn() == "" {
+			return status.Error(codes.InvalidArgument, "order_by column must not be empty")
+		}
+		if ob.GetColumn() == "id" {
+			return status.Error(codes.InvalidArgument, "\"id\" must not appear in order_by — it is the implicit final tiebreaker")
+		}
+		if ob.GetOrder() == pb.Order_ORDER_UNSPECIFIED {
+			return status.Error(codes.InvalidArgument, "order_by order must be ORDER_ASC or ORDER_DESC, not UNSPECIFIED")
+		}
+	}
 
 	// Validate filter expression
 	if err := query.ValidateFilterExpression(req.GetFilterExpression()); err != nil {
@@ -66,6 +80,11 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 
 	// Cursor
 	if c := req.GetCursor(); c != nil {
+		if len(c.GetValues()) != len(req.GetOrderBy()) {
+			return status.Errorf(codes.InvalidArgument,
+				"cursor.values has %d entries but order_by has %d",
+				len(c.GetValues()), len(req.GetOrderBy()))
+		}
 		params.HasCursor = true
 		params.CursorID = c.GetId()
 		for _, cv := range c.GetValues() {
@@ -76,6 +95,8 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 				params.CursorValues = append(params.CursorValues, v.FloatVal)
 			case *pb.CursorValue_StrVal:
 				params.CursorValues = append(params.CursorValues, v.StrVal)
+			default:
+				return status.Error(codes.InvalidArgument, "cursor value has no value set")
 			}
 		}
 	}
@@ -91,9 +112,10 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		return status.Errorf(codes.Internal, "query: %v", err)
 	}
 
-	// Stream results
+	// Stream results (sequence is 1-based per proto spec)
 	var seq int32
 	for _, row := range rows {
+		seq++
 		split := rowToProtoSplit(row)
 
 		resp := &pb.StreamSplitsResponse{
@@ -106,7 +128,6 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		if err := stream.Send(resp); err != nil {
 			return err
 		}
-		seq++
 	}
 
 	// Send final response with stats
