@@ -499,7 +499,12 @@ CREATE TABLE IF NOT EXISTS _clp_template (
 -- Coordinator creates partitions one week ahead and merges old sparse ones.
 --
 PARTITION BY RANGE (min_timestamp) (
-    -- Historical catch-all (also merge target for old sparse partitions)
+    -- Historical catch-all (also merge target for old sparse partitions).
+    -- In normal operation this partition stays near-empty: retention enforcement
+    -- deletes expired files before their partitions are merged. The catch-all
+    -- only accumulates data if retention is disabled, the deletion pipeline is
+    -- broken, or a producer sends min_timestamp far in the past. All three are
+    -- operational failures, not expected workload.
     PARTITION p_20240101 VALUES LESS THAN (1704067200000000000),
 
     -- Daily partitions created dynamically by PartitionManager
