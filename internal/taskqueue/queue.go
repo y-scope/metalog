@@ -13,20 +13,34 @@ import (
 )
 
 const (
-	maxDeadlockRetries = 10
-	defaultMaxRetries  = 3
+	maxDeadlockRetries       = 10
+	DefaultMaxRetries        = 3
+	DefaultCleanupBatchLimit = 1000
 )
 
 // Queue provides operations on the _task_queue table.
 type Queue struct {
-	db  *sql.DB
-	log *zap.Logger
+	db                *sql.DB
+	log               *zap.Logger
+	maxRetries        int
+	cleanupBatchLimit int
 }
 
-// NewQueue creates a Queue.
+// NewQueue creates a Queue with default settings.
 func NewQueue(database *sql.DB, log *zap.Logger) *Queue {
-	return &Queue{db: database, log: log}
+	return &Queue{
+		db:                database,
+		log:               log,
+		maxRetries:        DefaultMaxRetries,
+		cleanupBatchLimit: DefaultCleanupBatchLimit,
+	}
 }
+
+// SetMaxRetries sets the number of retries before a task is moved to dead_letter.
+func (q *Queue) SetMaxRetries(n int) { q.maxRetries = n }
+
+// SetCleanupBatchLimit sets the max rows deleted per CleanupOldTasks call.
+func (q *Queue) SetCleanupBatchLimit(n int) { q.cleanupBatchLimit = n }
 
 // CreateTask inserts a new pending task and returns its ID.
 func (q *Queue) CreateTask(ctx context.Context, tableName string, input []byte) (int64, error) {
@@ -177,7 +191,7 @@ func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (
 func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	query, args, err := sq.Update(TableName).
 		Set("retry_count", sq.Expr("retry_count + 1")).
-		Set("state", sq.Expr("IF(retry_count >= ?, 'dead_letter', 'failed')", defaultMaxRetries)).
+		Set("state", sq.Expr("IF(retry_count >= ?, 'dead_letter', 'failed')", q.maxRetries)).
 		Set("completed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
 		ToSql()
@@ -248,7 +262,7 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 	defer tx.Rollback()
 
 	newState := "timed_out"
-	if int(retryCount) >= defaultMaxRetries {
+	if int(retryCount) >= q.maxRetries {
 		newState = "dead_letter"
 	}
 
@@ -310,7 +324,7 @@ func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge ti
 			"state":      []string{string(TaskStateCompleted), string(TaskStateFailed), string(TaskStateTimedOut)},
 		}).
 		Where(sq.Lt{"completed_at": cutoff}).
-		Suffix("LIMIT 1000").
+		Suffix(fmt.Sprintf("LIMIT %d", q.cleanupBatchLimit)).
 		ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("cleanup old tasks: build query: %w", err)
