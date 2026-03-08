@@ -53,11 +53,11 @@ CREATE TABLE _task_queue (
     worker_id           VARCHAR(64) NULL,
 
     -- ========================================================================
-    -- TIMESTAMPS (epoch seconds, from database clock)
+    -- TIMESTAMPS (epoch nanoseconds, from application clock)
     -- ========================================================================
-    created_at          INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    claimed_at          INT UNSIGNED NULL,
-    completed_at        INT UNSIGNED NULL,
+    created_at          BIGINT NOT NULL,
+    claimed_at          BIGINT NULL,
+    completed_at        BIGINT NULL,
 
     -- ========================================================================
     -- RETRY TRACKING
@@ -94,9 +94,9 @@ CREATE TABLE _task_queue (
 | `table_name` | VARCHAR(64) | Logical coordinator identity (matches MariaDB/MySQL table name limit) |
 | `state` | ENUM | Task lifecycle state |
 | `worker_id` | VARCHAR(64) | Worker that claimed the task |
-| `created_at` | INT UNSIGNED | Task creation time (DB clock, epoch seconds) |
-| `claimed_at` | INT UNSIGNED | When worker claimed task |
-| `completed_at` | INT UNSIGNED | When task reached terminal state |
+| `created_at` | BIGINT | Task creation time (application clock, epoch nanoseconds) |
+| `claimed_at` | BIGINT | When worker claimed task (epoch nanoseconds) |
+| `completed_at` | BIGINT | When task reached terminal state (epoch nanoseconds) |
 | `retry_count` | TINYINT UNSIGNED | Number of previous attempts (for dead-letter threshold) |
 | `input` | MEDIUMBLOB | Task input — LZ4-compressed msgpack `TaskPayload` (IR paths, archive path, buckets) |
 | `output` | MEDIUMBLOB | Task output — LZ4-compressed msgpack `TaskResult` (actual archive size, timestamp); NULL until worker sets it on completion |
@@ -206,7 +206,7 @@ FOR UPDATE SKIP LOCKED
 
 -- Then update claimed rows:
 UPDATE _task_queue
-SET state = 'processing', worker_id = ?, claimed_at = UNIX_TIMESTAMP()
+SET state = 'processing', worker_id = ?, claimed_at = ?
 WHERE task_id IN (...)
 ```
 
@@ -224,7 +224,7 @@ WHERE task_id IN (...)
 ```sql
 -- Worker serializes TaskResult (archive size, timestamp) into output column
 UPDATE _task_queue
-SET state = 'completed', completed_at = UNIX_TIMESTAMP(), output = ?
+SET state = 'completed', completed_at = ?, output = ?
 WHERE task_id = ? AND state = 'processing'
 ```
 
@@ -249,7 +249,7 @@ When the worker encounters an error during execution:
 
 ```sql
 UPDATE _task_queue
-SET state = 'failed', completed_at = UNIX_TIMESTAMP()
+SET state = 'failed', completed_at = ?
 WHERE task_id = ? AND state = 'processing'
 ```
 
@@ -266,15 +266,15 @@ When a task has been `processing` too long (worker assumed dead):
 SELECT * FROM _task_queue
 WHERE table_name = ?
   AND state = 'processing'
-  AND claimed_at < UNIX_TIMESTAMP() - ?
+  AND claimed_at < ?                  -- cutoff = time.Now().Add(-timeout).UnixNano()
 
 -- For each stale task:
 -- If retry_count + 1 > maxRetries → move to dead_letter
-UPDATE _task_queue SET state = 'dead_letter', completed_at = UNIX_TIMESTAMP()
+UPDATE _task_queue SET state = 'dead_letter', completed_at = ?
 WHERE task_id = ?
 
 -- Otherwise → mark timed_out and create new pending retry task
-UPDATE _task_queue SET state = 'timed_out', completed_at = UNIX_TIMESTAMP()
+UPDATE _task_queue SET state = 'timed_out', completed_at = ?
 WHERE task_id = ?
 INSERT INTO _task_queue (table_name, state, retry_count, input)
 VALUES (?, 'pending', ?, ?)
@@ -300,7 +300,7 @@ VALUES (?, 'pending', ?, ?)
 DELETE FROM _task_queue
 WHERE table_name = ?
   AND state IN ('completed', 'failed', 'timed_out')
-  AND completed_at < UNIX_TIMESTAMP() - ?
+  AND completed_at < ?                -- cutoff = time.Now().Add(-maxAge).UnixNano()
 LIMIT 1000
 -- Note: dead_letter tasks are NOT deleted here — kept for manual inspection
 ```
@@ -311,15 +311,13 @@ LIMIT 1000
 
 ### Coordinator Startup Flow
 
-1. Get database timestamp (avoid clock skew with coordinator): `SELECT UNIX_TIMESTAMP()`
-2. Wait for next second (ensure clean boundary)
-3. Use the OLD timestamp as cutoff — tasks with `created_at <= dbTime` are from the previous coordinator
-4. Delete all tasks except `dead_letter`:
+1. Record startup time: `startupTime = time.Now().UnixNano()`
+2. Delete all tasks except `dead_letter`:
    ```sql
    DELETE FROM _task_queue WHERE table_name = ? AND state != 'dead_letter'
    ```
-5. Kafka consumer group resumes from last committed offset (broker tracks per group ID)
-6. Resume normal operation — only process completions where `created_at > startupTime`
+3. Kafka consumer group resumes from last committed offset (broker tracks per group ID)
+4. Resume normal operation — only process completions where `created_at > startupTime`
 
 ### Why This Works
 
@@ -335,20 +333,9 @@ LIMIT 1000
 - Cost is minimal (small amount of redundant compute)
 - Simpler than tracking in-flight workers across coordinator restarts
 
-### Clock Skew Handling
+### Clock Skew
 
-**Problem:** Coordinator's clock might differ from database clock.
-
-**Solution:** Query database for timestamp:
-```sql
-SELECT UNIX_TIMESTAMP()
-```
-
-**Edge case:** Startup within same second as old tasks.
-
-**Solution:** Wait for next second (poll `SELECT UNIX_TIMESTAMP()` until it advances), then use the old value as the cutoff.
-
-This ensures `created_at > startupTime` cleanly separates old vs new tasks.
+All timestamps are set by the application using `time.Now().UnixNano()`. Since coordinators and workers run on the same cluster, clock skew between nodes is bounded by NTP (typically < 1ms). Task ordering uses `task_id` (AUTO_INCREMENT), which is immune to clock skew.
 
 ### Replication Strategy
 
@@ -480,13 +467,9 @@ Kafka consumer groups track committed offsets server-side (per group ID: `clp-co
 - Workers self-clean by checking if row exists
 - Full history preserved
 
-### Why created_at From Database Clock
+### Why Application-Side Timestamps
 
-**Problem:** Coordinator clock might differ from database.
-
-**Solution:** Use `DEFAULT (UNIX_TIMESTAMP())` — database sets the value.
-
-**Startup:** Query `SELECT UNIX_TIMESTAMP()` to get database time for filtering.
+All timestamps (`created_at`, `claimed_at`, `completed_at`) are set by the application using `time.Now().UnixNano()`. This ensures consistency with the metadata table timestamps (also epoch nanoseconds) and avoids mixing database-clock and application-clock values within the same system.
 
 ---
 
@@ -519,7 +502,7 @@ This schema is compatible with **MariaDB 10.4+** and **MySQL 8.0+**.
 | Feature | MariaDB | MySQL | Notes |
 |---------|---------|-------|-------|
 | `SELECT ... FOR UPDATE` + `UPDATE ... WHERE ... IN (...)` | All | All | Batch claim (two-step: lock then update) |
-| `DEFAULT (expression)` | 10.2.1+ | 8.0.13+ | For `UNIX_TIMESTAMP()` default |
+| `BIGINT` columns | All | All | Epoch nanosecond timestamps |
 | `COMPRESSION='lz4'` | 10.1+ | 8.0+ | Page compression |
 | `BIGINT AUTO_INCREMENT` | All | All | Standard |
 | `ENUM` | All | All | Standard |

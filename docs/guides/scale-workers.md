@@ -207,7 +207,7 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 | Check | Solution |
 |-------|----------|
 | Worker health | `docker compose -f docker/docker-compose.yml ps \| grep worker` |
-| Task age | `SELECT *, UNIX_TIMESTAMP() - claimed_at as age FROM _task_queue WHERE state = 'processing'` |
+| Task age | `SELECT *, (UNIX_TIMESTAMP() * 1000000000 - claimed_at) DIV 1000000000 AS age_seconds FROM _task_queue WHERE state = 'processing'` |
 | Planner running? | Check coordinator logs for "planner" |
 | Timeout config | Ensure `coordinator.task.timeout.ms` is set |
 

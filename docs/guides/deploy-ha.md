@@ -159,7 +159,7 @@ Both involve timestamps, but they detect different failures:
 ```sql
 -- All table assignments and health
 SELECT a.table_name, a.node_id, a.last_progress_at,
-  UNIX_TIMESTAMP() - a.last_progress_at AS seconds_since_progress
+  (UNIX_TIMESTAMP() * 1000000000 - a.last_progress_at) DIV 1000000000 AS seconds_since_progress
 FROM _table_assignment a
 WHERE a.node_id IS NOT NULL;
 
@@ -167,11 +167,11 @@ WHERE a.node_id IS NOT NULL;
 SELECT table_name, node_id, last_progress_at
 FROM _table_assignment
 WHERE node_id IS NOT NULL
-  AND last_progress_at < UNIX_TIMESTAMP() - 100;  -- 2x stall threshold
+  AND last_progress_at < (UNIX_TIMESTAMP() - 100) * 1000000000;  -- 2x stall threshold
 
 -- Node liveness (heartbeat mode)
 SELECT node_id, last_heartbeat_at,
-  UNIX_TIMESTAMP() - last_heartbeat_at AS seconds_stale
+  (UNIX_TIMESTAMP() * 1000000000 - last_heartbeat_at) DIV 1000000000 AS seconds_stale
 FROM _node_registry;
 ```
 

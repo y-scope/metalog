@@ -16,7 +16,7 @@ Dimension columns hold per-file field values used for split pruning. Physical co
 
 | Format | Range | Examples |
 |--------|-------|---------|
-| `dim_fNN` | `dim_f01`–`dim_f999` | `dim_f01`, `dim_f12` |
+| `dim_fNN` | `dim_f01`–`dim_f99` | `dim_f01`, `dim_f12` |
 
 The **`_dim_registry`** table maps each physical name to its logical metadata:
 
@@ -54,7 +54,7 @@ Aggregation columns hold per-file pre-computed aggregates (e.g., match counts) u
 
 | Format | Range | Examples |
 |--------|-------|---------|
-| `agg_fNN` | `agg_f01`–`agg_f999` | `agg_f01`, `agg_f07` |
+| `agg_fNN` | `agg_f01`–`agg_f99` | `agg_f01`, `agg_f07` |
 
 The **`_agg_registry`** table maps each physical name to its logical metadata:
 

@@ -74,7 +74,7 @@ SELECT table_name,
        COUNT(*) AS files_last_minute,
        COUNT(*) * 60 AS projected_hourly_rate
 FROM clp_spark
-WHERE created_at >= UNIX_TIMESTAMP() - 60
+WHERE created_at >= (UNIX_TIMESTAMP() - 60) * 1000000000    -- last 60 seconds, in epoch nanos
 GROUP BY table_name;
 ```
 
@@ -88,8 +88,8 @@ The `_table_assignment` table tracks the last time each coordinator made progres
 -- Table assignments and staleness
 SELECT table_name,
        node_id,
-       FROM_UNIXTIME(last_progress_at) AS last_progress,
-       UNIX_TIMESTAMP() - last_progress_at AS seconds_stale
+       FROM_UNIXTIME(last_progress_at DIV 1000000000) AS last_progress,
+       (UNIX_TIMESTAMP() * 1000000000 - last_progress_at) DIV 1000000000 AS seconds_stale
 FROM _table_assignment
 WHERE node_id IS NOT NULL;
 ```
@@ -103,7 +103,7 @@ Alert if `seconds_stale > 100` (2× the default watchdog stall threshold of 50s)
 SELECT table_name,
        state,
        COUNT(*) AS count,
-       MIN(FROM_UNIXTIME(created_at)) AS oldest
+       MIN(FROM_UNIXTIME(created_at DIV 1000000000)) AS oldest
 FROM _task_queue
 GROUP BY table_name, state
 ORDER BY table_name, state;
@@ -139,8 +139,8 @@ Consumer group IDs follow the pattern `clp-coordinator-{table_name}-{table_id}`,
 ```sql
 -- All nodes and heartbeat freshness
 SELECT node_id,
-       FROM_UNIXTIME(last_heartbeat_at) AS last_heartbeat,
-       UNIX_TIMESTAMP() - last_heartbeat_at AS seconds_stale
+       FROM_UNIXTIME(last_heartbeat_at DIV 1000000000) AS last_heartbeat,
+       (UNIX_TIMESTAMP() * 1000000000 - last_heartbeat_at) DIV 1000000000 AS seconds_stale
 FROM _node_registry;
 ```
 

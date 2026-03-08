@@ -46,12 +46,14 @@ At each liveness interval, the node tells the database it's still alive:
 
 ```sql
 -- Heartbeat mode (default): one UPSERT per node (registers on first call, refreshes thereafter)
-INSERT INTO _node_registry (node_id, last_heartbeat_at)
-VALUES (?, UNIX_TIMESTAMP())
-ON DUPLICATE KEY UPDATE last_heartbeat_at = UNIX_TIMESTAMP();
+INSERT INTO _node_registry (node_id, started_at, last_heartbeat_at)
+VALUES (?, ?, ?)
+ON DUPLICATE KEY UPDATE last_heartbeat_at = VALUES(last_heartbeat_at);
+-- Application supplies time.Now().UnixNano() for both started_at and last_heartbeat_at
 
 -- Lease mode: one UPDATE per owned table
-UPDATE _table_assignment SET lease_expiry = UNIX_TIMESTAMP() + ? WHERE node_id = ?;
+UPDATE _table_assignment SET lease_expiry = ? WHERE node_id = ?;
+-- Application supplies time.Now().Add(leaseTTL).UnixNano()
 ```
 
 If the database is temporarily unreachable, the node logs an error and retries next cycle. A failed liveness write does not stop processing — the liveness goroutine is independent of per-table coordinators.
@@ -90,7 +92,7 @@ LEFT JOIN _node_registry n ON a.node_id = n.node_id
 WHERE t.active = true
   AND a.node_id IS NOT NULL
   AND (n.node_id IS NULL                                          -- never registered
-    OR n.last_heartbeat_at < UNIX_TIMESTAMP() - ?deadThreshold);  -- stale heartbeat
+    OR n.last_heartbeat_at < ?);                                   -- cutoff = time.Now().Add(-deadThreshold).UnixNano()
 
 -- Lease mode: check lease_expiry directly (no join needed)
 SELECT a.table_name, a.node_id
@@ -98,7 +100,7 @@ FROM _table_assignment a
 JOIN _table t ON a.table_name = t.table_name
 WHERE t.active = true
   AND a.node_id IS NOT NULL
-  AND (a.lease_expiry < UNIX_TIMESTAMP()                 -- lease expired (TTL baked in)
+  AND (a.lease_expiry < ?                                -- cutoff = time.Now().UnixNano()
     OR a.lease_expiry IS NULL);                           -- leftover from heartbeat→lease switch
 ```
 
@@ -114,13 +116,14 @@ loop:
   attempt claim:
     -- Heartbeat mode: guard on dead owner's node_id
     UPDATE _table_assignment
-    SET node_id = ?, assignment_updated_at = UNIX_TIMESTAMP()
+    SET node_id = ?, assignment_updated_at = ?
     WHERE table_name = ? AND node_id = ?;
 
     -- Lease mode: guard on expired lease_expiry
     UPDATE _table_assignment
-    SET node_id = ?, lease_expiry = UNIX_TIMESTAMP() + ?, assignment_updated_at = UNIX_TIMESTAMP()
-    WHERE table_name = ? AND (lease_expiry < UNIX_TIMESTAMP() OR lease_expiry IS NULL);
+    SET node_id = ?, lease_expiry = ?, assignment_updated_at = ?
+    WHERE table_name = ? AND (lease_expiry < ? OR lease_expiry IS NULL);
+    -- All timestamps supplied as time.Now().UnixNano() (or .Add(leaseTTL).UnixNano())
 
   affected_rows = 1 → claimed, start per-table coordinator, repeat
   affected_rows = 0 → another node already claimed it, move on
@@ -150,7 +153,7 @@ Stall detection is entirely local. Each coordinator goroutine updates an in-memo
 
 ```sql
 UPDATE _table_assignment
-SET last_progress_at = UNIX_TIMESTAMP()
+SET last_progress_at = ?              -- time.Now().UnixNano()
 WHERE table_name = ? AND node_id = ?;
 -- AND node_id = ? prevents overwriting the new owner's progress after ownership loss
 ```
@@ -184,7 +187,7 @@ An idle goroutine still completes iterations — `Poll()` returns 0 records and 
 SELECT table_name, node_id, last_progress_at
 FROM _table_assignment
 WHERE node_id IS NOT NULL
-  AND last_progress_at < UNIX_TIMESTAMP() - ?stallThreshold;
+  AND last_progress_at < ?;             -- cutoff = time.Now().Add(-stallThreshold).UnixNano()
 ```
 
 ---
@@ -233,7 +236,7 @@ A node claims a table but the per-table coordinator crashes on startup. The node
 
 ### Clock Skew
 
-All timestamp writes and comparisons use `UNIX_TIMESTAMP()` (database server time). The node's local clock is never used for liveness decisions.
+All timestamps are set by the application using `time.Now().UnixNano()` (epoch nanoseconds). Since all nodes are NTP-synchronized, clock skew is bounded (typically < 1ms) and well within the liveness thresholds (30s–180s).
 
 ### Source Crashes During Migration
 
@@ -278,17 +281,17 @@ Everything is derived from timestamps — no status flags:
 |--------|------|-------------|
 | table_name | VARCHAR(64) PK/FK | References `_table` |
 | node_id | VARCHAR(64) NULL | Owner (NULL = unassigned) |
-| node_assigned_at | INT UNSIGNED NULL | When first claimed |
-| assignment_updated_at | INT UNSIGNED NULL | When last changed |
-| last_progress_at | INT UNSIGNED NULL | When coordinator last completed a loop (written for operator visibility; stall detection uses in-memory timestamps) |
-| lease_expiry | INT UNSIGNED NULL | Lease mode only; NULL in heartbeat mode |
+| node_assigned_at | BIGINT NULL | When first claimed (epoch nanoseconds) |
+| assignment_updated_at | BIGINT NULL | When last changed (epoch nanoseconds) |
+| last_progress_at | BIGINT NULL | When coordinator last completed a loop (epoch nanoseconds; stall detection uses in-memory timestamps) |
+| lease_expiry | BIGINT NULL | Lease mode only; NULL in heartbeat mode (epoch nanoseconds) |
 
 ### _node_registry (heartbeat mode only)
 
 | Column | Type | Description |
 |--------|------|-------------|
 | node_id | VARCHAR(64) PK | Node identifier |
-| last_heartbeat_at | INT UNSIGNED | Last liveness timestamp |
+| last_heartbeat_at | BIGINT | Last liveness timestamp (epoch nanoseconds) |
 
 Stale rows from dead nodes accumulate harmlessly. Manual `DELETE` is safe at any time. In lease mode, this table is unused.
 
@@ -305,17 +308,18 @@ CREATE TABLE _table (
 CREATE TABLE _table_assignment (
     table_name            VARCHAR(64) NOT NULL PRIMARY KEY,
     node_id               VARCHAR(64) NULL,
-    node_assigned_at      INT UNSIGNED NULL,
-    assignment_updated_at INT UNSIGNED NULL,
-    last_progress_at      INT UNSIGNED NULL,
-    lease_expiry          INT UNSIGNED NULL,
+    node_assigned_at      BIGINT NULL,
+    assignment_updated_at BIGINT NULL,
+    last_progress_at      BIGINT NULL,
+    lease_expiry          BIGINT NULL,
     INDEX idx_node_id (node_id),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE _node_registry (
     node_id           VARCHAR(64) PRIMARY KEY,
-    last_heartbeat_at INT UNSIGNED NOT NULL,
+    started_at        BIGINT NOT NULL,
+    last_heartbeat_at BIGINT NOT NULL,
     INDEX idx_heartbeat (last_heartbeat_at)
 ) ENGINE=InnoDB;
 ```
@@ -391,7 +395,7 @@ ray    — owner node-002 — alive (skip)
 
 node-002 claims `spark`:
 ```sql
-UPDATE _table_assignment SET node_id = 'node-002', assignment_updated_at = UNIX_TIMESTAMP()
+UPDATE _table_assignment SET node_id = 'node-002', assignment_updated_at = ?
 WHERE table_name = 'spark' AND node_id = 'node-001';
 -- affected_rows = 1 → claimed
 ```

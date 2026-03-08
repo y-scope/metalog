@@ -33,8 +33,8 @@ The `ColumnRegistry` type (in the `schema` package) manages this mapping.
 
 | Placeholder | Format | Range | Example |
 |-------------|--------|-------|---------|
-| Dimension | `dim_fNN` | `dim_f01`–`dim_f999` | `dim_f01`, `dim_f12` |
-| Aggregation | `agg_fNN` | `agg_f01`–`agg_f999` | `agg_f01`, `agg_f07` |
+| Dimension | `dim_fNN` | `dim_f01`–`dim_f99` | `dim_f01`, `dim_f12` |
+| Aggregation | `agg_fNN` | `agg_f01`–`agg_f99` | `agg_f01`, `agg_f07` |
 
 Slot numbers are assigned sequentially as new fields appear. Slot 1 goes to the first new dimension, slot 2 to the second, and so on.
 
@@ -53,11 +53,11 @@ CREATE TABLE _dim_registry (
     dim_key         VARCHAR(1024) NOT NULL,       -- original field name, may contain special chars
     alias_column    VARCHAR(64)   NULL,           -- optional human-readable alias
     state           ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
-    created_at      INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    invalidated_at  INT UNSIGNED NULL,
+    created_at      BIGINT NOT NULL,
+    invalidated_at  BIGINT NULL,
     PRIMARY KEY (table_name, column_name),
     INDEX idx_dim_lookup (table_name, dim_key(255), state),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 ```
 
@@ -75,11 +75,11 @@ CREATE TABLE _agg_registry (
     value_type        ENUM('INT','FLOAT') NOT NULL DEFAULT 'INT',
     alias_column      VARCHAR(64)   NULL,            -- if set, this agg aliases an existing column
     state             ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
-    created_at        INT UNSIGNED  NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    invalidated_at    INT UNSIGNED  NULL,
+    created_at        BIGINT  NOT NULL,
+    invalidated_at    BIGINT  NULL,
     PRIMARY KEY (table_name, column_name),
     INDEX idx_agg_lookup (table_name, agg_key(255), state),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 ```
 

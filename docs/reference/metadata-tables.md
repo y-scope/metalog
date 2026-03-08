@@ -100,8 +100,15 @@ CREATE TABLE clp_spark (
     clp_archive_path_hash       BINARY(16) AS (UNHEX(MD5(clp_archive_path))) VIRTUAL,
 
     -- Lifecycle state
-    state ENUM('IR_BUFFERING', 'IR_CLOSED', 'IR_PURGING', 'ARCHIVE_CLOSED', 'ARCHIVE_PURGING',
-               'IR_ARCHIVE_BUFFERING', 'IR_ARCHIVE_CONSOLIDATION_PENDING') NOT NULL,
+    -- Lifecycle states (ordinal order matches lifecycle progression)
+    state ENUM(
+        -- IR-only chain (ordinals 1-3)
+        'IR_BUFFERING', 'IR_CLOSED', 'IR_PURGING',
+        -- Hybrid chain (ordinals 4-5, shares ARCHIVE_CLOSED/ARCHIVE_PURGING tail)
+        'IR_ARCHIVE_BUFFERING', 'IR_ARCHIVE_CONSOLIDATION_PENDING',
+        -- Archive tail (ordinals 6-7, shared by Hybrid and Archive-only chains)
+        'ARCHIVE_CLOSED', 'ARCHIVE_PURGING'
+    ) NOT NULL,
 
     -- Metrics
     record_count                INT UNSIGNED NOT NULL DEFAULT 0,
@@ -117,7 +124,11 @@ CREATE TABLE clp_spark (
     sketches                    SET('s01','s02','s03','s04','s05','s06','s07','s08',
                                     's09','s10','s11','s12','s13','s14','s15','s16',
                                     's17','s18','s19','s20','s21','s22','s23','s24',
-                                    's25','s26','s27','s28','s29','s30','s31','s32') NULL,
+                                    's25','s26','s27','s28','s29','s30','s31','s32',
+                                    's33','s34','s35','s36','s37','s38','s39','s40',
+                                    's41','s42','s43','s44','s45','s46','s47','s48',
+                                    's49','s50','s51','s52','s53','s54','s55','s56',
+                                    's57','s58','s59','s60','s61','s62','s63','s64') NULL,
     ext                         MEDIUMBLOB NULL,
 
     -- Indexes (see Index Reference for detailed analysis)
@@ -190,8 +201,8 @@ On partitioned tables, MySQL requires the AUTO_INCREMENT column to be the first 
 Dynamic columns are added automatically by `ColumnRegistry` when new fields appear in ingested records. No manual DDL is required.
 
 **Physical column names use opaque placeholders:**
-- Dimension columns: `dim_f01`, `dim_f02`, ... (up to `dim_f999`)
-- Aggregation columns: `agg_f01`, `agg_f02`, ... (up to `agg_f999`)
+- Dimension columns: `dim_f01`, `dim_f02`, ... (up to `dim_f99`)
+- Aggregation columns: `agg_f01`, `agg_f02`, ... (up to `agg_f99`)
 
 The semantic mapping from physical name to logical field name is stored in `_dim_registry` and `_agg_registry`. The public query API resolves placeholders back to logical names before returning results.
 
@@ -236,9 +247,9 @@ The 255-byte boundary is the InnoDB threshold where MySQL changes internal encod
 | Index overhead | ~179 bytes/row (7 indexes, 2 dimensions) |
 | Per-dimension overhead | ~39 bytes/row |
 
-**Typical deployment (5M files/day, 30-day retention):**
-- Per table: 150M rows, ~62 GB
-- System-wide (5 tables): 750M rows, ~310 GB
+**Typical deployment (couple hundred million files/day across tables, 30-day retention):**
+- Per table: couple hundred million rows (each table is a logical shard)
+- If a single DB instance reaches capacity, additional instances handle a subset of tables
 
 ### Throughput
 
@@ -268,12 +279,13 @@ Coord 1  Coord 2  Coord 3
 
 ### Storage Projections
 
-| Files/Day | Rows (30 days) | Table Data | Indexes (2 dim) | Total |
-|-----------|----------------|------------|-----------------|-------|
+| Files/Day (per table) | Rows (30 days) | Table Data | Indexes (2 dim) | Total |
+|-----------------------|----------------|------------|-----------------|-------|
 | 1M | 30M | ~7 GB | ~5 GB | ~12 GB |
-| **5M** | **150M** | **~35 GB** | **~27 GB** | **~62 GB** |
-| 10M | 300M | ~70 GB | ~54 GB | ~124 GB |
-| 50M | 1.5B | ~350 GB | ~268 GB | ~618 GB |
+| 5M | 150M | ~35 GB | ~27 GB | ~62 GB |
+| **10M** | **300M** | **~70 GB** | **~54 GB** | **~124 GB** |
+
+Each table is a logical shard for a subset of grouped datasets. Aggregate ingestion across all tables is couple hundred million to 1 billion files/day.
 
 ### Dimension Scaling
 

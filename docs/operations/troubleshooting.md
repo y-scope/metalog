@@ -148,7 +148,7 @@ SELECT table_name, node_id, last_progress_at FROM _table_assignment;
 
 ```sql
 SELECT table_name, node_id,
-       UNIX_TIMESTAMP() - last_progress_at AS seconds_stale
+       (UNIX_TIMESTAMP() * 1000000000 - last_progress_at) DIV 1000000000 AS seconds_stale
 FROM _table_assignment
 WHERE node_id IS NOT NULL;
 ```
@@ -188,7 +188,7 @@ grep "ERROR\|WARN" coordinator.log | grep -i "table=clp_spark"
 SELECT COUNT(*) FROM _task_queue WHERE state = 'pending' AND table_name = 'clp_spark';
 
 -- Are tasks stuck in processing (possibly orphaned)?
-SELECT *, UNIX_TIMESTAMP() - claimed_at AS age_seconds
+SELECT *, (UNIX_TIMESTAMP() * 1000000000 - claimed_at) DIV 1000000000 AS age_seconds
 FROM _task_queue
 WHERE state = 'processing';
 ```
