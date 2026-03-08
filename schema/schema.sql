@@ -100,13 +100,18 @@
 --    5000 and rewriteBatchedStatements=true, expect ~5,500 records/sec.
 --    See docs/operations/performance-tuning.md for JDBC tuning and batch size guidance.
 --
---    Scaling note: Total index size across all partitions can reach ~100 GB at
---    1 billion rows (typical per-table volume is a few hundred million rows).
---    However, UPSERTs only touch the current day's partition, so the InnoDB
---    buffer pool only needs to hold the hot partition's indexes (~300 MB at
---    3M files/day). Queries with min_timestamp get partition pruning and never
---    scan cold indexes. Index pressure is not a practical concern at expected
---    per-table volumes.
+--    Scaling note: Each table serves as a logical shard for a subset of
+--    grouped datasets. Per-table volume is a couple hundred million rows
+--    (up to ~1 billion across all tables), with 30-day retention. Aggregate
+--    ingestion rate is couple hundred million to 1 billion files per day
+--    across all tables. Daily RANGE partitioning limits the hot working set:
+--    UPSERTs only touch the current day's partition, so the InnoDB buffer
+--    pool only needs to hold one partition's indexes. Queries with
+--    min_timestamp predicates get partition pruning and never scan cold
+--    indexes. At a couple hundred million rows per table, index pressure
+--    is not a practical concern. If a single DB instance reaches capacity,
+--    additional instances can be added — each handling a subset of tables.
+--    No cross-table dependencies exist, so this is a clean operational split.
 --
 -- 9. Nullable Path Columns with Natural NULL Propagation
 --    Path columns (clp_ir_path, clp_archive_path) are nullable, not empty string.
