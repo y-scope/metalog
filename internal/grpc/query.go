@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 	gogrpc "google.golang.org/grpc"
@@ -10,6 +11,7 @@ import (
 
 	pb "github.com/y-scope/metalog/gen/proto/splitspb"
 	"github.com/y-scope/metalog/internal/config"
+	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/query"
 	"github.com/y-scope/metalog/internal/schema"
 )
@@ -116,7 +118,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 	var seq int32
 	for _, row := range rows {
 		seq++
-		split := rowToProtoSplit(row)
+		split := rowToProtoSplit(row, params.Registry)
 
 		resp := &pb.StreamSplitsResponse{
 			Split:    split,
@@ -141,7 +143,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 	})
 }
 
-func rowToProtoSplit(row *query.SplitRow) *pb.Split {
+func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.Split {
 	split := &pb.Split{
 		Id:         row.ID,
 		Dimensions: make(map[string]string),
@@ -186,10 +188,32 @@ func rowToProtoSplit(row *query.SplitRow) *pb.Split {
 		case "clp_archive_bucket":
 			split.ClpArchiveBucket = dbValToString(val)
 		default:
-			// Dimension columns
-			if val != nil {
-				split.Dimensions[col] = dbValToString(val)
+			if val == nil {
+				continue
 			}
+			// Agg columns: reverse-map physical name to structured AggEntry
+			if strings.HasPrefix(col, metastore.AggColumnPrefix) && registry != nil {
+				if entry := registry.LookupAggByColumn(col); entry != nil {
+					aggEntry := &pb.AggEntry{
+						Key:             entry.AggKey,
+						Value:           entry.AggValue,
+						AggregationType: pb.AggregationType(pb.AggregationType_value["AGGREGATION_TYPE_"+entry.AggregationType]),
+					}
+					if entry.ValueType == "FLOAT" {
+						if f, ok := dbValToFloat64(val); ok {
+							aggEntry.Result = &pb.AggEntry_FloatValue{FloatValue: f}
+						}
+					} else {
+						if i, ok := dbValToInt64(val); ok {
+							aggEntry.Result = &pb.AggEntry_IntValue{IntValue: i}
+						}
+					}
+					split.Aggs = append(split.Aggs, aggEntry)
+					continue
+				}
+			}
+			// Dimension columns (including dim_fNN and any unrecognized agg columns)
+			split.Dimensions[col] = dbValToString(val)
 		}
 	}
 
@@ -226,6 +250,32 @@ func toCursorValue(val any) *pb.CursorValue {
 		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: string(v)}}
 	default:
 		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: fmt.Sprintf("%v", v)}}
+	}
+}
+
+func dbValToInt64(val any) (int64, bool) {
+	switch v := val.(type) {
+	case int64:
+		return v, true
+	case int32:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func dbValToFloat64(val any) (float64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	default:
+		return 0, false
 	}
 }
 

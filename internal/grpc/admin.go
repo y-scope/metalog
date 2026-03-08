@@ -30,12 +30,18 @@ func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableR
 	}
 
 	kafkaCfg := req.GetKafka()
-	var kafkaTopic, kafkaBootstrap, transformer string
-	if kafkaCfg != nil {
-		kafkaTopic = kafkaCfg.GetTopic()
-		kafkaBootstrap = kafkaCfg.GetBootstrapServers()
-		transformer = kafkaCfg.GetRecordTransformer()
+	if kafkaCfg == nil {
+		return nil, status.Error(codes.InvalidArgument, "kafka is required")
 	}
+	if kafkaCfg.GetTopic() == "" {
+		return nil, status.Error(codes.InvalidArgument, "kafka.topic is required")
+	}
+	if kafkaCfg.GetBootstrapServers() == "" {
+		return nil, status.Error(codes.InvalidArgument, "kafka.bootstrap_servers is required")
+	}
+	kafkaTopic := kafkaCfg.GetTopic()
+	kafkaBootstrap := kafkaCfg.GetBootstrapServers()
+	transformer := kafkaCfg.GetRecordTransformer()
 
 	created, err := h.registration.RegisterTable(ctx,
 		req.GetTableName(), req.GetDisplayName(),

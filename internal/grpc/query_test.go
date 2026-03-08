@@ -17,7 +17,7 @@ func TestRowToProtoSplit_BasicFields(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if split.Id != 42 {
 		t.Errorf("Id = %d, want 42", split.Id)
@@ -47,7 +47,7 @@ func TestRowToProtoSplit_IRFields(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if split.ClpIrPath != "/logs/test.clp.zst" {
 		t.Errorf("ClpIrPath = %q", split.ClpIrPath)
@@ -72,7 +72,7 @@ func TestRowToProtoSplit_ArchiveSizeOverridesIRSize(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if split.SizeBytes != 5000 {
 		t.Errorf("SizeBytes = %d, want 5000 (archive should override IR)", split.SizeBytes)
@@ -88,7 +88,7 @@ func TestRowToProtoSplit_ArchiveSizeZeroKeepsIRSize(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if split.SizeBytes != 1000 {
 		t.Errorf("SizeBytes = %d, want 1000 (zero archive should not override)", split.SizeBytes)
@@ -104,7 +104,7 @@ func TestRowToProtoSplit_DimensionColumns(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if len(split.Dimensions) != 2 {
 		t.Fatalf("Dimensions count = %d, want 2", len(split.Dimensions))
@@ -126,7 +126,7 @@ func TestRowToProtoSplit_NilValueNotInDimensions(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if _, exists := split.Dimensions["dim_f01"]; exists {
 		t.Error("nil dimension should not be included")
@@ -144,7 +144,7 @@ func TestRowToProtoSplit_WrongTypeForTimestamp(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	// Wrong type should leave the field at zero value
 	if split.MinTimestamp != 0 {
@@ -158,7 +158,7 @@ func TestRowToProtoSplit_EmptyRow(t *testing.T) {
 		Values: map[string]any{},
 	}
 
-	split := rowToProtoSplit(row)
+	split := rowToProtoSplit(row, nil)
 
 	if split.Id != 0 {
 		t.Errorf("Id = %d, want 0", split.Id)

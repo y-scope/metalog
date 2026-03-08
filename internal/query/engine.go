@@ -15,6 +15,13 @@ import (
 	"github.com/y-scope/metalog/internal/schema"
 )
 
+// indexedSortColumns lists columns with dedicated indexes that support efficient
+// keyset pagination without a full table scan.
+var indexedSortColumns = map[string]bool{
+	"min_timestamp": true,
+	"max_timestamp": true,
+}
+
 // SplitQueryEngine executes paginated queries on metadata tables.
 type SplitQueryEngine struct {
 	db    *sql.DB
@@ -81,6 +88,10 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		}
 		if err := db.ValidateSQLIdentifier(resolved); err != nil {
 			return nil, fmt.Errorf("order by: %w", err)
+		}
+		if !params.AllowUnindexed && !indexedSortColumns[resolved] {
+			return nil, fmt.Errorf("sort column %q is not indexed; use an indexed column (%s) or set allow_unindexed_sort=true",
+				ob.Column, "min_timestamp, max_timestamp")
 		}
 		params.OrderBy[i].Column = resolved
 	}

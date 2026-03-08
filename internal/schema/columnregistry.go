@@ -430,6 +430,13 @@ func (cr *ColumnRegistry) ActiveDimColumns() []string {
 	return cols
 }
 
+// LookupAggByColumn returns the AggRegistryEntry for a physical column name, or nil.
+func (cr *ColumnRegistry) LookupAggByColumn(colName string) *AggRegistryEntry {
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	return cr.aggByColumn[colName]
+}
+
 // ActiveAggColumns returns the column names of all active aggregation entries.
 // The result is sorted for deterministic SQL generation.
 func (cr *ColumnRegistry) ActiveAggColumns() []string {
