@@ -13,7 +13,8 @@ import (
 // SharedResources holds resources shared across all units in a node.
 // The Node owns these resources and closes them after all units have stopped.
 type SharedResources struct {
-	DB              *sql.DB
+	DB              *sql.DB // RW pool (primary). Nil in RO-only deployments.
+	ReadDB          *sql.DB // RO pool (read replica). Nil when not configured.
 	StorageRegistry *storage.Registry
 	ArchiveCreator  *storage.ArchiveCreator
 	ArchiveBackend  string
@@ -23,6 +24,14 @@ type SharedResources struct {
 
 	regMu      sync.RWMutex
 	registries map[string]*schema.ColumnRegistry
+}
+
+// ReadOnlyDB returns the read-only pool if configured, otherwise the RW pool.
+func (s *SharedResources) ReadOnlyDB() *sql.DB {
+	if s.ReadDB != nil {
+		return s.ReadDB
+	}
+	return s.DB
 }
 
 // SetColumnRegistry adds or replaces a column registry for a table.
@@ -55,6 +64,11 @@ func (s *SharedResources) ColumnRegistries() map[string]*schema.ColumnRegistry {
 
 // Close releases all shared resources.
 func (s *SharedResources) Close() {
+	if s.ReadDB != nil {
+		if err := s.ReadDB.Close(); err != nil {
+			s.Log.Warn("failed to close read DB", zap.Error(err))
+		}
+	}
 	if s.DB != nil {
 		if err := s.DB.Close(); err != nil {
 			s.Log.Warn("failed to close DB", zap.Error(err))

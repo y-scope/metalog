@@ -3,6 +3,7 @@ package config
 // StorageBackendConfig holds connection info for a single storage backend.
 type StorageBackendConfig struct {
 	Type           string `yaml:"type"`     // "s3" (default), "tb", "http", "fs"
+	Bucket         string `yaml:"bucket"`   // default bucket for this backend
 	BaseURL        string `yaml:"baseUrl"`  // for http-based backends (tb, http)
 	BasePath       string `yaml:"basePath"` // for filesystem backend
 	Endpoint       string `yaml:"endpoint"`
@@ -30,15 +31,6 @@ func (c StorageBackendConfig) ToMap() map[string]string {
 
 // ObjectStorageConfig holds storage settings for IR and archive files.
 type ObjectStorageConfig struct {
-	IRBucket                 string                          `yaml:"irBucket"`
-	ArchiveBucket            string                          `yaml:"archiveBucket"`
-	ClpBinaryPath            string                          `yaml:"clpBinaryPath"`
-	ClpProcessTimeoutSeconds int                             `yaml:"clpProcessTimeoutSeconds"`
-	DefaultBackend           string                          `yaml:"defaultBackend"`
-	Backends                 map[string]StorageBackendConfig `yaml:"backends"`
-
-	// TableCompression controls the compression clause for CREATE TABLE.
-	// "lz4" (default for MySQL), "page_compressed" (auto for MariaDB), or "none".
-	// When empty, auto-detected from the database type.
-	TableCompression string `yaml:"tableCompression"`
+	DefaultBackend string                          `yaml:"defaultBackend"`
+	Backends       map[string]StorageBackendConfig `yaml:"backends"`
 }

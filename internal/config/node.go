@@ -3,18 +3,26 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"gopkg.in/yaml.v3"
 )
 
 // NodeConfig is the top-level configuration loaded from node.yaml.
 type NodeConfig struct {
-	Database    DatabaseConfig      `yaml:"database"`
+	Database    DatabaseSection     `yaml:"database"`
 	Storage     ObjectStorageConfig `yaml:"storage"`
-	Server      ServerConfig        `yaml:"server"`
+	GRPC        GRPCConfig          `yaml:"grpc"`
+	Health      HealthConfig        `yaml:"health"`
 	Coordinator CoordinatorConfig   `yaml:"coordinator"`
 	Tables      []TableConfig       `yaml:"tables"`
 	Worker      WorkerConfig        `yaml:"worker"`
+}
+
+// DatabaseSection holds primary (RW) and optional replica (RO) pool configs.
+type DatabaseSection struct {
+	Primary DatabaseConfig  `yaml:"primary"`
+	Replica *DatabaseConfig `yaml:"replica"`
 }
 
 // HAStrategy selects the liveness detection mode.
@@ -25,18 +33,17 @@ const (
 	HAStrategyLease     HAStrategy = "lease"
 )
 
-// ServerConfig controls network-facing settings (gRPC + health endpoints).
-type ServerConfig struct {
-	Health HealthConfig `yaml:"health"`
-	GRPC   GRPCConfig   `yaml:"grpc"`
-}
-
 // CoordinatorConfig holds coordinator-specific settings (HA, identity).
 type CoordinatorConfig struct {
 	Name         string `yaml:"name"`
 	NodeIDEnvVar string `yaml:"nodeIdEnvVar"`
 
 	ReconciliationIntervalSeconds int `yaml:"reconciliationIntervalSeconds"`
+
+	// TableCompression controls the compression clause for CREATE TABLE.
+	// "lz4" (default for MySQL), "page_compressed" (auto for MariaDB), or "none".
+	// When empty, auto-detected from the database type.
+	TableCompression string `yaml:"tableCompression"`
 
 	// HA settings
 	HAStrategy                  HAStrategy `yaml:"haStrategy"`
@@ -52,10 +59,20 @@ type HealthConfig struct {
 	Port    int  `yaml:"port"`
 }
 
-// GRPCConfig controls the unified gRPC server.
+// GRPCConfig controls the unified gRPC server and per-service toggles.
+// The gRPC server starts if any service is enabled. If the section is absent,
+// no gRPC server is started.
 type GRPCConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Port    int  `yaml:"port"`
+	Port      int  `yaml:"port"`
+	Ingestion bool `yaml:"ingestion"`
+	Admin     bool `yaml:"admin"`
+	Query     bool `yaml:"query"`
+	Metadata  bool `yaml:"metadata"`
+}
+
+// HasAnyService returns true if at least one gRPC service is enabled.
+func (c *GRPCConfig) HasAnyService() bool {
+	return c.Ingestion || c.Admin || c.Query || c.Metadata
 }
 
 // TableConfig defines a table declared in the config file.
@@ -74,7 +91,9 @@ type TableKafkaConfig struct {
 
 // WorkerConfig holds worker settings.
 type WorkerConfig struct {
-	Concurrency int `yaml:"concurrency"`
+	Concurrency              int    `yaml:"concurrency"`
+	ClpBinaryPath            string `yaml:"clpBinaryPath"`
+	ClpProcessTimeoutSeconds int    `yaml:"clpProcessTimeoutSeconds"`
 }
 
 // ResolveNodeID reads the node ID from the environment variable specified
@@ -114,14 +133,23 @@ func LoadNodeConfig(path string) (*NodeConfig, error) {
 	return &cfg, nil
 }
 
-// hasCoordinator returns true if the coordinator section has meaningful config.
-func (c *NodeConfig) hasCoordinator() bool {
-	return len(c.Tables) > 0 || c.Coordinator.HAStrategy != "" || c.Coordinator.NodeIDEnvVar != ""
+// EffectiveReplica returns the replica database config if set,
+// otherwise falls back to the primary database config.
+func (c *NodeConfig) EffectiveReplica() DatabaseConfig {
+	if c.Database.Replica != nil && c.Database.Replica.Host != "" {
+		return *c.Database.Replica
+	}
+	return c.Database.Primary
+}
+
+// HasCoordinator returns true if the coordinator section has meaningful config.
+func (c *NodeConfig) HasCoordinator() bool {
+	return len(c.Tables) > 0 || c.Coordinator.HAStrategy != ""
 }
 
 // validateRaw checks user-provided values before defaults are applied.
 func (c *NodeConfig) validateRaw() error {
-	if c.hasCoordinator() {
+	if c.HasCoordinator() {
 		if c.Coordinator.LeaseTTLSeconds < 0 {
 			return fmt.Errorf("coordinator.leaseTtlSeconds must be non-negative, got %d", c.Coordinator.LeaseTTLSeconds)
 		}
@@ -142,25 +170,66 @@ func (c *NodeConfig) validateRaw() error {
 }
 
 func (c *NodeConfig) validate() error {
-	if c.Database.Host == "" {
-		return fmt.Errorf("database.host is required")
+	hasPrimary := c.Database.Primary.Host != ""
+	hasReplica := c.Database.Replica != nil && c.Database.Replica.Host != ""
+	if !hasPrimary && !hasReplica {
+		return fmt.Errorf("at least one of database.primary or database.replica must be configured")
 	}
-	if c.Database.Port < 1 || c.Database.Port > 65535 {
-		return fmt.Errorf("database.port must be 1-65535, got %d", c.Database.Port)
-	}
-	if c.Server.Health.Enabled {
-		if c.Server.Health.Port < 1 || c.Server.Health.Port > 65535 {
-			return fmt.Errorf("server.health.port must be 1-65535, got %d", c.Server.Health.Port)
+	if hasPrimary {
+		if c.Database.Primary.Port < 1 || c.Database.Primary.Port > 65535 {
+			return fmt.Errorf("database.primary.port must be 1-65535, got %d", c.Database.Primary.Port)
 		}
 	}
-	if c.Server.GRPC.Enabled {
-		if c.Server.GRPC.Port < 1 || c.Server.GRPC.Port > 65535 {
-			return fmt.Errorf("server.grpc.port must be 1-65535, got %d", c.Server.GRPC.Port)
+	if hasReplica {
+		if c.Database.Replica.Port < 1 || c.Database.Replica.Port > 65535 {
+			return fmt.Errorf("database.replica.port must be 1-65535, got %d", c.Database.Replica.Port)
+		}
+	}
+	if c.Health.Enabled {
+		if c.Health.Port < 1 || c.Health.Port > 65535 {
+			return fmt.Errorf("health.port must be 1-65535, got %d", c.Health.Port)
+		}
+	}
+	if c.GRPC.HasAnyService() {
+		if c.GRPC.Port < 1 || c.GRPC.Port > 65535 {
+			return fmt.Errorf("grpc.port must be 1-65535, got %d", c.GRPC.Port)
+		}
+		// Ingestion and admin require primary database
+		if !hasPrimary && (c.GRPC.Ingestion || c.GRPC.Admin) {
+			return fmt.Errorf("database.primary is required when grpc.ingestion or grpc.admin is enabled")
+		}
+		// Ingestion requires coordinator (tables + batching writer)
+		if c.GRPC.Ingestion && !c.HasCoordinator() {
+			return fmt.Errorf("grpc.ingestion requires coordinator config (tables must be configured)")
+		}
+		// Query and metadata require at least one database
+		if !hasPrimary && !hasReplica && (c.GRPC.Query || c.GRPC.Metadata) {
+			return fmt.Errorf("database.primary or database.replica is required when grpc.query or grpc.metadata is enabled")
 		}
 	}
 
+	// Coordinator and workers require primary database
+	if !hasPrimary && (c.HasCoordinator() || c.Worker.Concurrency > 0) {
+		return fmt.Errorf("database.primary is required when coordinator or worker is enabled")
+	}
+
+	// Storage validation — when coordinator or workers need storage
+	if c.HasCoordinator() || c.Worker.Concurrency > 0 {
+		if c.Storage.DefaultBackend == "" {
+			return fmt.Errorf("storage.defaultBackend is required when coordinator or worker is enabled")
+		}
+		if _, ok := c.Storage.Backends[c.Storage.DefaultBackend]; !ok {
+			return fmt.Errorf("storage.defaultBackend %q not found in storage.backends", c.Storage.DefaultBackend)
+		}
+	}
+
+	// Workers require clp-s binary
+	if c.Worker.Concurrency > 0 && c.Worker.ClpBinaryPath == "" {
+		return fmt.Errorf("clp-s binary not found: set worker.clpBinaryPath or add clp-s to $PATH")
+	}
+
 	// Coordinator validation — only when coordinator section is present
-	if c.hasCoordinator() {
+	if c.HasCoordinator() {
 		for i, t := range c.Tables {
 			if t.Name == "" {
 				return fmt.Errorf("tables[%d].name is required", i)
@@ -183,18 +252,15 @@ func (c *NodeConfig) validate() error {
 }
 
 func applyDefaults(cfg *NodeConfig) {
-	if cfg.Database.Port == 0 {
-		cfg.Database.Port = 3306
+	if cfg.Health.Port == 0 {
+		cfg.Health.Port = 8081
 	}
-	if cfg.Server.Health.Port == 0 {
-		cfg.Server.Health.Port = 8081
-	}
-	if cfg.Server.GRPC.Port == 0 {
-		cfg.Server.GRPC.Port = 9090
+	if cfg.GRPC.Port == 0 {
+		cfg.GRPC.Port = 9090
 	}
 
 	// Coordinator defaults — only when coordinator section is present
-	if cfg.hasCoordinator() {
+	if cfg.HasCoordinator() {
 		if cfg.Coordinator.ReconciliationIntervalSeconds == 0 {
 			cfg.Coordinator.ReconciliationIntervalSeconds = 60
 		}
@@ -218,7 +284,15 @@ func applyDefaults(cfg *NodeConfig) {
 	// No worker concurrency default — absence means disabled.
 	// Users must explicitly set worker.concurrency > 0 to enable workers.
 
-	if cfg.Storage.ClpProcessTimeoutSeconds == 0 {
-		cfg.Storage.ClpProcessTimeoutSeconds = 300
+	if cfg.Worker.Concurrency > 0 {
+		// Resolve clp-s binary: explicit path > $PATH lookup
+		if cfg.Worker.ClpBinaryPath == "" {
+			if p, err := exec.LookPath("clp-s"); err == nil {
+				cfg.Worker.ClpBinaryPath = p
+			}
+		}
+		if cfg.Worker.ClpProcessTimeoutSeconds == 0 {
+			cfg.Worker.ClpProcessTimeoutSeconds = 300
+		}
 	}
 }

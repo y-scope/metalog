@@ -13,8 +13,8 @@ import (
 // In a ConfigMap mount, each key is a file whose content is the value.
 // Supports two layouts:
 //  1. Single file: the directory contains a "node.yaml" file (same as LoadNodeConfig).
-//  2. Multi-key: separate files for "database", "storage", "server", "coordinator",
-//     "tables", "worker" are merged into one config.
+//  2. Multi-key: separate files for "database", "storage", "grpc", "health",
+//     "coordinator", "tables", "worker" are merged into one config.
 func ParseConfigMap(dir string) (*NodeConfig, error) {
 	// Check for single-file layout first.
 	singleFile := filepath.Join(dir, "node.yaml")
@@ -27,7 +27,7 @@ func ParseConfigMap(dir string) (*NodeConfig, error) {
 
 	if data, err := readConfigMapKey(dir, "database"); err == nil {
 		if err := yaml.Unmarshal(data, &struct {
-			Database *DatabaseConfig `yaml:"database"`
+			Database *DatabaseSection `yaml:"database"`
 		}{Database: &cfg.Database}); err != nil {
 			return nil, fmt.Errorf("parse configmap key 'database': %w", err)
 		}
@@ -41,11 +41,19 @@ func ParseConfigMap(dir string) (*NodeConfig, error) {
 		}
 	}
 
-	if data, err := readConfigMapKey(dir, "server"); err == nil {
+	if data, err := readConfigMapKey(dir, "grpc"); err == nil {
 		if err := yaml.Unmarshal(data, &struct {
-			Server *ServerConfig `yaml:"server"`
-		}{Server: &cfg.Server}); err != nil {
-			return nil, fmt.Errorf("parse configmap key 'server': %w", err)
+			GRPC *GRPCConfig `yaml:"grpc"`
+		}{GRPC: &cfg.GRPC}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'grpc': %w", err)
+		}
+	}
+
+	if data, err := readConfigMapKey(dir, "health"); err == nil {
+		if err := yaml.Unmarshal(data, &struct {
+			Health *HealthConfig `yaml:"health"`
+		}{Health: &cfg.Health}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'health': %w", err)
 		}
 	}
 
