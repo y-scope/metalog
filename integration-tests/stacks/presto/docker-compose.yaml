@@ -22,7 +22,7 @@ services:
     build:
       context: ../../..
       dockerfile: integration-tests/stacks/presto/Dockerfile
-    command: ["/app/metalog-server", "--config", "/etc/clp/node.yaml"]
+    command: ["/app/metalog", "serve", "--config", "/etc/clp/node.yaml"]
     volumes:
       - ./config/node.yaml:/etc/clp/node.yaml:ro
     ports:
@@ -61,7 +61,7 @@ services:
     build:
       context: ../../..
       dockerfile: integration-tests/stacks/presto/Dockerfile
-    entrypoint: ["/app/metalog-apiserver"]
+    entrypoint: ["/app/metalog"]
     command: ["--config", "/etc/clp/node.yaml"]
     ports:
       - "50051:9091"

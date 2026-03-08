@@ -6,8 +6,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=1 go build -o /out/metalog-server ./cmd/metalog-server \
-    && CGO_ENABLED=1 go build -o /out/metalog-apiserver ./cmd/metalog-apiserver
+RUN CGO_ENABLED=1 go build -o /out/metalog ./cmd/metalog
 
 FROM debian:bookworm-slim
 WORKDIR /app
@@ -16,8 +15,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates librdkafka1 curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /out/metalog-server /app/metalog-server
-COPY --from=build /out/metalog-apiserver /app/metalog-apiserver
+COPY --from=build /out/metalog /app/metalog
 
-ENTRYPOINT ["/app/metalog-server"]
+ENTRYPOINT ["/app/metalog", "serve"]
 CMD ["--config", "/etc/clp/node.yaml"]

@@ -19,8 +19,9 @@ import (
 	"github.com/y-scope/metalog/internal/query"
 )
 
-// Server runs the metalog coordinator server. It parses --config from flags,
-// starts the node + gRPC services, and blocks until SIGINT/SIGTERM.
+// Server implements the "metalog serve" subcommand. It parses --config, starts
+// the node (coordinator, workers, gRPC — all config-driven), and blocks until
+// SIGINT/SIGTERM.
 func Server() {
 	configPath := flag.String("config", "/etc/clp/node.yaml", "path to node.yaml config")
 	flag.Parse()
@@ -42,23 +43,47 @@ func Server() {
 		log.Fatal("failed to start node", zap.Error(err))
 	}
 
+	// Log database pool availability
+	if n.Shared().DB == nil {
+		log.Warn("no primary database configured — coordinator, worker, ingestion, and admin services are disabled")
+	}
+	if n.Shared().ReadDB != nil {
+		log.Info("replica database pool active — query and metadata services will use replica")
+	} else if n.Shared().DB != nil {
+		log.Warn("no replica database configured — query and metadata services will use primary")
+	}
+
 	var grpcSrv *grpcserver.Server
-	if cfg.Server.GRPC.Enabled {
-		grpcSrv = grpcserver.NewServer(cfg.Server.GRPC.Port, log)
+	if cfg.GRPC.HasAnyService() {
+		grpcSrv = grpcserver.NewServer(cfg.GRPC.Port, log)
 
-		ingestionGrpc := grpcserver.NewIngestionHandler(n.IngestionService(), log)
-		ingestionpb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
+		if cfg.GRPC.Ingestion {
+			ingestionGrpc := grpcserver.NewIngestionHandler(n.IngestionService(), log)
+			ingestionpb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
+			log.Info("gRPC service registered", zap.String("service", "ingestion"))
+		}
 
-		regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Storage.TableCompression, log)
-		adminGrpc := grpcserver.NewAdminHandler(regSvc, log)
-		coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminGrpc)
+		if cfg.GRPC.Admin {
+			regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Coordinator.TableCompression, log)
+			adminGrpc := grpcserver.NewAdminHandler(regSvc, log)
+			coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminGrpc)
+			log.Info("gRPC service registered", zap.String("service", "admin"))
+		}
 
-		queryEngine := query.NewSplitQueryEngine(n.Shared().DB, log)
-		queryGrpc := grpcserver.NewQueryHandler(queryEngine, n.Shared().GetColumnRegistry, log)
-		splitspb.RegisterQuerySplitsServiceServer(grpcSrv.GRPCServer(), queryGrpc)
+		if cfg.GRPC.Query {
+			roDB := n.Shared().ReadOnlyDB()
+			queryEngine := query.NewSplitQueryEngine(roDB, log)
+			queryGrpc := grpcserver.NewQueryHandler(queryEngine, n.Shared().GetColumnRegistry, log)
+			splitspb.RegisterQuerySplitsServiceServer(grpcSrv.GRPCServer(), queryGrpc)
+			log.Info("gRPC service registered", zap.String("service", "query"))
+		}
 
-		metaGrpc := grpcserver.NewMetadataHandler(n.Shared().DB, log)
-		metadatapb.RegisterMetadataServiceServer(grpcSrv.GRPCServer(), metaGrpc)
+		if cfg.GRPC.Metadata {
+			roDB := n.Shared().ReadOnlyDB()
+			metaGrpc := grpcserver.NewMetadataHandler(roDB, log)
+			metadatapb.RegisterMetadataServiceServer(grpcSrv.GRPCServer(), metaGrpc)
+			log.Info("gRPC service registered", zap.String("service", "metadata"))
+		}
 
 		errCh := make(chan error, 1)
 		go func() {

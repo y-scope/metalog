@@ -1,8 +1,6 @@
 # Go
 bin/
-/metalog-server
-/metalog-worker
-/metalog-apiserver
+/metalog
 /benchmark-*
 *.exe
 

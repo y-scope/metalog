@@ -31,7 +31,7 @@ from pathlib import Path
 SCRIPT_DIR   = Path(__file__).parent.resolve()
 PROJECT_DIR  = SCRIPT_DIR.parent.parent.parent.resolve()
 COMPOSE_FILE = SCRIPT_DIR / "docker-compose.yml"
-SERVER_BIN   = PROJECT_DIR / "bin" / "metalog-server"
+SERVER_BIN   = PROJECT_DIR / "bin" / "metalog"
 BENCH_BIN    = PROJECT_DIR / "bin" / "benchmark-ingestion"
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ def build_go():
     bin_dir = PROJECT_DIR / "bin"
     bin_dir.mkdir(exist_ok=True)
     for target, output in [
-        ("./cmd/metalog-server", str(SERVER_BIN)),
+        ("./cmd/metalog", str(SERVER_BIN)),
         ("./cmd/benchmark-ingestion", str(BENCH_BIN)),
     ]:
         r = subprocess.run(
@@ -308,9 +308,9 @@ def main():
       topic: clp_spark
       bootstrapServers: localhost:{kafka_port}"""
     if args.mode == "grpc":
-        grpc_section = f"""  grpc:
-    enabled: true
-    port: {grpc_port}"""
+        grpc_section = f"""grpc:
+  port: {grpc_port}
+  ingestion: true"""
 
     with tempfile.NamedTemporaryFile(
         mode="w", prefix="metalog-bench-", suffix=".yaml", delete=False
@@ -318,19 +318,26 @@ def main():
         _temp_config = f.name
         f.write(f"""\
 database:
-  host: localhost
-  port: {db_port}
-  database: metalog_metastore
-  user: root
-  password: password
-  poolSize: 5
-  poolMinIdle: 2
+  primary:
+    host: localhost
+    port: {db_port}
+    database: metalog_metastore
+    user: root
+    password: password
+    poolSize: 5
+    poolMinIdle: 2
+storage:
+  defaultBackend: minio
+  backends:
+    minio:
+      endpoint: http://localhost:9000
+      bucket: logs
+      accessKey: minioadmin
+      secretKey: minioadmin
+      forcePathStyle: true
 coordinator:
   nodeIdEnvVar: HOSTNAME
-server:
 {grpc_section}
-  health:
-    enabled: false
 tables:
   - name: clp_spark
 {kafka_section}
@@ -360,7 +367,7 @@ worker:
             sys.exit(1)
 
     log_info("Starting coordinator...")
-    _coordinator_proc = subprocess.Popen([str(SERVER_BIN), "--config", _temp_config])
+    _coordinator_proc = subprocess.Popen([str(SERVER_BIN), "serve", "--config", _temp_config])
     log_info(f"Coordinator started (PID: {_coordinator_proc.pid})")
 
     if args.mode == "grpc":

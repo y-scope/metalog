@@ -9,9 +9,7 @@ RUN go mod download
 
 # Copy source and build all binaries
 COPY . .
-RUN CGO_ENABLED=1 go build -o /out/metalog-server ./cmd/metalog-server \
-    && CGO_ENABLED=1 go build -o /out/metalog-worker ./cmd/metalog-worker \
-    && CGO_ENABLED=1 go build -o /out/metalog-apiserver ./cmd/metalog-apiserver
+RUN CGO_ENABLED=1 go build -o /out/metalog ./cmd/metalog
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim
@@ -30,11 +28,9 @@ RUN dpkg -i /tmp/clp-core_*.deb || apt-get -f install -y --no-install-recommends
 # Create staging/output dirs for CLP compression
 RUN mkdir -p /tmp/clp-staging /tmp/clp-output
 
-# Copy Go binaries from build stage
-COPY --from=build /out/metalog-server /app/metalog-server
-COPY --from=build /out/metalog-worker /app/metalog-worker
-COPY --from=build /out/metalog-apiserver /app/metalog-apiserver
+# Copy Go binary from build stage
+COPY --from=build /out/metalog /app/metalog
 
-# Default: run the server (coordinator + worker + gRPC)
-ENTRYPOINT ["/app/metalog-server"]
+# Default: run the unified metalog binary (config-driven behavior)
+ENTRYPOINT ["/app/metalog", "serve"]
 CMD ["--config", "/etc/clp/node.yaml"]

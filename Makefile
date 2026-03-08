@@ -16,9 +16,7 @@ all: proto build
 
 # Build all binaries
 build:
-	$(GOBUILD) -o $(BINARY_DIR)/metalog-server ./cmd/metalog-server
-	$(GOBUILD) -o $(BINARY_DIR)/metalog-worker ./cmd/metalog-worker
-	$(GOBUILD) -o $(BINARY_DIR)/metalog-apiserver ./cmd/metalog-apiserver
+	$(GOBUILD) -o $(BINARY_DIR)/metalog ./cmd/metalog
 
 # Generate protobuf/gRPC Go code
 proto:
