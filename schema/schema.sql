@@ -61,12 +61,20 @@
 --    VIRTUAL columns with MD5 hash (16 bytes) solve this while providing O(1) lookups.
 --    VIRTUAL columns: computed on read, stored only in index, not in row data.
 --    Compatible with both MySQL 5.7+ and MariaDB 10.2+.
---    Collision probability: approximately 10^-20 at 1 billion paths (effectively zero).
+--    Collision probability (birthday problem, P ≈ n² / (2 × 2^128)):
+--      - 1 million paths:  ~10^-27
+--      - 1 billion paths:  ~10^-21
+--      - 1 trillion paths: ~10^-15
+--    For context, other data loss risks are orders of magnitude higher:
+--      - Enterprise SSD uncorrectable read error: ~10^-16 per bit
+--      - S3 annual object loss probability:       ~10^-11 (11 nines)
+--      - ECC DRAM uncorrectable error:            ~10^-12 per DIMM/hour
+--    Even at 1 trillion paths, the MD5 collision probability is below the
+--    hardware bit error rate. This is accepted as negligible data loss risk.
 --    If a collision occurs: silent data loss (second row overwrites first via UPSERT).
---    Design decision: We accept this without a verify-on-match guard because the probability
---    is negligible for realistic path counts, and adding a full-path comparison on every
---    UPSERT would add a row fetch to every insert — measurable overhead on a hot path doing
---    14-19K UPSERT/sec — to protect against an event that is astronomically unlikely.
+--    No detection or logging is implemented — the overhead of a full-path comparison
+--    on every UPSERT (row fetch on a 14-19K ops/sec hot path) is not justified to
+--    protect against an event less likely than hardware failure.
 --    Well before path cardinality approaches a scale where collisions matter, the correct
 --    response is to partition the load across more tables — which the coordinator already
 --    supports — not to upgrade the hash algorithm.

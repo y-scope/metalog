@@ -274,16 +274,19 @@ func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
 
 // ClaimOrphansHeartbeat claims tables from nodes whose heartbeat is stale.
 // Uses LEFT JOIN to also catch nodes that never registered (crashed before first heartbeat).
+// To avoid false positives on fresh restarts (node assigned but hasn't heartbeated yet),
+// the "never registered" case also requires that the assignment itself is older than the
+// dead threshold.
 func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThreshold time.Duration) ([]string, error) {
 	cutoff := time.Now().Add(-deadThreshold).UnixNano()
-	// Find orphans: owner is dead (stale heartbeat) or never registered (LEFT JOIN NULL)
+	// Find orphans: owner has stale heartbeat, or never registered AND assignment is old
 	query := "SELECT a.table_name, a.node_id FROM " + metastore.TableRegistryAssignment + " a " +
 		"JOIN " + metastore.TableRegistry + " t ON a.table_name = t.table_name " +
 		"LEFT JOIN " + metastore.NodeRegistryTable + " n ON a.node_id = n.node_id " +
 		"WHERE t.active = true AND a.node_id IS NOT NULL AND a.node_id != ? " +
-		"AND (n.node_id IS NULL OR n.last_heartbeat_at < ?)"
+		"AND (n.last_heartbeat_at < ? OR (n.node_id IS NULL AND (a.node_assigned_at IS NULL OR a.node_assigned_at < ?)))"
 
-	rows, err := r.db.QueryContext(ctx, query, r.nodeID, cutoff)
+	rows, err := r.db.QueryContext(ctx, query, r.nodeID, cutoff, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("find heartbeat orphans: %w", err)
 	}
