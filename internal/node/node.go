@@ -170,18 +170,23 @@ func (n *Node) Start() error {
 			return err
 		}
 
+		provisioned := make(map[string]bool, len(n.cfg.Tables))
 		for _, t := range n.cfg.Tables {
 			if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Coordinator.TableCompression, n.log); err != nil {
 				n.log.Error("failed to provision table", zap.String("table", t.Name), zap.Error(err))
 				continue
 			}
+			provisioned[t.Name] = true
 		}
 
 		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.log)
 		n.ingestSvc = ingestion.NewService(n.writer, n.log)
 
-		// Claim tables declared in YAML
+		// Claim tables that were successfully provisioned
 		for _, t := range n.cfg.Tables {
+			if !provisioned[t.Name] {
+				continue
+			}
 			claimed, err := n.registry.ClaimTable(ctx, t.Name)
 			if err != nil {
 				n.log.Error("failed to claim table", zap.String("table", t.Name), zap.Error(err))
@@ -359,10 +364,10 @@ func (n *Node) startCoordinator(tableName string) error {
 	if err != nil {
 		return err
 	}
+	cu.Start()
 	n.coordMu.Lock()
 	n.coordinators[tableName] = cu
 	n.coordMu.Unlock()
-	cu.Start()
 	return nil
 }
 

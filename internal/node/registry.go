@@ -168,6 +168,15 @@ func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.
 			if _, err := r.db.ExecContext(ctx, kQuery, kArgs...); err != nil {
 				return fmt.Errorf("upsert kafka config %s: %w", t.Name, err)
 			}
+		} else {
+			// No Kafka config in YAML — delete any stale DB row so
+			// startCoordinator does not spin up an unwanted consumer.
+			delQuery, delArgs, _ := sq.Delete(metastore.TableRegistryKafka).
+				Where(sq.Eq{"table_name": t.Name}).
+				ToSql()
+			if _, err := r.db.ExecContext(ctx, delQuery, delArgs...); err != nil {
+				return fmt.Errorf("delete stale kafka config %s: %w", t.Name, err)
+			}
 		}
 	}
 	return nil
@@ -284,11 +293,15 @@ func (r *CoordinatorRegistry) ReleaseAllTables(ctx context.Context) error {
 // SendHeartbeat updates the heartbeat timestamp for this node.
 func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
 	now := time.Now().UnixNano()
-	query, args, _ := sq.Insert(metastore.NodeRegistryTable).
+	insert := sq.Insert(metastore.NodeRegistryTable).
 		Columns("node_id", "last_heartbeat_at", "started_at").
-		Values(r.nodeID, now, now).
-		Suffix("ON DUPLICATE KEY UPDATE last_heartbeat_at = VALUES(last_heartbeat_at)").
-		ToSql()
+		Values(r.nodeID, now, now)
+	if r.isMariaDB {
+		insert = insert.Suffix(db.OnDuplicateKeyUpdateValues("last_heartbeat_at"))
+	} else {
+		insert = insert.Suffix(db.OnDuplicateKeyUpdateAlias("new", "last_heartbeat_at"))
+	}
+	query, args, _ := insert.ToSql()
 	_, err := r.db.ExecContext(ctx, query, args...)
 	return err
 }
