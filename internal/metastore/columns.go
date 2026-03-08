@@ -26,44 +26,50 @@ const (
 	ColExt                      = "ext"
 )
 
-// baseCols are the fixed columns used in standard INSERT/UPSERT operations.
+// baseCols returns the fixed columns used in standard INSERT/UPSERT operations.
 // Order matters — these correspond to the VALUES placeholders.
-var baseCols = []string{
-	ColMinTimestamp,
-	ColMaxTimestamp,
-	ColClpArchiveCreatedAt,
-	ColClpIRStorageBackend,
-	ColClpIRBucket,
-	ColClpIRPath,
-	ColClpArchiveStorageBackend,
-	ColClpArchiveBucket,
-	ColClpArchivePath,
-	ColState,
-	ColRecordCount,
-	ColRawSizeBytes,
-	ColClpIRSizeBytes,
-	ColClpArchiveSizeBytes,
-	ColRetentionDays,
-	ColExpiresAt,
+// Returns a fresh slice each call to prevent accidental mutation.
+func baseCols() []string {
+	return []string{
+		ColMinTimestamp,
+		ColMaxTimestamp,
+		ColClpArchiveCreatedAt,
+		ColClpIRStorageBackend,
+		ColClpIRBucket,
+		ColClpIRPath,
+		ColClpArchiveStorageBackend,
+		ColClpArchiveBucket,
+		ColClpArchivePath,
+		ColState,
+		ColRecordCount,
+		ColRawSizeBytes,
+		ColClpIRSizeBytes,
+		ColClpArchiveSizeBytes,
+		ColRetentionDays,
+		ColExpiresAt,
+	}
 }
 
-// guardedUpdateCols are columns that use IF(guard, ...) in ON DUPLICATE KEY UPDATE.
-var guardedUpdateCols = []string{
-	ColMaxTimestamp,
-	ColClpArchiveCreatedAt,
-	ColClpIRStorageBackend,
-	ColClpIRBucket,
-	ColClpIRPath,
-	ColClpArchiveStorageBackend,
-	ColClpArchiveBucket,
-	ColClpArchivePath,
-	ColState,
-	ColRecordCount,
-	ColRawSizeBytes,
-	ColClpIRSizeBytes,
-	ColClpArchiveSizeBytes,
-	ColRetentionDays,
-	ColExpiresAt,
+// guardedUpdateCols returns the columns that use IF(guard, ...) in ON DUPLICATE KEY UPDATE.
+// Returns a fresh slice each call to prevent accidental mutation.
+func guardedUpdateCols() []string {
+	return []string{
+		ColMaxTimestamp,
+		ColClpArchiveCreatedAt,
+		ColClpIRStorageBackend,
+		ColClpIRBucket,
+		ColClpIRPath,
+		ColClpArchiveStorageBackend,
+		ColClpArchiveBucket,
+		ColClpArchivePath,
+		ColState,
+		ColRecordCount,
+		ColRawSizeBytes,
+		ColClpIRSizeBytes,
+		ColClpArchiveSizeBytes,
+		ColRetentionDays,
+		ColExpiresAt,
+	}
 }
 
 // Table registry table names.
