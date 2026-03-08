@@ -10,6 +10,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	metapb "github.com/y-scope/metalog/gen/proto/metadatapb"
+	splitspb "github.com/y-scope/metalog/gen/proto/splitspb"
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
@@ -101,7 +102,7 @@ func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 		return nil, grpcstatus.Error(codes.InvalidArgument, "table is required")
 	}
 
-	query, args, err := sq.Select("column_name", "agg_key", "value_type").
+	query, args, err := sq.Select("column_name", "agg_key", "COALESCE(agg_value, '')", "aggregation_type", "value_type").
 		From(metastore.AggRegistryTable).
 		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
 		OrderBy("column_name").
@@ -117,13 +118,15 @@ func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 
 	var aggs []*metapb.AggInfo
 	for rows.Next() {
-		var colName, aggKey, valueType string
-		if err := rows.Scan(&colName, &aggKey, &valueType); err != nil {
+		var colName, aggKey, aggValue, aggType, valueType string
+		if err := rows.Scan(&colName, &aggKey, &aggValue, &aggType, &valueType); err != nil {
 			return nil, grpcstatus.Errorf(codes.Internal, "scan agg: %v", err)
 		}
 		aggInfo := &metapb.AggInfo{
-			Name:        aggKey,
-			AliasColumn: colName,
+			Name:            aggKey,
+			Value:           aggValue,
+			AggregationType: splitspb.AggregationType(splitspb.AggregationType_value["AGGREGATION_TYPE_"+aggType]),
+			AliasColumn:     colName,
 		}
 		if valueType == "FLOAT" || valueType == "float" {
 			aggInfo.ValueType = metapb.AggValueType_AGG_VALUE_TYPE_FLOAT
