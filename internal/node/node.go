@@ -170,23 +170,11 @@ func (n *Node) Start() error {
 			return err
 		}
 
-		provisioned := make(map[string]bool, len(n.cfg.Tables))
-		for _, t := range n.cfg.Tables {
-			if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Coordinator.TableCompression, n.log); err != nil {
-				n.log.Error("failed to provision table", zap.String("table", t.Name), zap.Error(err))
-				continue
-			}
-			provisioned[t.Name] = true
-		}
-
 		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.log)
 		n.ingestSvc = ingestion.NewService(n.writer, n.log)
 
-		// Claim tables that were successfully provisioned
+		// Claim and start coordinators — startCoordinator calls EnsureTable internally.
 		for _, t := range n.cfg.Tables {
-			if !provisioned[t.Name] {
-				continue
-			}
 			claimed, err := n.registry.ClaimTable(ctx, t.Name)
 			if err != nil {
 				n.log.Error("failed to claim table", zap.String("table", t.Name), zap.Error(err))
@@ -318,6 +306,13 @@ func (n *Node) Stop() {
 		n.healthSrv.Stop(shutdownCtx)
 	}
 
+	// Deregister node from _node_registry (skip when no primary DB, e.g. API-only nodes)
+	if n.shared.DB != nil {
+		if err := n.registry.DeregisterNode(context.Background()); err != nil {
+			n.log.Warn("failed to deregister node", zap.Error(err))
+		}
+	}
+
 	// Release shared resources
 	n.shared.Close()
 
@@ -345,12 +340,26 @@ func (n *Node) NodeID() string {
 }
 
 func (n *Node) startCoordinator(tableName string) error {
+	// Ensure the data table exists (idempotent). This covers reconciliation
+	// paths where a table was registered via admin API but never provisioned.
+	if err := schema.EnsureTable(n.ctx, n.shared.DB, tableName, n.shared.IsMariaDB, n.cfg.Coordinator.TableCompression, n.log); err != nil {
+		return fmt.Errorf("start coordinator %s: ensure table: %w", tableName, err)
+	}
+
+	// Read feature flags from _table_config.
+	flags, err := n.registry.GetTableFeatureFlags(n.ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("start coordinator %s: %w", tableName, err)
+	}
+
 	// Read Kafka config from DB (source of truth — seeded by UpsertTables or admin API).
 	kafkaCfg, err := n.registry.GetTableKafkaConfig(n.ctx, tableName)
 	if err != nil {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
-	if kafkaCfg.Topic == "" {
+	if !flags.KafkaPollerEnabled {
+		kafkaCfg = config.TableKafkaConfig{} // disable consumer creation
+	} else if kafkaCfg.Topic == "" {
 		n.log.Warn("no Kafka config in DB for table — coordinator will run without Kafka consumer",
 			zap.String("table", tableName))
 	}
@@ -360,7 +369,13 @@ func (n *Node) startCoordinator(tableName string) error {
 		return err
 	}
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	n.log.Info("starting coordinator",
+		zap.String("table", tableName),
+		zap.Bool("kafkaPoller", flags.KafkaPollerEnabled),
+		zap.Bool("consolidation", flags.ConsolidationEnabled),
+	)
+
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, flags, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}

@@ -477,6 +477,42 @@ func (r *CoordinatorRegistry) GetTableID(ctx context.Context, tableName string) 
 	return tableID, nil
 }
 
+// TableFeatureFlags holds per-table feature toggles from _table_config.
+type TableFeatureFlags struct {
+	KafkaPollerEnabled   bool
+	ConsolidationEnabled bool
+}
+
+// GetTableFeatureFlags reads per-table feature flags from _table_config.
+// Returns defaults (both enabled) if no row exists.
+func (r *CoordinatorRegistry) GetTableFeatureFlags(ctx context.Context, tableName string) (TableFeatureFlags, error) {
+	query, args, _ := sq.Select("kafka_poller_enabled", "consolidation_enabled").
+		From(metastore.TableRegistryConfig).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
+
+	var flags TableFeatureFlags
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+		&flags.KafkaPollerEnabled, &flags.ConsolidationEnabled,
+	)
+	if err == sql.ErrNoRows {
+		return TableFeatureFlags{KafkaPollerEnabled: true, ConsolidationEnabled: true}, nil
+	}
+	if err != nil {
+		return flags, fmt.Errorf("get feature flags for %s: %w", tableName, err)
+	}
+	return flags, nil
+}
+
+// DeregisterNode removes this node from the _node_registry.
+func (r *CoordinatorRegistry) DeregisterNode(ctx context.Context) error {
+	query, args, _ := sq.Delete(metastore.NodeRegistryTable).
+		Where(sq.Eq{"node_id": r.nodeID}).
+		ToSql()
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
+}
+
 // scanTableNames is a helper that executes a query and scans a single string column.
 func (r *CoordinatorRegistry) scanTableNames(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, query, args...)

@@ -51,6 +51,7 @@ func NewCoordinatorUnit(
 	tableName string,
 	tableID string,
 	kafkaCfg config.TableKafkaConfig,
+	flags TableFeatureFlags,
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
@@ -65,25 +66,30 @@ func NewCoordinatorUnit(
 	ingestSvc.SetRegistry(tableName, reg)
 	shared.SetColumnRegistry(tableName, reg)
 
-	inFlight := consolidation.NewInFlightSet()
-	policy := consolidation.NewTimeWindowPolicy(time.Hour, 2, 100)
-	taskQueue := taskqueue.NewQueue(shared.DB, log)
+	// Consolidation planner (conditional on feature flag).
+	var planner *consolidation.Planner
+	if flags.ConsolidationEnabled {
+		inFlight := consolidation.NewInFlightSet()
+		policy := consolidation.NewTimeWindowPolicy(time.Hour, 2, 100)
+		taskQueue := taskqueue.NewQueue(shared.DB, log)
 
-	planner, err := consolidation.NewPlanner(
-		shared.DB, tableName, policy, inFlight, taskQueue,
-		shared.StorageRegistry,
-		shared.ArchiveBackend, shared.ArchiveBucket,
-		config.DefaultPlannerInterval,
-		log,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("new coordinator unit: planner: %w", err)
+		planner, err = consolidation.NewPlanner(
+			shared.DB, tableName, policy, inFlight, taskQueue,
+			shared.StorageRegistry,
+			shared.ArchiveBackend, shared.ArchiveBucket,
+			config.DefaultPlannerInterval,
+			log,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: planner: %w", err)
+		}
 	}
 
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 3, 90, 1000, log)
 
 	// Create Kafka consumer if configured — routes through IngestionService
-	// for proper dim/agg column resolution.
+	// for proper dim/agg column resolution. Kafka config is cleared by the
+	// caller when kafka_poller_enabled=false.
 	var kc *kafkaconsumer.Consumer
 	if kafkaCfg.Topic != "" && kafkaCfg.BootstrapServers != "" {
 		groupID := kafkaGroupPrefix + tableName + "-" + tableID
@@ -135,12 +141,14 @@ func (u *CoordinatorUnit) Restart() {
 func (u *CoordinatorUnit) Start() {
 	u.log.Info("starting coordinator unit")
 
-	// Planner goroutine
-	u.wg.Add(1)
-	go func() {
-		defer u.wg.Done()
-		u.planner.Run(u.ctx)
-	}()
+	// Planner goroutine (nil when consolidation_enabled=false)
+	if u.planner != nil {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.planner.Run(u.ctx)
+		}()
+	}
 
 	// Partition maintenance goroutine
 	u.wg.Add(1)
