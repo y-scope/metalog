@@ -53,8 +53,7 @@ func NewWorkerUnit(parent context.Context, concurrency int, nodeID string, share
 func (u *WorkerUnit) Start() {
 	u.log.Info("starting worker unit", zap.Int("workers", u.concurrency))
 
-	db := u.shared.EffectiveWorkerDB()
-	tq := taskqueue.NewQueue(db, u.log)
+	tq := taskqueue.NewQueue(u.shared.DB, u.log)
 
 	u.prefetcher = worker.NewPrefetcher(tq, u.nodeID, config.DefaultTaskClaimBatchSize, u.log)
 

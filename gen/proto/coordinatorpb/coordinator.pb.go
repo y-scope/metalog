@@ -3,6 +3,11 @@
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
 // source: coordinator.proto
+//
+// TODO: Regenerate with protoc after CoordinatorService → AdminService rename.
+// The rawDesc byte string still encodes the old service name. The _grpc.pb.go
+// file was updated manually and is correct; this file needs protoc to update
+// the embedded wire descriptor.
 
 package coordinatorpb
 

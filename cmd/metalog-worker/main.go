@@ -33,12 +33,7 @@ func main() {
 		log.Fatal("failed to load config", zap.String("path", *configPath), zap.Error(err))
 	}
 
-	// Use worker DB config if available, otherwise main DB
-	dbCfg := cfg.Database
-	if cfg.Worker.Database != nil {
-		dbCfg = *cfg.Worker.Database
-	}
-	pool, err := db.NewPool(dbCfg)
+	pool, err := db.NewPool(cfg.Database)
 	if err != nil {
 		log.Fatal("failed to create DB pool", zap.Error(err))
 	}

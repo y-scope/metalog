@@ -50,8 +50,8 @@ func Server() {
 		ingestionpb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
 
 		regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Storage.TableCompression, log)
-		coordGrpc := grpcserver.NewCoordinatorHandler(regSvc, log)
-		coordinatorpb.RegisterCoordinatorServiceServer(grpcSrv.GRPCServer(), coordGrpc)
+		adminGrpc := grpcserver.NewAdminHandler(regSvc, log)
+		coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminGrpc)
 
 		queryEngine := query.NewSplitQueryEngine(n.Shared().DB, log)
 		queryGrpc := grpcserver.NewQueryHandler(queryEngine, n.Shared().GetColumnRegistry, log)

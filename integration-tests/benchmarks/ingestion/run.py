@@ -317,16 +317,17 @@ def main():
     ) as f:
         _temp_config = f.name
         f.write(f"""\
-node:
-  name: benchmark-coordinator
-  database:
-    host: localhost
-    port: {db_port}
-    database: metalog_metastore
-    user: root
-    password: password
-    poolSize: 20
-    poolMinIdle: 5
+database:
+  host: localhost
+  port: {db_port}
+  database: metalog_metastore
+  user: root
+  password: password
+  poolSize: 5
+  poolMinIdle: 2
+coordinator:
+  nodeIdEnvVar: HOSTNAME
+server:
 {grpc_section}
   health:
     enabled: false

@@ -50,7 +50,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 | `QuerySplitsService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
 | `MetadataService` | `metadata.proto` | `metadatapb` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
 | `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
-| `CoordinatorService` | `coordinator.proto` | `coordinatorpb` | 9090 | Runtime table registration (no restart required) |
+| `AdminService` | `coordinator.proto` | `coordinatorpb` | 9090 | Runtime table registration (no restart required) |
 
 ### Proto Definitions
 
@@ -91,7 +91,7 @@ Each `IngestRequest` carries a `MetadataRecord` with typed `DimEntry` and `AggEn
 **`coordinator.proto` — runtime table management:**
 
 ```protobuf
-service CoordinatorService {
+service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
 }
 ```
@@ -546,7 +546,7 @@ grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
 
 ## Future API Categories
 
-> **Note:** The query APIs (`QuerySplitsService`, `MetadataService`), the ingestion API (`MetadataIngestionService`), and the coordinator management API (`CoordinatorService`) are all implemented. The categories below describe higher-level planned APIs built on top of these primitives.
+> **Note:** The query APIs (`QuerySplitsService`, `MetadataService`), the ingestion API (`MetadataIngestionService`), and the coordinator management API (`AdminService`) are all implemented. The categories below describe higher-level planned APIs built on top of these primitives.
 
 | Category | Primary Use Case |
 |----------|------------------|
@@ -557,7 +557,7 @@ grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
 
 ---
 
-## CoordinatorService
+## AdminService
 
 Runtime table registration — write all registry rows and provision the physical table without
 editing `node.yaml` or restarting the node. All operations are fully idempotent.
@@ -608,7 +608,7 @@ grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "kafka": {"topic": "spark-ir", "bootstrap_servers": "kafka:29092"}
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
 
 # Second call — idempotent
@@ -625,7 +625,7 @@ grpcurl -plaintext -d '{
   },
   "consolidation_enabled": false
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
 #### Error codes
@@ -662,7 +662,7 @@ internal/
 │   ├── ingestion.go        — implements MetadataIngestionService
 │   ├── query.go            — implements QuerySplitsService
 │   ├── metadata.go         — implements MetadataService
-│   └── coordinator.go      — implements CoordinatorService
+│   └── admin.go            — implements AdminService
 ├── query/
 │   ├── engine.go           — split query engine (keyset pagination, streaming)
 │   ├── filter.go           — filter expression validation
@@ -674,7 +674,7 @@ proto/
 ├── splits.proto            — QuerySplitsService + Split messages
 ├── metadata.proto          — MetadataService messages
 ├── ingestion.proto         — MetadataIngestionService + record types
-└── coordinator.proto       — CoordinatorService messages
+└── coordinator.proto       — AdminService messages
 ```
 
 ---

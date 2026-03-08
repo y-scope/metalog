@@ -6,11 +6,11 @@ option java_package = "com.yscope.metalog.coordinator.grpc.proto";
 option java_multiple_files = true;
 option go_package = "github.com/y-scope/metalog/gen/proto/coordinatorpb";
 
-// Coordinator management service.
+// Admin service for runtime table management.
 //
 // Allows operators to register new Kafka-ingested tables at runtime without
 // editing node.yaml or restarting the node. All RPCs are idempotent.
-service CoordinatorService {
+service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
 }
 

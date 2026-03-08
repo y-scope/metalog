@@ -19,111 +19,111 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CoordinatorService_RegisterTable_FullMethodName = "/com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable"
+	AdminService_RegisterTable_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
 )
 
-// CoordinatorServiceClient is the client API for CoordinatorService service.
+// AdminServiceClient is the client API for AdminService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Coordinator management service.
+// Admin service for runtime table management.
 //
 // Allows operators to register new Kafka-ingested tables at runtime without
 // editing node.yaml or restarting the node. All RPCs are idempotent.
-type CoordinatorServiceClient interface {
+type AdminServiceClient interface {
 	RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error)
 }
 
-type coordinatorServiceClient struct {
+type adminServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewCoordinatorServiceClient(cc grpc.ClientConnInterface) CoordinatorServiceClient {
-	return &coordinatorServiceClient{cc}
+func NewAdminServiceClient(cc grpc.ClientConnInterface) AdminServiceClient {
+	return &adminServiceClient{cc}
 }
 
-func (c *coordinatorServiceClient) RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error) {
+func (c *adminServiceClient) RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterTableResponse)
-	err := c.cc.Invoke(ctx, CoordinatorService_RegisterTable_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, AdminService_RegisterTable_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// CoordinatorServiceServer is the server API for CoordinatorService service.
-// All implementations must embed UnimplementedCoordinatorServiceServer
+// AdminServiceServer is the server API for AdminService service.
+// All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
 //
-// Coordinator management service.
+// Admin service for runtime table management.
 //
 // Allows operators to register new Kafka-ingested tables at runtime without
 // editing node.yaml or restarting the node. All RPCs are idempotent.
-type CoordinatorServiceServer interface {
+type AdminServiceServer interface {
 	RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error)
-	mustEmbedUnimplementedCoordinatorServiceServer()
+	mustEmbedUnimplementedAdminServiceServer()
 }
 
-// UnimplementedCoordinatorServiceServer must be embedded to have
+// UnimplementedAdminServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedCoordinatorServiceServer struct{}
+type UnimplementedAdminServiceServer struct{}
 
-func (UnimplementedCoordinatorServiceServer) RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error) {
+func (UnimplementedAdminServiceServer) RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterTable not implemented")
 }
-func (UnimplementedCoordinatorServiceServer) mustEmbedUnimplementedCoordinatorServiceServer() {}
-func (UnimplementedCoordinatorServiceServer) testEmbeddedByValue()                            {}
+func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
+func (UnimplementedAdminServiceServer) testEmbeddedByValue()                            {}
 
-// UnsafeCoordinatorServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to CoordinatorServiceServer will
+// UnsafeAdminServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AdminServiceServer will
 // result in compilation errors.
-type UnsafeCoordinatorServiceServer interface {
-	mustEmbedUnimplementedCoordinatorServiceServer()
+type UnsafeAdminServiceServer interface {
+	mustEmbedUnimplementedAdminServiceServer()
 }
 
-func RegisterCoordinatorServiceServer(s grpc.ServiceRegistrar, srv CoordinatorServiceServer) {
-	// If the following call panics, it indicates UnimplementedCoordinatorServiceServer was
+func RegisterAdminServiceServer(s grpc.ServiceRegistrar, srv AdminServiceServer) {
+	// If the following call panics, it indicates UnimplementedAdminServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&CoordinatorService_ServiceDesc, srv)
+	s.RegisterService(&AdminService_ServiceDesc, srv)
 }
 
-func _CoordinatorService_RegisterTable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AdminService_RegisterTable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterTableRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CoordinatorServiceServer).RegisterTable(ctx, in)
+		return srv.(AdminServiceServer).RegisterTable(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CoordinatorService_RegisterTable_FullMethodName,
+		FullMethod: AdminService_RegisterTable_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServiceServer).RegisterTable(ctx, req.(*RegisterTableRequest))
+		return srv.(AdminServiceServer).RegisterTable(ctx, req.(*RegisterTableRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// CoordinatorService_ServiceDesc is the grpc.ServiceDesc for CoordinatorService service.
+// AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var CoordinatorService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "com.yscope.metalog.coordinator.grpc.CoordinatorService",
-	HandlerType: (*CoordinatorServiceServer)(nil),
+var AdminService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "com.yscope.metalog.coordinator.grpc.AdminService",
+	HandlerType: (*AdminServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "RegisterTable",
-			Handler:    _CoordinatorService_RegisterTable_Handler,
+			Handler:    _AdminService_RegisterTable_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

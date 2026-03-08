@@ -74,8 +74,7 @@ type TableKafkaConfig struct {
 
 // WorkerConfig holds worker settings.
 type WorkerConfig struct {
-	Concurrency int            `yaml:"concurrency"`
-	Database   *DatabaseConfig `yaml:"database"`
+	Concurrency int `yaml:"concurrency"`
 }
 
 // ResolveNodeID reads the node ID from the environment variable specified
@@ -93,6 +92,9 @@ func (c *NodeConfig) ResolveNodeID() string {
 }
 
 // LoadNodeConfig reads and parses a YAML node configuration file.
+// Defaults and validation are driven by which sections are present in the YAML:
+// coordinator section present → coordinator defaults/validation applied,
+// worker section with concurrency > 0 → workers enabled, etc.
 func LoadNodeConfig(path string) (*NodeConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -112,23 +114,29 @@ func LoadNodeConfig(path string) (*NodeConfig, error) {
 	return &cfg, nil
 }
 
+// hasCoordinator returns true if the coordinator section has meaningful config.
+func (c *NodeConfig) hasCoordinator() bool {
+	return len(c.Tables) > 0 || c.Coordinator.HAStrategy != "" || c.Coordinator.NodeIDEnvVar != ""
+}
+
 // validateRaw checks user-provided values before defaults are applied.
-// This catches negative or otherwise invalid values that would be masked by applyDefaults.
 func (c *NodeConfig) validateRaw() error {
-	if c.Coordinator.LeaseTTLSeconds < 0 {
-		return fmt.Errorf("coordinator.leaseTtlSeconds must be non-negative, got %d", c.Coordinator.LeaseTTLSeconds)
-	}
-	if c.Coordinator.LeaseRenewalIntervalSeconds < 0 {
-		return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds must be non-negative, got %d", c.Coordinator.LeaseRenewalIntervalSeconds)
-	}
-	if c.Coordinator.HeartbeatIntervalSeconds < 0 {
-		return fmt.Errorf("coordinator.heartbeatIntervalSeconds must be non-negative, got %d", c.Coordinator.HeartbeatIntervalSeconds)
-	}
-	if c.Coordinator.DeadNodeThresholdSeconds < 0 {
-		return fmt.Errorf("coordinator.deadNodeThresholdSeconds must be non-negative, got %d", c.Coordinator.DeadNodeThresholdSeconds)
-	}
-	if c.Coordinator.ReconciliationIntervalSeconds < 0 {
-		return fmt.Errorf("coordinator.reconciliationIntervalSeconds must be non-negative, got %d", c.Coordinator.ReconciliationIntervalSeconds)
+	if c.hasCoordinator() {
+		if c.Coordinator.LeaseTTLSeconds < 0 {
+			return fmt.Errorf("coordinator.leaseTtlSeconds must be non-negative, got %d", c.Coordinator.LeaseTTLSeconds)
+		}
+		if c.Coordinator.LeaseRenewalIntervalSeconds < 0 {
+			return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds must be non-negative, got %d", c.Coordinator.LeaseRenewalIntervalSeconds)
+		}
+		if c.Coordinator.HeartbeatIntervalSeconds < 0 {
+			return fmt.Errorf("coordinator.heartbeatIntervalSeconds must be non-negative, got %d", c.Coordinator.HeartbeatIntervalSeconds)
+		}
+		if c.Coordinator.DeadNodeThresholdSeconds < 0 {
+			return fmt.Errorf("coordinator.deadNodeThresholdSeconds must be non-negative, got %d", c.Coordinator.DeadNodeThresholdSeconds)
+		}
+		if c.Coordinator.ReconciliationIntervalSeconds < 0 {
+			return fmt.Errorf("coordinator.reconciliationIntervalSeconds must be non-negative, got %d", c.Coordinator.ReconciliationIntervalSeconds)
+		}
 	}
 	return nil
 }
@@ -150,22 +158,27 @@ func (c *NodeConfig) validate() error {
 			return fmt.Errorf("server.grpc.port must be 1-65535, got %d", c.Server.GRPC.Port)
 		}
 	}
-	for i, t := range c.Tables {
-		if t.Name == "" {
-			return fmt.Errorf("tables[%d].name is required", i)
+
+	// Coordinator validation — only when coordinator section is present
+	if c.hasCoordinator() {
+		for i, t := range c.Tables {
+			if t.Name == "" {
+				return fmt.Errorf("tables[%d].name is required", i)
+			}
+		}
+		switch c.Coordinator.HAStrategy {
+		case HAStrategyHeartbeat, HAStrategyLease:
+		default:
+			return fmt.Errorf("coordinator.haStrategy must be 'heartbeat' or 'lease', got %q", c.Coordinator.HAStrategy)
+		}
+		if c.Coordinator.HAStrategy == HAStrategyLease {
+			if c.Coordinator.LeaseRenewalIntervalSeconds >= c.Coordinator.LeaseTTLSeconds {
+				return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds (%d) must be less than coordinator.leaseTtlSeconds (%d)",
+					c.Coordinator.LeaseRenewalIntervalSeconds, c.Coordinator.LeaseTTLSeconds)
+			}
 		}
 	}
-	switch c.Coordinator.HAStrategy {
-	case HAStrategyHeartbeat, HAStrategyLease:
-	default:
-		return fmt.Errorf("coordinator.haStrategy must be 'heartbeat' or 'lease', got %q", c.Coordinator.HAStrategy)
-	}
-	if c.Coordinator.HAStrategy == HAStrategyLease {
-		if c.Coordinator.LeaseRenewalIntervalSeconds >= c.Coordinator.LeaseTTLSeconds {
-			return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds (%d) must be less than coordinator.leaseTtlSeconds (%d)",
-				c.Coordinator.LeaseRenewalIntervalSeconds, c.Coordinator.LeaseTTLSeconds)
-		}
-	}
+
 	return nil
 }
 
@@ -179,28 +192,33 @@ func applyDefaults(cfg *NodeConfig) {
 	if cfg.Server.GRPC.Port == 0 {
 		cfg.Server.GRPC.Port = 9090
 	}
-	if cfg.Coordinator.ReconciliationIntervalSeconds == 0 {
-		cfg.Coordinator.ReconciliationIntervalSeconds = 60
+
+	// Coordinator defaults — only when coordinator section is present
+	if cfg.hasCoordinator() {
+		if cfg.Coordinator.ReconciliationIntervalSeconds == 0 {
+			cfg.Coordinator.ReconciliationIntervalSeconds = 60
+		}
+		if cfg.Coordinator.HAStrategy == "" {
+			cfg.Coordinator.HAStrategy = HAStrategyHeartbeat
+		}
+		if cfg.Coordinator.HeartbeatIntervalSeconds == 0 {
+			cfg.Coordinator.HeartbeatIntervalSeconds = 30
+		}
+		if cfg.Coordinator.DeadNodeThresholdSeconds == 0 {
+			cfg.Coordinator.DeadNodeThresholdSeconds = 180
+		}
+		if cfg.Coordinator.LeaseTTLSeconds == 0 {
+			cfg.Coordinator.LeaseTTLSeconds = 180
+		}
+		if cfg.Coordinator.LeaseRenewalIntervalSeconds == 0 {
+			cfg.Coordinator.LeaseRenewalIntervalSeconds = 30
+		}
 	}
-	if cfg.Worker.Concurrency == 0 {
-		cfg.Worker.Concurrency = 4
-	}
+
+	// No worker concurrency default — absence means disabled.
+	// Users must explicitly set worker.concurrency > 0 to enable workers.
+
 	if cfg.Storage.ClpProcessTimeoutSeconds == 0 {
 		cfg.Storage.ClpProcessTimeoutSeconds = 300
-	}
-	if cfg.Coordinator.HAStrategy == "" {
-		cfg.Coordinator.HAStrategy = HAStrategyHeartbeat
-	}
-	if cfg.Coordinator.HeartbeatIntervalSeconds == 0 {
-		cfg.Coordinator.HeartbeatIntervalSeconds = 30
-	}
-	if cfg.Coordinator.DeadNodeThresholdSeconds == 0 {
-		cfg.Coordinator.DeadNodeThresholdSeconds = 180
-	}
-	if cfg.Coordinator.LeaseTTLSeconds == 0 {
-		cfg.Coordinator.LeaseTTLSeconds = 180
-	}
-	if cfg.Coordinator.LeaseRenewalIntervalSeconds == 0 {
-		cfg.Coordinator.LeaseRenewalIntervalSeconds = 30
 	}
 }

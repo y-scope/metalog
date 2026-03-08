@@ -8,7 +8,7 @@ How to register tables, manage feature flags, and query table configuration.
 
 ## API Registration (recommended for runtime changes)
 
-Tables can be registered at runtime via the `CoordinatorService.RegisterTable` gRPC RPC on port
+Tables can be registered at runtime via the `AdminService.RegisterTable` gRPC RPC on port
 9090 — no node restart required. The call is fully idempotent.
 
 ```bash
@@ -16,7 +16,7 @@ grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "kafka": {"topic": "spark-ir", "bootstrap_servers": "kafka:29092"}
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
 
 # Second call — idempotent
@@ -40,12 +40,12 @@ grpcurl -plaintext -d '{
   "kafka_poller_enabled": true,
   "consolidation_enabled": false
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
 > **Note:** `retention_cleanup_enabled` is not exposed by the `RegisterTable` RPC and must be set directly via SQL on `_table_config` if needed.
 
-See [gRPC API — CoordinatorService](../reference/grpc-api.md#coordinatorservice) for full field reference.
+See [gRPC API — AdminService](../reference/grpc-api.md#coordinatorservice) for full field reference.
 
 ---
 

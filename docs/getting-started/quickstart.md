@@ -51,7 +51,7 @@ Expected output (zap structured logging):
 
 ```
 {"level":"info","msg":"starting server","config":"/etc/clp/node.yaml"}
-{"level":"info","msg":"database pool created","poolSize":20,"minIdle":5}
+{"level":"info","msg":"database pool created","poolSize":5,"minIdle":2}
 {"level":"info","msg":"storage registry created","defaultBackend":"minio"}
 {"level":"info","msg":"node started","coordinators":1,"workers":4}
 ```
@@ -129,7 +129,7 @@ database:
   database: metalog_metastore
   user: root
   password: password
-  poolSize: 20
+  poolSize: 5
 
 storage:
   defaultBackend: minio
@@ -159,7 +159,7 @@ tables:
 
 # Shared worker pool (claims tasks from all tables)
 worker:
-  concurrency: 4    # 0 = coordinator-only node
+  concurrency: 4    # 0 = workers disabled
 ```
 
 See [Configuration Reference](../reference/configuration.md) for full details.

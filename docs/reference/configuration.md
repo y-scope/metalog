@@ -17,8 +17,8 @@ database:
   database: metalog_metastore
   user: root
   password: ""
-  poolSize: 20                   # Max open connections
-  poolMinIdle: 5                 # Min idle connections
+  poolSize: 5                    # Max open connections (default: 5)
+  poolMinIdle: 2                 # Min idle connections (default: 2)
 
 storage:
   defaultBackend: minio
@@ -65,13 +65,7 @@ tables:
 
 # Shared worker pool (claims tasks from all tables).
 worker:
-  concurrency: 4                 # Default: 4. Set to 0 for coordinator-only node.
-  # database:                    # Optional separate DB pool for workers
-  #   host: read-replica
-  #   port: 3306
-  #   database: metalog_metastore
-  #   user: worker
-  #   password: ""
+  concurrency: 4                 # 0 = workers disabled. Standalone binary defaults to 4.
 ```
 
 ### Configuration Reference Table
@@ -83,8 +77,8 @@ worker:
 | `database.database` | — | Database name |
 | `database.user` | — | Database user |
 | `database.password` | — | Database password |
-| `database.poolSize` | `20` | Max open connections |
-| `database.poolMinIdle` | `5` | Min idle connections |
+| `database.poolSize` | `5` | Max open connections |
+| `database.poolMinIdle` | `2` | Min idle connections |
 | `storage.defaultBackend` | — | Default storage backend name |
 | `storage.irBucket` | — | Default IR file bucket |
 | `storage.archiveBucket` | — | Default archive file bucket |
@@ -101,8 +95,7 @@ worker:
 | `coordinator.deadNodeThresholdSeconds` | `180` | Heartbeat mode: seconds before node is dead |
 | `coordinator.leaseTtlSeconds` | `180` | Lease mode: lease duration in seconds |
 | `coordinator.leaseRenewalIntervalSeconds` | `30` | Lease mode: renewal interval (must be < TTL) |
-| `worker.concurrency` | `4` | Concurrent task goroutines. `0` = coordinator-only node |
-| `worker.database.*` | _(inherits database)_ | Optional separate DB pool for workers |
+| `worker.concurrency` | `0` (disabled) | Concurrent task goroutines. Standalone worker binary defaults to `4` |
 | `tables[].name` | — | **Required.** Table name |
 | `tables[].displayName` | — | Human-readable name |
 | `tables[].kafka.topic` | — | Kafka topic for this table |

@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"database/sql"
 	"sync"
 	"time"
 
@@ -62,16 +61,6 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	}
 	isMariaDB := dbType == db.DatabaseTypeMariaDB
 
-	// Create optional worker DB pool
-	var workerPool *sql.DB
-	if cfg.Worker.Database != nil {
-		wPool, err := db.NewPool(*cfg.Worker.Database)
-		if err != nil {
-			return nil, err
-		}
-		workerPool = wPool
-	}
-
 	// Set up storage registry
 	storageReg := storage.NewRegistry()
 	for name, backendCfg := range cfg.Storage.Backends {
@@ -102,7 +91,6 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 
 	shared := &SharedResources{
 		DB:              pool,
-		WorkerDB:        workerPool,
 		StorageRegistry: storageReg,
 		ArchiveCreator:  archiveCreator,
 		ArchiveBackend:  cfg.Storage.DefaultBackend,

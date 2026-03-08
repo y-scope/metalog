@@ -188,7 +188,7 @@ The actual archive size (bytes) is returned by `createArchive()` and stored in t
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `worker.concurrency` | `4` | Number of worker goroutines per process |
+| `worker.concurrency` | `0` (disabled) | Number of worker goroutines per process |
 | `worker.prefetchQueueSize` | `5` | Tasks held in-memory; one DB batch-claim per refill |
 
 Backoff on empty polls uses exponential backoff (1s → 32s) with a 2× multiplier.
@@ -199,7 +199,7 @@ Note: In containerized environments, set `worker.concurrency` explicitly based o
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `database.poolSize` | `20` | Maximum DB connections |
+| `database.poolSize` | `5` | Maximum DB connections |
 
 Note: DB operations (claim task, mark complete) are brief. Worker goroutines spend most time
 on I/O operations (download IR files, run clp-s, upload archive), so a small pool is sufficient

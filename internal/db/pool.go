@@ -19,11 +19,11 @@ func NewPool(cfg config.DatabaseConfig) (*sql.DB, error) {
 
 	poolSize := cfg.PoolSize
 	if poolSize == 0 {
-		poolSize = 20
+		poolSize = 5
 	}
 	minIdle := cfg.PoolMinIdle
 	if minIdle == 0 {
-		minIdle = 5
+		minIdle = 2
 	}
 
 	db.SetMaxOpenConns(poolSize)

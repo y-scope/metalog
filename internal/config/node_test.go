@@ -14,8 +14,8 @@ database:
   database: metalog_metastore
   user: root
   password: password
-  poolSize: 20
-  poolMinIdle: 5
+  poolSize: 5
+  poolMinIdle: 2
 storage:
   irBucket: logs
   archiveBucket: logs

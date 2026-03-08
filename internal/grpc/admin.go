@@ -11,20 +11,20 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator"
 )
 
-// CoordinatorHandler implements the CoordinatorService gRPC interface.
-type CoordinatorHandler struct {
-	pb.UnimplementedCoordinatorServiceServer
+// AdminHandler implements the AdminService gRPC interface.
+type AdminHandler struct {
+	pb.UnimplementedAdminServiceServer
 	registration *coordinator.TableRegistration
 	log          *zap.Logger
 }
 
-// NewCoordinatorHandler creates a CoordinatorHandler.
-func NewCoordinatorHandler(reg *coordinator.TableRegistration, log *zap.Logger) *CoordinatorHandler {
-	return &CoordinatorHandler{registration: reg, log: log}
+// NewAdminHandler creates a AdminHandler.
+func NewAdminHandler(reg *coordinator.TableRegistration, log *zap.Logger) *AdminHandler {
+	return &AdminHandler{registration: reg, log: log}
 }
 
 // RegisterTable handles runtime table registration requests.
-func (h *CoordinatorHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableRequest) (*pb.RegisterTableResponse, error) {
+func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableRequest) (*pb.RegisterTableResponse, error) {
 	if req.GetTableName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_name is required")
 	}

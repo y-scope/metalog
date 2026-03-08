@@ -24,7 +24,7 @@ In `node.yaml`:
 
 ```yaml
 worker:
-  concurrency: 4   # Workers run as goroutines inside the Node process
+  concurrency: 4   # 0 = workers disabled
 ```
 
 ### Production: Separate Coordinator and Worker Pools

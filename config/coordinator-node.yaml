@@ -10,8 +10,8 @@ database:
   database: metalog_metastore
   user: root
   password: password
-  poolSize: 20
-  poolMinIdle: 5
+  poolSize: 5
+  poolMinIdle: 2
 
 storage:
   irBucket: logs
@@ -64,13 +64,3 @@ tables:
 
 worker:
   concurrency: 4
-  # Optional: separate database for workers (e.g., read replica).
-  # If omitted, workers use the top-level database config.
-  # database:
-  #   host: replica-db
-  #   port: 3306
-  #   database: metalog_metastore
-  #   user: reader
-  #   password: reader-secret
-  #   poolSize: 10
-  #   poolMinIdle: 2

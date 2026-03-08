@@ -23,7 +23,7 @@ ERROR Node - Failed to connect to database: dial tcp <host>:3306: connect: conne
 | Wrong host/port | Check `database.host` / `database.port` in `node.yaml` |
 | Wrong credentials | Check `database.user` / `database.password` |
 | Database not yet created | Ensure `createDatabaseIfNotExist` is set in the DSN (default) |
-| Connection pool exhausted | Increase `database.poolSize` (default 20) |
+| Connection pool exhausted | Increase `database.poolSize` (default 5) |
 | Firewall | Verify `3306` is reachable from the coordinator host |
 
 Test connectivity directly:
