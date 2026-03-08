@@ -242,6 +242,60 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRegistry_GetTableKafkaConfig(t *testing.T) {
+	mc, cr := setupRegistryIT(t)
+	defer mc.Teardown(t)
+	ctx := context.Background()
+
+	// No row yet — should return zero-value config
+	cfg, err := cr.GetTableKafkaConfig(ctx, "nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Topic != "" {
+		t.Errorf("Topic = %q, want empty", cfg.Topic)
+	}
+
+	// Register table with Kafka config
+	cr.UpsertTables(ctx, []config.TableConfig{
+		{Name: "kafka_test", DisplayName: "Kafka Test", Kafka: config.TableKafkaConfig{
+			Topic: "test-topic", BootstrapServers: "kafka:9092", RecordTransformer: "custom",
+		}},
+	})
+
+	cfg, err = cr.GetTableKafkaConfig(ctx, "kafka_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Topic != "test-topic" {
+		t.Errorf("Topic = %q, want test-topic", cfg.Topic)
+	}
+	if cfg.BootstrapServers != "kafka:9092" {
+		t.Errorf("BootstrapServers = %q, want kafka:9092", cfg.BootstrapServers)
+	}
+	if cfg.RecordTransformer != "custom" {
+		t.Errorf("RecordTransformer = %q, want custom", cfg.RecordTransformer)
+	}
+
+	// Update Kafka config and verify upsert
+	cr.UpsertTables(ctx, []config.TableConfig{
+		{Name: "kafka_test", DisplayName: "Kafka Test", Kafka: config.TableKafkaConfig{
+			Topic: "new-topic", BootstrapServers: "kafka:29092",
+		}},
+	})
+
+	cfg, err = cr.GetTableKafkaConfig(ctx, "kafka_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Topic != "new-topic" {
+		t.Errorf("Topic after update = %q, want new-topic", cfg.Topic)
+	}
+	if cfg.BootstrapServers != "kafka:29092" {
+		t.Errorf("BootstrapServers after update = %q, want kafka:29092", cfg.BootstrapServers)
+	}
+}
+
 func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	mc := testutil.SetupMariaDB(t)
 	defer mc.Teardown(t)

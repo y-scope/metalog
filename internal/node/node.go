@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -40,20 +42,46 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	nodeID := cfg.ResolveNodeID()
 	log = log.With(zap.String("nodeId", nodeID))
 
-	// Create DB pool
-	pool, err := db.NewPool(cfg.Database)
-	if err != nil {
-		return nil, err
+	// Create primary pool (nil if not configured, e.g. replica-only API server)
+	var pool *sql.DB
+	if cfg.Database.Primary.Host != "" {
+		var err error
+		pool, err = db.NewPool(cfg.Database.Primary)
+		if err != nil {
+			return nil, fmt.Errorf("create primary pool: %w", err)
+		}
 	}
 	success := false
 	defer func() {
-		if !success {
+		if !success && pool != nil {
 			pool.Close()
 		}
 	}()
 
-	// Detect database type
-	dbType, versionStr, err := db.DetectDatabaseType(context.Background(), pool)
+	// Create replica pool if configured
+	var readPool *sql.DB
+	if cfg.Database.Replica != nil && cfg.Database.Replica.Host != "" {
+		var err error
+		readPool, err = db.NewPool(*cfg.Database.Replica)
+		if err != nil {
+			return nil, fmt.Errorf("create replica pool: %w", err)
+		}
+		log.Info("replica database pool created",
+			zap.String("host", cfg.Database.Replica.Host),
+			zap.Int("poolSize", cfg.Database.Replica.PoolSize))
+	}
+	defer func() {
+		if !success && readPool != nil {
+			readPool.Close()
+		}
+	}()
+
+	// Detect database type from whichever pool is available
+	detectPool := pool
+	if detectPool == nil {
+		detectPool = readPool
+	}
+	dbType, versionStr, err := db.DetectDatabaseType(context.Background(), detectPool)
 	if err != nil {
 		log.Warn("failed to detect database type, assuming MySQL", zap.Error(err))
 	} else {
@@ -76,12 +104,12 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		storageReg.Register(name, backend)
 	}
 
-	// Create compressor
+	// Create compressor (only when workers are enabled)
 	var compressor *storage.ClpCompressor
-	if cfg.Storage.ClpBinaryPath != "" {
+	if cfg.Worker.Concurrency > 0 && cfg.Worker.ClpBinaryPath != "" {
 		compressor = storage.NewClpCompressor(
-			cfg.Storage.ClpBinaryPath,
-			time.Duration(cfg.Storage.ClpProcessTimeoutSeconds)*time.Second,
+			cfg.Worker.ClpBinaryPath,
+			time.Duration(cfg.Worker.ClpProcessTimeoutSeconds)*time.Second,
 			log,
 		)
 	}
@@ -91,10 +119,11 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 
 	shared := &SharedResources{
 		DB:              pool,
+		ReadDB:          readPool,
 		StorageRegistry: storageReg,
 		ArchiveCreator:  archiveCreator,
 		ArchiveBackend:  cfg.Storage.DefaultBackend,
-		ArchiveBucket:   cfg.Storage.ArchiveBucket,
+		ArchiveBucket:   cfg.Storage.Backends[cfg.Storage.DefaultBackend].Bucket,
 		IsMariaDB:       isMariaDB,
 		Log:             log,
 	}
@@ -115,95 +144,109 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	}
 
 	// Health server
-	if cfg.Server.Health.Enabled {
-		n.healthSrv = health.NewServer(cfg.Server.Health.Port, log)
+	if cfg.Health.Enabled {
+		n.healthSrv = health.NewServer(cfg.Health.Port, log)
 	}
 
 	success = true
 	return n, nil
 }
 
-// Start initializes system tables, provisions configured tables, claims them,
-// starts coordinator and worker units, and begins background goroutines.
-// Uses the node's internal context for all operations.
+// Start initializes the node based on configuration. Coordinator and worker
+// subsystems only start when configured (tables present + primary DB).
+// A node with only a replica DB and gRPC enabled runs as a read-only API server.
 func (n *Node) Start() error {
 	ctx := n.ctx
 
-	// Ensure system tables
-	if err := n.registry.EnsureSystemTables(ctx); err != nil {
-		return err
-	}
-
-	// Validate schema is in expected state
-	if err := n.registry.ValidateSchemaReady(ctx); err != nil {
-		return err
-	}
-
-	// Register configured tables
-	if err := n.registry.UpsertTables(ctx, n.cfg.Tables); err != nil {
-		return err
-	}
-
-	// Provision physical tables
-	for _, t := range n.cfg.Tables {
-		if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Storage.TableCompression, n.log); err != nil {
-			n.log.Error("failed to provision table", zap.String("table", t.Name), zap.Error(err))
-			continue
+	// Coordinator and ingestion subsystems require primary DB + tables
+	if n.cfg.HasCoordinator() {
+		if err := n.registry.EnsureSystemTables(ctx); err != nil {
+			return err
 		}
-	}
+		if err := n.registry.ValidateSchemaReady(ctx); err != nil {
+			return err
+		}
+		if err := n.registry.UpsertTables(ctx, n.cfg.Tables); err != nil {
+			return err
+		}
 
-	// Create batching writer and ingestion service
-	n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.log)
-	n.ingestSvc = ingestion.NewService(n.writer, n.log)
+		for _, t := range n.cfg.Tables {
+			if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Coordinator.TableCompression, n.log); err != nil {
+				n.log.Error("failed to provision table", zap.String("table", t.Name), zap.Error(err))
+				continue
+			}
+		}
 
-	// Claim and start coordinators for configured tables
-	for _, t := range n.cfg.Tables {
-		claimed, err := n.registry.ClaimTable(ctx, t.Name)
+		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.log)
+		n.ingestSvc = ingestion.NewService(n.writer, n.log)
+
+		// Claim tables declared in YAML
+		for _, t := range n.cfg.Tables {
+			claimed, err := n.registry.ClaimTable(ctx, t.Name)
+			if err != nil {
+				n.log.Error("failed to claim table", zap.String("table", t.Name), zap.Error(err))
+				continue
+			}
+			if !claimed {
+				n.log.Info("table already claimed by another node", zap.String("table", t.Name))
+				continue
+			}
+			if err := n.startCoordinator(t.Name); err != nil {
+				n.log.Error("failed to start coordinator", zap.String("table", t.Name), zap.Error(err))
+			}
+		}
+
+		// Resume coordinators for tables already assigned to this node in the DB
+		// (e.g., from a previous run or registered via admin API).
+		assigned, err := n.registry.GetAssignedTables(ctx)
 		if err != nil {
-			n.log.Error("failed to claim table", zap.String("table", t.Name), zap.Error(err))
-			continue
+			n.log.Warn("failed to get assigned tables from DB", zap.Error(err))
+		} else {
+			for _, t := range assigned {
+				n.coordMu.Lock()
+				_, running := n.coordinators[t]
+				n.coordMu.Unlock()
+				if running {
+					continue
+				}
+				n.log.Info("resuming coordinator for previously assigned table", zap.String("table", t))
+				if err := n.startCoordinator(t); err != nil {
+					n.log.Error("failed to resume coordinator", zap.String("table", t), zap.Error(err))
+				}
+			}
 		}
-		if !claimed {
-			n.log.Info("table already claimed by another node", zap.String("table", t.Name))
-			continue
+
+		// Signal initial liveness
+		if n.cfg.Coordinator.HAStrategy == config.HAStrategyHeartbeat {
+			if err := n.registry.SendHeartbeat(ctx); err != nil {
+				n.log.Warn("initial heartbeat failed", zap.Error(err))
+			}
+		} else {
+			if err := n.registry.RenewLeases(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second); err != nil {
+				n.log.Warn("initial lease renewal failed", zap.Error(err))
+			}
 		}
-		if err := n.startCoordinator(t.Name); err != nil {
-			n.log.Error("failed to start coordinator", zap.String("table", t.Name), zap.Error(err))
-		}
+
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.runLiveness()
+		}()
+
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.runReconciliation()
+		}()
 	}
 
-	// Start workers
+	// Workers require primary DB
 	if n.cfg.Worker.Concurrency > 0 {
 		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
 		n.workerUnit.Start()
 	}
 
-	// Signal initial liveness before reconciliation so other nodes see us
-	if n.cfg.Coordinator.HAStrategy == config.HAStrategyHeartbeat {
-		if err := n.registry.SendHeartbeat(ctx); err != nil {
-			n.log.Warn("initial heartbeat failed", zap.Error(err))
-		}
-	} else {
-		if err := n.registry.RenewLeases(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second); err != nil {
-			n.log.Warn("initial lease renewal failed", zap.Error(err))
-		}
-	}
-
-	// Start liveness goroutine (heartbeat or lease renewal)
-	n.wg.Add(1)
-	go func() {
-		defer n.wg.Done()
-		n.runLiveness()
-	}()
-
-	// Start reconciliation goroutine
-	n.wg.Add(1)
-	go func() {
-		defer n.wg.Done()
-		n.runReconciliation()
-	}()
-
-	// Start health server
+	// Health server
 	if n.healthSrv != nil {
 		n.wg.Add(1)
 		go func() {
@@ -297,13 +340,14 @@ func (n *Node) NodeID() string {
 }
 
 func (n *Node) startCoordinator(tableName string) error {
-	// Look up Kafka config for this table
-	var kafkaCfg config.TableKafkaConfig
-	for _, t := range n.cfg.Tables {
-		if t.Name == tableName {
-			kafkaCfg = t.Kafka
-			break
-		}
+	// Read Kafka config from DB (source of truth — seeded by UpsertTables or admin API).
+	kafkaCfg, err := n.registry.GetTableKafkaConfig(n.ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("start coordinator %s: %w", tableName, err)
+	}
+	if kafkaCfg.Topic == "" {
+		n.log.Warn("no Kafka config in DB for table — coordinator will run without Kafka consumer",
+			zap.String("table", tableName))
 	}
 
 	tableID, err := n.registry.GetTableID(n.ctx, tableName)
