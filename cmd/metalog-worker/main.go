@@ -34,7 +34,7 @@ func main() {
 	}
 
 	// Use worker DB config if available, otherwise main DB
-	dbCfg := cfg.Node.Database
+	dbCfg := cfg.Database
 	if cfg.Worker.Database != nil {
 		dbCfg = *cfg.Worker.Database
 	}
@@ -46,7 +46,7 @@ func main() {
 
 	// Create storage registry
 	storageReg := storage.NewRegistry()
-	for name, backendCfg := range cfg.Node.Storage.Backends {
+	for name, backendCfg := range cfg.Storage.Backends {
 		s3Client := buildS3Client(backendCfg)
 		if s3Client != nil {
 			storageReg.Register(name, storage.NewS3Backend(s3Client))
@@ -55,10 +55,10 @@ func main() {
 
 	// Create compressor and archive creator
 	var compressor *storage.ClpCompressor
-	if cfg.Node.Storage.ClpBinaryPath != "" {
+	if cfg.Storage.ClpBinaryPath != "" {
 		compressor = storage.NewClpCompressor(
-			cfg.Node.Storage.ClpBinaryPath,
-			time.Duration(cfg.Node.Storage.ClpProcessTimeoutSeconds)*time.Second,
+			cfg.Storage.ClpBinaryPath,
+			time.Duration(cfg.Storage.ClpProcessTimeoutSeconds)*time.Second,
 			log,
 		)
 	}
@@ -78,8 +78,8 @@ func main() {
 
 	// Start health server
 	var healthSrv *health.Server
-	if cfg.Node.Health.Enabled {
-		healthSrv = health.NewServer(cfg.Node.Health.Port, log)
+	if cfg.Server.Health.Enabled {
+		healthSrv = health.NewServer(cfg.Server.Health.Port, log)
 		go func() {
 			if err := healthSrv.Start(); err != nil {
 				log.Error("health server error", zap.Error(err))

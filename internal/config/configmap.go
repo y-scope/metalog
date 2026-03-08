@@ -13,7 +13,8 @@ import (
 // In a ConfigMap mount, each key is a file whose content is the value.
 // Supports two layouts:
 //  1. Single file: the directory contains a "node.yaml" file (same as LoadNodeConfig).
-//  2. Multi-key: separate files for "node", "tables", "worker" are merged into one config.
+//  2. Multi-key: separate files for "database", "storage", "server", "coordinator",
+//     "tables", "worker" are merged into one config.
 func ParseConfigMap(dir string) (*NodeConfig, error) {
 	// Check for single-file layout first.
 	singleFile := filepath.Join(dir, "node.yaml")
@@ -24,11 +25,35 @@ func ParseConfigMap(dir string) (*NodeConfig, error) {
 	// Multi-key layout: merge individual YAML fragments.
 	cfg := &NodeConfig{}
 
-	if data, err := readConfigMapKey(dir, "node"); err == nil {
+	if data, err := readConfigMapKey(dir, "database"); err == nil {
 		if err := yaml.Unmarshal(data, &struct {
-			Node *NodeSettings `yaml:"node"`
-		}{Node: &cfg.Node}); err != nil {
-			return nil, fmt.Errorf("parse configmap key 'node': %w", err)
+			Database *DatabaseConfig `yaml:"database"`
+		}{Database: &cfg.Database}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'database': %w", err)
+		}
+	}
+
+	if data, err := readConfigMapKey(dir, "storage"); err == nil {
+		if err := yaml.Unmarshal(data, &struct {
+			Storage *ObjectStorageConfig `yaml:"storage"`
+		}{Storage: &cfg.Storage}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'storage': %w", err)
+		}
+	}
+
+	if data, err := readConfigMapKey(dir, "server"); err == nil {
+		if err := yaml.Unmarshal(data, &struct {
+			Server *ServerConfig `yaml:"server"`
+		}{Server: &cfg.Server}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'server': %w", err)
+		}
+	}
+
+	if data, err := readConfigMapKey(dir, "coordinator"); err == nil {
+		if err := yaml.Unmarshal(data, &struct {
+			Coordinator *CoordinatorConfig `yaml:"coordinator"`
+		}{Coordinator: &cfg.Coordinator}); err != nil {
+			return nil, fmt.Errorf("parse configmap key 'coordinator': %w", err)
 		}
 	}
 

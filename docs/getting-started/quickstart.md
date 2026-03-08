@@ -120,30 +120,33 @@ go test -tags=integration ./internal/...
 
 ### Node Configuration (YAML)
 
-Node-level settings (database, storage, health) are defined in YAML. Per-table configuration lives in the database, but tables can be declared in YAML for automatic registration on startup:
+Settings are organized by role: `database`, `storage`, `server`, `coordinator`, `tables`, and `worker`. Per-table configuration lives in the database, but tables can be declared in YAML for automatic registration on startup:
 
 ```yaml
-node:
-  name: coordinator-node-1
-  nodeIdEnvVar: HOSTNAME       # env var for _table_assignment.node_id
-  database:
-    host: localhost
-    port: 3306
-    database: metalog_metastore
-    user: root
-    password: password
-    poolSize: 20
-  storage:
-    defaultBackend: minio
-    backends:
-      minio:
-        endpoint: http://localhost:9000
-        accessKey: minioadmin
-        secretKey: minioadmin
-        forcePathStyle: true
+database:
+  host: localhost
+  port: 3306
+  database: metalog_metastore
+  user: root
+  password: password
+  poolSize: 20
+
+storage:
+  defaultBackend: minio
+  backends:
+    minio:
+      endpoint: http://localhost:9000
+      accessKey: minioadmin
+      secretKey: minioadmin
+      forcePathStyle: true
+
+server:
   health:
     enabled: true
     port: 8081
+
+coordinator:
+  nodeIdEnvVar: HOSTNAME       # env var for _table_assignment.node_id
 
 # Declarative table registration (auto-UPSERTed on startup).
 # Only specified fields are updated; omitted fields keep DB defaults.

@@ -68,8 +68,8 @@ DB_POOL_SIZE=20
 For high availability, run multiple coordinator nodes. Each table is owned by exactly one node at a time; nodes take over automatically on failure. See [Deploy HA](../guides/deploy-ha.md) for setup details.
 
 ```yaml
-node:
-  coordinatorHaStrategy: heartbeat  # or "lease"
+coordinator:
+  haStrategy: heartbeat              # or "lease"
   heartbeatIntervalSeconds: 30
   deadNodeThresholdSeconds: 180
   reconciliationIntervalSeconds: 60
@@ -238,7 +238,7 @@ readinessProbe:
   periodSeconds: 5
 ```
 
-Set `node.nodeIdEnvVar: HOSTNAME` to use the pod name as the node ID — this ensures each pod gets a unique identity in `_table_assignment` and `_node_registry`:
+Set `coordinator.nodeIdEnvVar: HOSTNAME` to use the pod name as the node ID — this ensures each pod gets a unique identity in `_table_assignment` and `_node_registry`:
 
 ```yaml
 env:

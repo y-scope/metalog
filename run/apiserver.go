@@ -34,15 +34,15 @@ func APIServer() {
 		log.Fatal("failed to load config", zap.String("path", *configPath), zap.Error(err))
 	}
 
-	pool, err := db.NewPool(cfg.Node.Database)
+	pool, err := db.NewPool(cfg.Database)
 	if err != nil {
 		log.Fatal("failed to create DB pool", zap.Error(err))
 	}
 	defer pool.Close()
 
 	var healthSrv *health.Server
-	if cfg.Node.Health.Enabled {
-		healthSrv = health.NewServer(cfg.Node.Health.Port, log)
+	if cfg.Server.Health.Enabled {
+		healthSrv = health.NewServer(cfg.Server.Health.Port, log)
 		go func() {
 			if err := healthSrv.Start(); err != nil {
 				log.Error("health server error", zap.Error(err))
@@ -50,7 +50,7 @@ func APIServer() {
 		}()
 	}
 
-	grpcSrv := grpcserver.NewServer(cfg.Node.GRPC.Port, log)
+	grpcSrv := grpcserver.NewServer(cfg.Server.GRPC.Port, log)
 
 	queryEngine := query.NewSplitQueryEngine(pool, log)
 	queryGrpc := grpcserver.NewQueryHandler(queryEngine, func(string) *schema.ColumnRegistry { return nil }, log)
@@ -70,7 +70,7 @@ func APIServer() {
 		}
 	}()
 
-	log.Info("API server started", zap.Int("grpcPort", cfg.Node.GRPC.Port))
+	log.Info("API server started", zap.Int("grpcPort", cfg.Server.GRPC.Port))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

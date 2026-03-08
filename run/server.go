@@ -43,13 +43,13 @@ func Server() {
 	}
 
 	var grpcSrv *grpcserver.Server
-	if cfg.Node.GRPC.Enabled {
-		grpcSrv = grpcserver.NewServer(cfg.Node.GRPC.Port, log)
+	if cfg.Server.GRPC.Enabled {
+		grpcSrv = grpcserver.NewServer(cfg.Server.GRPC.Port, log)
 
 		ingestionGrpc := grpcserver.NewIngestionHandler(n.IngestionService(), log)
 		ingestionpb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
 
-		regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Node.Storage.TableCompression, log)
+		regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Storage.TableCompression, log)
 		coordGrpc := grpcserver.NewCoordinatorHandler(regSvc, log)
 		coordinatorpb.RegisterCoordinatorServiceServer(grpcSrv.GRPCServer(), coordGrpc)
 

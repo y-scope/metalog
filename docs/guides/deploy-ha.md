@@ -45,9 +45,9 @@ For most deployments, the default **heartbeat mode** is the right choice. Both m
 ## Configuration
 
 ```yaml
-node:
-  coordinatorHaStrategy: heartbeat  # or "lease"
-  reconciliationIntervalSeconds: 60 # both modes: orphan scan + claiming
+coordinator:
+  haStrategy: heartbeat              # or "lease"
+  reconciliationIntervalSeconds: 60  # both modes: orphan scan + claiming
 
   # Heartbeat mode
   heartbeatIntervalSeconds: 30

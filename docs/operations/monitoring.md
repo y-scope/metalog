@@ -8,7 +8,7 @@ Health checks, metrics, and alerting for production CLP Metastore deployments.
 
 ## Health Checks
 
-The coordinator node exposes HTTP health endpoints on port `8081` (configurable via `node.health.port` in `node.yaml`). The API server does not currently expose a health endpoint — monitor it via gRPC connectivity instead.
+The coordinator node exposes HTTP health endpoints on port `8081` (configurable via `server.health.port` in `node.yaml`). The API server does not currently expose a health endpoint — monitor it via gRPC connectivity instead.
 
 ### Endpoints
 
@@ -22,7 +22,7 @@ The readiness endpoint returns `503 NOT READY` when the node has not finished st
 ### Enable health checks
 
 ```yaml
-node:
+server:
   health:
     enabled: true
     port: 8081

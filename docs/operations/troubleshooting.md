@@ -20,10 +20,10 @@ ERROR Node - Failed to connect to database: dial tcp <host>:3306: connect: conne
 | Cause | Fix |
 |-------|-----|
 | Database not running | `docker compose -f docker/docker-compose.yml ps mariadb` — verify healthy |
-| Wrong host/port | Check `node.database.host` / `node.database.port` in `node.yaml` |
-| Wrong credentials | Check `node.database.user` / `node.database.password` |
+| Wrong host/port | Check `database.host` / `database.port` in `node.yaml` |
+| Wrong credentials | Check `database.user` / `database.password` |
 | Database not yet created | Ensure `createDatabaseIfNotExist` is set in the DSN (default) |
-| Connection pool exhausted | Increase `node.database.poolSize` (default 20) |
+| Connection pool exhausted | Increase `database.poolSize` (default 20) |
 | Firewall | Verify `3306` is reachable from the coordinator host |
 
 Test connectivity directly:
@@ -56,7 +56,7 @@ ERROR GrpcServer - Address already in use: 9090
 Change ports in config:
 
 ```yaml
-node:
+server:
   health:
     port: 8082        # health check HTTP port
 ```
@@ -94,7 +94,7 @@ SHOW PROCESSLIST;
    ```
    WARN TableWriter - BatchingWriter queue full; blocking producer
    ```
-   Fix: increase `node.database.poolSize`, or add a second coordinator for the table.
+   Fix: increase `database.poolSize`, or add a second coordinator for the table.
 
 2. **Database write speed insufficient** — check slow query log and verify `interpolateParams=true` in the DSN. Without it, each parameter requires a separate protocol round-trip.
 
@@ -108,7 +108,7 @@ SHOW PROCESSLIST;
 
 **Symptom:** gRPC ingestion clients receive `StatusRuntimeException: RESOURCE_EXHAUSTED`.
 
-The gRPC BatchingWriter queue is full. Default capacity: 10,000 queued records (configurable via `node.ingestion.grpc.maxQueuedRecords`).
+The gRPC BatchingWriter queue is full. Default capacity: 10,000 queued records.
 
 **Fix:**
 - Reduce producer send rate temporarily.

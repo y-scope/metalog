@@ -42,7 +42,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	log = log.With(zap.String("nodeId", nodeID))
 
 	// Create DB pool
-	pool, err := db.NewPool(cfg.Node.Database)
+	pool, err := db.NewPool(cfg.Database)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 
 	// Set up storage registry
 	storageReg := storage.NewRegistry()
-	for name, backendCfg := range cfg.Node.Storage.Backends {
+	for name, backendCfg := range cfg.Storage.Backends {
 		typeName := backendCfg.Type
 		if typeName == "" {
 			typeName = "s3"
@@ -89,10 +89,10 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 
 	// Create compressor
 	var compressor *storage.ClpCompressor
-	if cfg.Node.Storage.ClpBinaryPath != "" {
+	if cfg.Storage.ClpBinaryPath != "" {
 		compressor = storage.NewClpCompressor(
-			cfg.Node.Storage.ClpBinaryPath,
-			time.Duration(cfg.Node.Storage.ClpProcessTimeoutSeconds)*time.Second,
+			cfg.Storage.ClpBinaryPath,
+			time.Duration(cfg.Storage.ClpProcessTimeoutSeconds)*time.Second,
 			log,
 		)
 	}
@@ -105,8 +105,8 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		WorkerDB:        workerPool,
 		StorageRegistry: storageReg,
 		ArchiveCreator:  archiveCreator,
-		ArchiveBackend:  cfg.Node.Storage.DefaultBackend,
-		ArchiveBucket:   cfg.Node.Storage.ArchiveBucket,
+		ArchiveBackend:  cfg.Storage.DefaultBackend,
+		ArchiveBucket:   cfg.Storage.ArchiveBucket,
 		IsMariaDB:       isMariaDB,
 		Log:             log,
 	}
@@ -127,8 +127,8 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	}
 
 	// Health server
-	if cfg.Node.Health.Enabled {
-		n.healthSrv = health.NewServer(cfg.Node.Health.Port, log)
+	if cfg.Server.Health.Enabled {
+		n.healthSrv = health.NewServer(cfg.Server.Health.Port, log)
 	}
 
 	success = true
@@ -158,7 +158,7 @@ func (n *Node) Start() error {
 
 	// Provision physical tables
 	for _, t := range n.cfg.Tables {
-		if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Node.Storage.TableCompression, n.log); err != nil {
+		if err := schema.EnsureTable(ctx, n.shared.DB, t.Name, n.shared.IsMariaDB, n.cfg.Storage.TableCompression, n.log); err != nil {
 			n.log.Error("failed to provision table", zap.String("table", t.Name), zap.Error(err))
 			continue
 		}
@@ -191,12 +191,12 @@ func (n *Node) Start() error {
 	}
 
 	// Signal initial liveness before reconciliation so other nodes see us
-	if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyHeartbeat {
+	if n.cfg.Coordinator.HAStrategy == config.HAStrategyHeartbeat {
 		if err := n.registry.SendHeartbeat(ctx); err != nil {
 			n.log.Warn("initial heartbeat failed", zap.Error(err))
 		}
 	} else {
-		if err := n.registry.RenewLeases(ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second); err != nil {
+		if err := n.registry.RenewLeases(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second); err != nil {
 			n.log.Warn("initial lease renewal failed", zap.Error(err))
 		}
 	}
@@ -336,10 +336,10 @@ func (n *Node) startCoordinator(tableName string) error {
 
 func (n *Node) runLiveness() {
 	var interval time.Duration
-	if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyLease {
-		interval = time.Duration(n.cfg.Node.LeaseRenewalIntervalSeconds) * time.Second
+	if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
+		interval = time.Duration(n.cfg.Coordinator.LeaseRenewalIntervalSeconds) * time.Second
 	} else {
-		interval = time.Duration(n.cfg.Node.HeartbeatIntervalSeconds) * time.Second
+		interval = time.Duration(n.cfg.Coordinator.HeartbeatIntervalSeconds) * time.Second
 	}
 
 	ticker := time.NewTicker(interval)
@@ -350,8 +350,8 @@ func (n *Node) runLiveness() {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
-			if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyLease {
-				if err := n.registry.RenewLeases(n.ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second); err != nil {
+			if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
+				if err := n.registry.RenewLeases(n.ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second); err != nil {
 					n.log.Warn("lease renewal failed", zap.Error(err))
 				}
 			} else {
@@ -364,7 +364,7 @@ func (n *Node) runLiveness() {
 }
 
 func (n *Node) runReconciliation() {
-	interval := time.Duration(n.cfg.Node.ReconciliationIntervalSeconds) * time.Second
+	interval := time.Duration(n.cfg.Coordinator.ReconciliationIntervalSeconds) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -384,10 +384,10 @@ func (n *Node) reconcile() {
 	// Step 1: Claim orphans from dead nodes
 	var orphansClaimed []string
 	var err error
-	if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyLease {
-		orphansClaimed, err = n.registry.ClaimOrphansLease(ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second)
+	if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
+		orphansClaimed, err = n.registry.ClaimOrphansLease(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second)
 	} else {
-		orphansClaimed, err = n.registry.ClaimOrphansHeartbeat(ctx, time.Duration(n.cfg.Node.DeadNodeThresholdSeconds)*time.Second)
+		orphansClaimed, err = n.registry.ClaimOrphansHeartbeat(ctx, time.Duration(n.cfg.Coordinator.DeadNodeThresholdSeconds)*time.Second)
 	}
 	if err != nil {
 		n.log.Warn("orphan claim failed", zap.Error(err))

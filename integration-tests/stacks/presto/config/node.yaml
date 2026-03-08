@@ -1,20 +1,22 @@
-node:
-  name: presto-stack-coordinator
-  nodeIdEnvVar: HOSTNAME
-  database:
-    host: db
-    port: 3306
-    database: metalog_metadata
-    user: root
-    password: password
-    poolSize: 10
-    poolMinIdle: 2
+database:
+  host: db
+  port: 3306
+  database: metalog_metadata
+  user: root
+  password: password
+  poolSize: 10
+  poolMinIdle: 2
+
+server:
   grpc:
     enabled: true
     port: 9091
   health:
     enabled: true
     port: 8081
+
+coordinator:
+  nodeIdEnvVar: HOSTNAME
 
 worker:
   numWorkers: 0

@@ -161,7 +161,7 @@ Periodic background goroutines for coordination and housekeeping. Created once a
 | Goroutine | Name | Scope | Purpose |
 |-----------|------|-------|---------|
 | — | **Watchdog** | 1 per node | Monitor per-coordinator goroutine health, restart or release stalled coordinators |
-| — | **Heartbeat / Lease Renewal** | 1 per node | HA liveness signal (mode set by `coordinatorHaStrategy`) |
+| — | **Heartbeat / Lease Renewal** | 1 per node | HA liveness signal (mode set by `coordinator.haStrategy`) |
 | — | **Reconciliation** | 1 per node | Claim unassigned tables, start/stop coordinator units |
 | — | **Partition Maintenance** | 1 per node | Lookahead partition creation and cleanup for all tables |
 

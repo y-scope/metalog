@@ -48,8 +48,8 @@ cp docker/.env.example docker/.env
 
 | Port | Purpose | Configured in |
 |------|---------|---------------|
-| 9090 | Unified gRPC server (ingestion, query, catalog, admin) | `node.yaml` → `node.grpc.port` |
-| 8081 | Health check (`/health/live`, `/health/ready`) | `node.yaml` → `node.health.port` |
+| 9090 | Unified gRPC server (ingestion, query, catalog, admin) | `node.yaml` → `server.grpc.port` |
+| 8081 | Health check (`/health/live`, `/health/ready`) | `node.yaml` → `server.health.port` |
 
 ## Common Port Conflicts
 

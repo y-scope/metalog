@@ -4,38 +4,40 @@
 # to the container ID). Override nodeIdEnvVar for other platforms.
 # Database host uses the 'db' network alias — both MySQL and MariaDB register this alias.
 
-node:
-  name: coordinator-node
+database:
+  host: db
+  port: 3306
+  database: metalog_metastore
+  user: root
+  password: password
+  poolSize: 20
+  poolMinIdle: 5
 
-  # Environment variable to read for node_id (used in _table_assignment.node_id).
-  # Default: HOSTNAME (set automatically in Docker containers).
-  nodeIdEnvVar: HOSTNAME
+storage:
+  irBucket: logs
+  archiveBucket: logs
+  clpBinaryPath: /usr/bin/clp-s
+  clpProcessTimeoutSeconds: 300
+  defaultBackend: minio
+  backends:
+    minio:
+      endpoint: http://minio:9000
+      accessKey: minioadmin
+      secretKey: minioadmin
+      forcePathStyle: true
 
-  database:
-    host: db
-    port: 3306
-    database: metalog_metastore
-    user: root
-    password: password
-    poolSize: 20
-    poolMinIdle: 5
-
-  storage:
-    irBucket: logs
-    archiveBucket: logs
-    clpBinaryPath: /usr/bin/clp-s
-    clpProcessTimeoutSeconds: 300
-    defaultBackend: minio
-    backends:
-      minio:
-        endpoint: http://minio:9000
-        accessKey: minioadmin
-        secretKey: minioadmin
-        forcePathStyle: true
-
+server:
   health:
     enabled: true
     port: 8081
+  grpc:
+    enabled: true
+    port: 9090
+
+coordinator:
+  # Environment variable to read for node_id (used in _table_assignment.node_id).
+  # Default: HOSTNAME (set automatically in Docker containers).
+  nodeIdEnvVar: HOSTNAME
 
   # How often to check for new/unassigned tables (seconds).
   # Default: 60. Set lower for faster testing.
@@ -44,15 +46,11 @@ node:
   # HA strategy: "heartbeat" (default) or "lease".
   # Heartbeat: each node writes liveness to _node_registry; stale nodes are declared dead.
   # Lease: each table assignment carries a lease_expiry; expired leases are reclaimed.
-  coordinatorHaStrategy: heartbeat
+  haStrategy: heartbeat
   heartbeatIntervalSeconds: 30       # How often to write heartbeat (heartbeat mode)
   deadNodeThresholdSeconds: 180      # Seconds before a node is declared dead (heartbeat mode)
   # leaseTtlSeconds: 180             # Lease duration (lease mode)
   # leaseRenewalIntervalSeconds: 30  # Lease renewal interval, must be < leaseTtlSeconds (lease mode)
-
-  grpc:
-    enabled: true
-    port: 9090
 
 # Declarative table registration.
 # Tables listed here are auto-UPSERTed on startup. Only specified fields
@@ -67,7 +65,7 @@ tables:
 worker:
   numWorkers: 4
   # Optional: separate database for workers (e.g., read replica).
-  # If omitted, workers use node.database.
+  # If omitted, workers use the top-level database config.
   # database:
   #   host: replica-db
   #   port: 3306

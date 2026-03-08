@@ -8,49 +8,47 @@ Configuration is loaded from `node.yaml` (node-level settings). Per-table config
 
 ## node.yaml — Node Settings
 
-Node-level shared resources: identity, database connection, storage backends, and worker pool.
+Settings are organized by role: shared resources (`database`, `storage`), network (`server`), coordinator logic (`coordinator`), declarative tables (`tables`), and worker pool (`worker`).
 
 ```yaml
-node:
-  name: coordinator-node-1       # Display name (used in logs)
-  nodeIdEnvVar: HOSTNAME         # Env var whose value becomes node_id in _table_assignment
-                                 # Falls back to os.Hostname()
+database:
+  host: localhost
+  port: 3306                     # Default: 3306
+  database: metalog_metastore
+  user: root
+  password: ""
+  poolSize: 20                   # Max open connections
+  poolMinIdle: 5                 # Min idle connections
 
-  database:
-    host: localhost
-    port: 3306                   # Default: 3306
-    database: metalog_metastore
-    user: root
-    password: ""
-    poolSize: 20                 # Max open connections
-    poolMinIdle: 5               # Min idle connections
+storage:
+  defaultBackend: minio
+  irBucket: logs                 # Default bucket for IR files
+  archiveBucket: logs            # Default bucket for archive files
+  clpBinaryPath: /usr/bin/clp-s  # Path to the clp-s binary for consolidation
+  clpProcessTimeoutSeconds: 300  # Default: 300 (5 minutes)
+  backends:
+    minio:
+      endpoint: http://localhost:9000
+      accessKey: minioadmin
+      secretKey: minioadmin
+      region: ""                 # AWS region (optional, for S3)
+      forcePathStyle: true       # Required for MinIO
 
-  storage:
-    defaultBackend: minio
-    irBucket: logs               # Default bucket for IR files
-    archiveBucket: logs          # Default bucket for archive files
-    clpBinaryPath: /usr/bin/clp-s  # Path to the clp-s binary for consolidation
-    clpProcessTimeoutSeconds: 300  # Default: 300 (5 minutes)
-    backends:
-      minio:
-        endpoint: http://localhost:9000
-        accessKey: minioadmin
-        secretKey: minioadmin
-        region: ""               # AWS region (optional, for S3)
-        forcePathStyle: true     # Required for MinIO
-
+server:
   health:
     enabled: true
     port: 8081                   # Default: 8081
-
   grpc:
     enabled: true
     port: 9090                   # Default: 9090
 
+coordinator:
+  nodeIdEnvVar: HOSTNAME         # Env var whose value becomes node_id in _table_assignment
+                                 # Falls back to os.Hostname()
   reconciliationIntervalSeconds: 60  # Default: 60. How often to reconcile table assignments.
 
   # HA settings
-  coordinatorHaStrategy: heartbeat   # "heartbeat" (default) or "lease"
+  haStrategy: heartbeat              # "heartbeat" (default) or "lease"
   heartbeatIntervalSeconds: 30       # Default: 30. Heartbeat mode: liveness write interval.
   deadNodeThresholdSeconds: 180      # Default: 180. Heartbeat mode: seconds before node is declared dead.
   leaseTtlSeconds: 180               # Default: 180. Lease mode: lease duration.
@@ -80,32 +78,31 @@ worker:
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `node.name` | — | Display name for logs |
-| `node.nodeIdEnvVar` | `HOSTNAME` | Env var for node identity |
-| `node.database.host` | — | **Required.** Database hostname |
-| `node.database.port` | `3306` | Database port (1-65535) |
-| `node.database.database` | — | Database name |
-| `node.database.user` | — | Database user |
-| `node.database.password` | — | Database password |
-| `node.database.poolSize` | `20` | Max open connections |
-| `node.database.poolMinIdle` | `5` | Min idle connections |
-| `node.storage.defaultBackend` | — | Default storage backend name |
-| `node.storage.irBucket` | — | Default IR file bucket |
-| `node.storage.archiveBucket` | — | Default archive file bucket |
-| `node.storage.clpBinaryPath` | — | Path to clp-s binary |
-| `node.storage.clpProcessTimeoutSeconds` | `300` | CLP process timeout |
-| `node.health.enabled` | `false` | Enable HTTP health endpoint |
-| `node.health.port` | `8081` | Health endpoint port |
-| `node.grpc.enabled` | `false` | Enable gRPC server |
-| `node.grpc.port` | `9090` | gRPC server port |
-| `node.reconciliationIntervalSeconds` | `60` | Table assignment reconciliation interval |
-| `node.coordinatorHaStrategy` | `heartbeat` | HA mode: `heartbeat` or `lease` |
-| `node.heartbeatIntervalSeconds` | `30` | Heartbeat mode: liveness write interval |
-| `node.deadNodeThresholdSeconds` | `180` | Heartbeat mode: seconds before node is dead |
-| `node.leaseTtlSeconds` | `180` | Lease mode: lease duration in seconds |
-| `node.leaseRenewalIntervalSeconds` | `30` | Lease mode: renewal interval (must be < TTL) |
+| `database.host` | — | **Required.** Database hostname |
+| `database.port` | `3306` | Database port (1-65535) |
+| `database.database` | — | Database name |
+| `database.user` | — | Database user |
+| `database.password` | — | Database password |
+| `database.poolSize` | `20` | Max open connections |
+| `database.poolMinIdle` | `5` | Min idle connections |
+| `storage.defaultBackend` | — | Default storage backend name |
+| `storage.irBucket` | — | Default IR file bucket |
+| `storage.archiveBucket` | — | Default archive file bucket |
+| `storage.clpBinaryPath` | — | Path to clp-s binary |
+| `storage.clpProcessTimeoutSeconds` | `300` | CLP process timeout |
+| `server.health.enabled` | `false` | Enable HTTP health endpoint |
+| `server.health.port` | `8081` | Health endpoint port |
+| `server.grpc.enabled` | `false` | Enable gRPC server |
+| `server.grpc.port` | `9090` | gRPC server port |
+| `coordinator.nodeIdEnvVar` | `HOSTNAME` | Env var for node identity |
+| `coordinator.reconciliationIntervalSeconds` | `60` | Table assignment reconciliation interval |
+| `coordinator.haStrategy` | `heartbeat` | HA mode: `heartbeat` or `lease` |
+| `coordinator.heartbeatIntervalSeconds` | `30` | Heartbeat mode: liveness write interval |
+| `coordinator.deadNodeThresholdSeconds` | `180` | Heartbeat mode: seconds before node is dead |
+| `coordinator.leaseTtlSeconds` | `180` | Lease mode: lease duration in seconds |
+| `coordinator.leaseRenewalIntervalSeconds` | `30` | Lease mode: renewal interval (must be < TTL) |
 | `worker.numWorkers` | `4` | Worker goroutines. `0` = coordinator-only node |
-| `worker.database.*` | _(inherits node.database)_ | Optional separate DB pool for workers |
+| `worker.database.*` | _(inherits database)_ | Optional separate DB pool for workers |
 | `tables[].name` | — | **Required.** Table name |
 | `tables[].displayName` | — | Human-readable name |
 | `tables[].kafka.topic` | — | Kafka topic for this table |

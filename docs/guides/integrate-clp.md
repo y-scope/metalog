@@ -199,7 +199,7 @@ Note: In containerized environments, set `worker.numWorkers` explicitly based on
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `node.database.poolSize` | `20` | Maximum DB connections |
+| `database.poolSize` | `20` | Maximum DB connections |
 
 Note: DB operations (claim task, mark complete) are brief. Worker goroutines spend most time
 on I/O operations (download IR files, run clp-s, upload archive), so a small pool is sufficient

@@ -8,32 +8,33 @@ import (
 
 func TestLoadNodeConfig(t *testing.T) {
 	yaml := `
-node:
-  name: test-node
-  nodeIdEnvVar: HOSTNAME
-  database:
-    host: localhost
-    port: 3306
-    database: metalog_metastore
-    user: root
-    password: password
-    poolSize: 20
-    poolMinIdle: 5
-  storage:
-    irBucket: logs
-    archiveBucket: logs
-    clpBinaryPath: /usr/bin/clp-s
-    defaultBackend: minio
-    backends:
-      minio:
-        endpoint: http://minio:9000
-        accessKey: minioadmin
-        secretKey: minioadmin
-        forcePathStyle: true
+database:
+  host: localhost
+  port: 3306
+  database: metalog_metastore
+  user: root
+  password: password
+  poolSize: 20
+  poolMinIdle: 5
+storage:
+  irBucket: logs
+  archiveBucket: logs
+  clpBinaryPath: /usr/bin/clp-s
+  defaultBackend: minio
+  backends:
+    minio:
+      endpoint: http://minio:9000
+      accessKey: minioadmin
+      secretKey: minioadmin
+      forcePathStyle: true
+server:
   health:
     enabled: true
     port: 8081
-  coordinatorHaStrategy: heartbeat
+coordinator:
+  name: test-node
+  nodeIdEnvVar: HOSTNAME
+  haStrategy: heartbeat
   heartbeatIntervalSeconds: 30
   deadNodeThresholdSeconds: 180
 tables:
@@ -56,11 +57,11 @@ worker:
 		t.Fatal(err)
 	}
 
-	if cfg.Node.Name != "test-node" {
-		t.Errorf("Name = %q, want %q", cfg.Node.Name, "test-node")
+	if cfg.Coordinator.Name != "test-node" {
+		t.Errorf("Name = %q, want %q", cfg.Coordinator.Name, "test-node")
 	}
-	if cfg.Node.Database.Host != "localhost" {
-		t.Errorf("Database.Host = %q, want %q", cfg.Node.Database.Host, "localhost")
+	if cfg.Database.Host != "localhost" {
+		t.Errorf("Database.Host = %q, want %q", cfg.Database.Host, "localhost")
 	}
 	if len(cfg.Tables) != 1 {
 		t.Fatalf("len(Tables) = %d, want 1", len(cfg.Tables))

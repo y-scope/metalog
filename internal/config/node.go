@@ -9,9 +9,12 @@ import (
 
 // NodeConfig is the top-level configuration loaded from node.yaml.
 type NodeConfig struct {
-	Node   NodeSettings  `yaml:"node"`
-	Tables []TableConfig `yaml:"tables"`
-	Worker WorkerConfig  `yaml:"worker"`
+	Database    DatabaseConfig      `yaml:"database"`
+	Storage     ObjectStorageConfig `yaml:"storage"`
+	Server      ServerConfig        `yaml:"server"`
+	Coordinator CoordinatorConfig   `yaml:"coordinator"`
+	Tables      []TableConfig       `yaml:"tables"`
+	Worker      WorkerConfig        `yaml:"worker"`
 }
 
 // HAStrategy selects the liveness detection mode.
@@ -22,18 +25,21 @@ const (
 	HAStrategyLease     HAStrategy = "lease"
 )
 
-// NodeSettings contains core node configuration.
-type NodeSettings struct {
-	Name                          string              `yaml:"name"`
-	NodeIDEnvVar                  string              `yaml:"nodeIdEnvVar"`
-	Database                      DatabaseConfig      `yaml:"database"`
-	Storage                       ObjectStorageConfig `yaml:"storage"`
-	Health                        HealthConfig        `yaml:"health"`
-	GRPC                          GRPCConfig          `yaml:"grpc"`
-	ReconciliationIntervalSeconds int                 `yaml:"reconciliationIntervalSeconds"`
+// ServerConfig controls network-facing settings (gRPC + health endpoints).
+type ServerConfig struct {
+	Health HealthConfig `yaml:"health"`
+	GRPC   GRPCConfig   `yaml:"grpc"`
+}
+
+// CoordinatorConfig holds coordinator-specific settings (HA, identity).
+type CoordinatorConfig struct {
+	Name         string `yaml:"name"`
+	NodeIDEnvVar string `yaml:"nodeIdEnvVar"`
+
+	ReconciliationIntervalSeconds int `yaml:"reconciliationIntervalSeconds"`
 
 	// HA settings
-	CoordinatorHAStrategy       HAStrategy `yaml:"coordinatorHaStrategy"`
+	HAStrategy                  HAStrategy `yaml:"haStrategy"`
 	HeartbeatIntervalSeconds    int        `yaml:"heartbeatIntervalSeconds"`
 	DeadNodeThresholdSeconds    int        `yaml:"deadNodeThresholdSeconds"`
 	LeaseTTLSeconds             int        `yaml:"leaseTtlSeconds"`
@@ -75,7 +81,7 @@ type WorkerConfig struct {
 // ResolveNodeID reads the node ID from the environment variable specified
 // in the config. Falls back to os.Hostname() if the env var is not set.
 func (c *NodeConfig) ResolveNodeID() string {
-	envVar := c.Node.NodeIDEnvVar
+	envVar := c.Coordinator.NodeIDEnvVar
 	if envVar == "" {
 		envVar = "HOSTNAME"
 	}
@@ -109,39 +115,39 @@ func LoadNodeConfig(path string) (*NodeConfig, error) {
 // validateRaw checks user-provided values before defaults are applied.
 // This catches negative or otherwise invalid values that would be masked by applyDefaults.
 func (c *NodeConfig) validateRaw() error {
-	if c.Node.LeaseTTLSeconds < 0 {
-		return fmt.Errorf("node.leaseTtlSeconds must be non-negative, got %d", c.Node.LeaseTTLSeconds)
+	if c.Coordinator.LeaseTTLSeconds < 0 {
+		return fmt.Errorf("coordinator.leaseTtlSeconds must be non-negative, got %d", c.Coordinator.LeaseTTLSeconds)
 	}
-	if c.Node.LeaseRenewalIntervalSeconds < 0 {
-		return fmt.Errorf("node.leaseRenewalIntervalSeconds must be non-negative, got %d", c.Node.LeaseRenewalIntervalSeconds)
+	if c.Coordinator.LeaseRenewalIntervalSeconds < 0 {
+		return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds must be non-negative, got %d", c.Coordinator.LeaseRenewalIntervalSeconds)
 	}
-	if c.Node.HeartbeatIntervalSeconds < 0 {
-		return fmt.Errorf("node.heartbeatIntervalSeconds must be non-negative, got %d", c.Node.HeartbeatIntervalSeconds)
+	if c.Coordinator.HeartbeatIntervalSeconds < 0 {
+		return fmt.Errorf("coordinator.heartbeatIntervalSeconds must be non-negative, got %d", c.Coordinator.HeartbeatIntervalSeconds)
 	}
-	if c.Node.DeadNodeThresholdSeconds < 0 {
-		return fmt.Errorf("node.deadNodeThresholdSeconds must be non-negative, got %d", c.Node.DeadNodeThresholdSeconds)
+	if c.Coordinator.DeadNodeThresholdSeconds < 0 {
+		return fmt.Errorf("coordinator.deadNodeThresholdSeconds must be non-negative, got %d", c.Coordinator.DeadNodeThresholdSeconds)
 	}
-	if c.Node.ReconciliationIntervalSeconds < 0 {
-		return fmt.Errorf("node.reconciliationIntervalSeconds must be non-negative, got %d", c.Node.ReconciliationIntervalSeconds)
+	if c.Coordinator.ReconciliationIntervalSeconds < 0 {
+		return fmt.Errorf("coordinator.reconciliationIntervalSeconds must be non-negative, got %d", c.Coordinator.ReconciliationIntervalSeconds)
 	}
 	return nil
 }
 
 func (c *NodeConfig) validate() error {
-	if c.Node.Database.Host == "" {
-		return fmt.Errorf("node.database.host is required")
+	if c.Database.Host == "" {
+		return fmt.Errorf("database.host is required")
 	}
-	if c.Node.Database.Port < 1 || c.Node.Database.Port > 65535 {
-		return fmt.Errorf("node.database.port must be 1-65535, got %d", c.Node.Database.Port)
+	if c.Database.Port < 1 || c.Database.Port > 65535 {
+		return fmt.Errorf("database.port must be 1-65535, got %d", c.Database.Port)
 	}
-	if c.Node.Health.Enabled {
-		if c.Node.Health.Port < 1 || c.Node.Health.Port > 65535 {
-			return fmt.Errorf("node.health.port must be 1-65535, got %d", c.Node.Health.Port)
+	if c.Server.Health.Enabled {
+		if c.Server.Health.Port < 1 || c.Server.Health.Port > 65535 {
+			return fmt.Errorf("server.health.port must be 1-65535, got %d", c.Server.Health.Port)
 		}
 	}
-	if c.Node.GRPC.Enabled {
-		if c.Node.GRPC.Port < 1 || c.Node.GRPC.Port > 65535 {
-			return fmt.Errorf("node.grpc.port must be 1-65535, got %d", c.Node.GRPC.Port)
+	if c.Server.GRPC.Enabled {
+		if c.Server.GRPC.Port < 1 || c.Server.GRPC.Port > 65535 {
+			return fmt.Errorf("server.grpc.port must be 1-65535, got %d", c.Server.GRPC.Port)
 		}
 	}
 	for i, t := range c.Tables {
@@ -149,52 +155,52 @@ func (c *NodeConfig) validate() error {
 			return fmt.Errorf("tables[%d].name is required", i)
 		}
 	}
-	switch c.Node.CoordinatorHAStrategy {
+	switch c.Coordinator.HAStrategy {
 	case HAStrategyHeartbeat, HAStrategyLease:
 	default:
-		return fmt.Errorf("node.coordinatorHaStrategy must be 'heartbeat' or 'lease', got %q", c.Node.CoordinatorHAStrategy)
+		return fmt.Errorf("coordinator.haStrategy must be 'heartbeat' or 'lease', got %q", c.Coordinator.HAStrategy)
 	}
-	if c.Node.CoordinatorHAStrategy == HAStrategyLease {
-		if c.Node.LeaseRenewalIntervalSeconds >= c.Node.LeaseTTLSeconds {
-			return fmt.Errorf("node.leaseRenewalIntervalSeconds (%d) must be less than node.leaseTtlSeconds (%d)",
-				c.Node.LeaseRenewalIntervalSeconds, c.Node.LeaseTTLSeconds)
+	if c.Coordinator.HAStrategy == HAStrategyLease {
+		if c.Coordinator.LeaseRenewalIntervalSeconds >= c.Coordinator.LeaseTTLSeconds {
+			return fmt.Errorf("coordinator.leaseRenewalIntervalSeconds (%d) must be less than coordinator.leaseTtlSeconds (%d)",
+				c.Coordinator.LeaseRenewalIntervalSeconds, c.Coordinator.LeaseTTLSeconds)
 		}
 	}
 	return nil
 }
 
 func applyDefaults(cfg *NodeConfig) {
-	if cfg.Node.Database.Port == 0 {
-		cfg.Node.Database.Port = 3306
+	if cfg.Database.Port == 0 {
+		cfg.Database.Port = 3306
 	}
-	if cfg.Node.Health.Port == 0 {
-		cfg.Node.Health.Port = 8081
+	if cfg.Server.Health.Port == 0 {
+		cfg.Server.Health.Port = 8081
 	}
-	if cfg.Node.GRPC.Port == 0 {
-		cfg.Node.GRPC.Port = 9090
+	if cfg.Server.GRPC.Port == 0 {
+		cfg.Server.GRPC.Port = 9090
 	}
-	if cfg.Node.ReconciliationIntervalSeconds == 0 {
-		cfg.Node.ReconciliationIntervalSeconds = 60
+	if cfg.Coordinator.ReconciliationIntervalSeconds == 0 {
+		cfg.Coordinator.ReconciliationIntervalSeconds = 60
 	}
 	if cfg.Worker.NumWorkers == 0 {
 		cfg.Worker.NumWorkers = 4
 	}
-	if cfg.Node.Storage.ClpProcessTimeoutSeconds == 0 {
-		cfg.Node.Storage.ClpProcessTimeoutSeconds = 300
+	if cfg.Storage.ClpProcessTimeoutSeconds == 0 {
+		cfg.Storage.ClpProcessTimeoutSeconds = 300
 	}
-	if cfg.Node.CoordinatorHAStrategy == "" {
-		cfg.Node.CoordinatorHAStrategy = HAStrategyHeartbeat
+	if cfg.Coordinator.HAStrategy == "" {
+		cfg.Coordinator.HAStrategy = HAStrategyHeartbeat
 	}
-	if cfg.Node.HeartbeatIntervalSeconds == 0 {
-		cfg.Node.HeartbeatIntervalSeconds = 30
+	if cfg.Coordinator.HeartbeatIntervalSeconds == 0 {
+		cfg.Coordinator.HeartbeatIntervalSeconds = 30
 	}
-	if cfg.Node.DeadNodeThresholdSeconds == 0 {
-		cfg.Node.DeadNodeThresholdSeconds = 180
+	if cfg.Coordinator.DeadNodeThresholdSeconds == 0 {
+		cfg.Coordinator.DeadNodeThresholdSeconds = 180
 	}
-	if cfg.Node.LeaseTTLSeconds == 0 {
-		cfg.Node.LeaseTTLSeconds = 180
+	if cfg.Coordinator.LeaseTTLSeconds == 0 {
+		cfg.Coordinator.LeaseTTLSeconds = 180
 	}
-	if cfg.Node.LeaseRenewalIntervalSeconds == 0 {
-		cfg.Node.LeaseRenewalIntervalSeconds = 30
+	if cfg.Coordinator.LeaseRenewalIntervalSeconds == 0 {
+		cfg.Coordinator.LeaseRenewalIntervalSeconds = 30
 	}
 }

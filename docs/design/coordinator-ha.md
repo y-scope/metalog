@@ -334,7 +334,7 @@ See `schema.sql` for the full registry (`_table_kafka`, `_table_config`).
 
 The `node_id` is resolved at startup:
 
-1. Read the environment variable named by `node.nodeIdEnvVar` in `node.yaml` (default: `HOSTNAME`)
+1. Read the environment variable named by `coordinator.nodeIdEnvVar` in `node.yaml` (default: `HOSTNAME`)
 2. If empty, fall back to `os.Hostname()`
 3. If both fail, startup aborts with a clear error
 
