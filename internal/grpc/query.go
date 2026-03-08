@@ -100,6 +100,9 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 			Split:    split,
 			Sequence: seq,
 		}
+		if req.GetIncludeCursor() {
+			resp.Cursor = buildResponseCursor(row, params.OrderBy)
+		}
 		if err := stream.Send(resp); err != nil {
 			return err
 		}
@@ -177,6 +180,32 @@ func rowToProtoSplit(row *query.SplitRow) *pb.Split {
 	}
 
 	return split
+}
+
+// buildResponseCursor creates a KeysetCursor from a result row's sort column values.
+func buildResponseCursor(row *query.SplitRow, orderBy []query.OrderBySpec) *pb.KeysetCursor {
+	cursor := &pb.KeysetCursor{Id: row.ID}
+	for _, ob := range orderBy {
+		cursor.Values = append(cursor.Values, toCursorValue(row.Values[ob.Column]))
+	}
+	return cursor
+}
+
+func toCursorValue(val any) *pb.CursorValue {
+	switch v := val.(type) {
+	case int64:
+		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: v}}
+	case int32:
+		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: int64(v)}}
+	case float64:
+		return &pb.CursorValue{Value: &pb.CursorValue_FloatVal{FloatVal: v}}
+	case string:
+		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: v}}
+	case []byte:
+		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: string(v)}}
+	default:
+		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: fmt.Sprintf("%v", v)}}
+	}
 }
 
 // dbValToString converts a database value to a string.
