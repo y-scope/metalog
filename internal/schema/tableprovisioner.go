@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -15,7 +16,7 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
-const sketchSlotCount = 32
+const sketchSlotCount = 64
 
 // EnsureTable idempotently provisions a metadata table and all registry rows.
 // Steps: create physical table, insert registry rows, pre-populate sketch slots,
@@ -146,11 +147,12 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 }
 
 func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
+	now := time.Now().UnixNano()
 	for i := 1; i <= sketchSlotCount; i++ {
 		member := fmt.Sprintf("s%02d", i)
 		query, args, _ := sq.Insert(metastore.SketchRegistryTable).Options("IGNORE").
-			Columns("table_name", "sketch_name", "state").
-			Values(tableName, member, "AVAILABLE").
+			Columns("table_name", "sketch_name", "state", "created_at").
+			Values(tableName, member, "AVAILABLE", now).
 			ToSql()
 		if _, err := database.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("insert sketch slot: %w", err)

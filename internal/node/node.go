@@ -196,7 +196,7 @@ func (n *Node) Start() error {
 			n.log.Warn("initial heartbeat failed", zap.Error(err))
 		}
 	} else {
-		if err := n.registry.RenewLeases(ctx, n.cfg.Node.LeaseTTLSeconds); err != nil {
+		if err := n.registry.RenewLeases(ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second); err != nil {
 			n.log.Warn("initial lease renewal failed", zap.Error(err))
 		}
 	}
@@ -351,7 +351,7 @@ func (n *Node) runLiveness() {
 			return
 		case <-ticker.C:
 			if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyLease {
-				if err := n.registry.RenewLeases(n.ctx, n.cfg.Node.LeaseTTLSeconds); err != nil {
+				if err := n.registry.RenewLeases(n.ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second); err != nil {
 					n.log.Warn("lease renewal failed", zap.Error(err))
 				}
 			} else {
@@ -385,9 +385,9 @@ func (n *Node) reconcile() {
 	var orphansClaimed []string
 	var err error
 	if n.cfg.Node.CoordinatorHAStrategy == config.HAStrategyLease {
-		orphansClaimed, err = n.registry.ClaimOrphansLease(ctx, n.cfg.Node.LeaseTTLSeconds)
+		orphansClaimed, err = n.registry.ClaimOrphansLease(ctx, time.Duration(n.cfg.Node.LeaseTTLSeconds)*time.Second)
 	} else {
-		orphansClaimed, err = n.registry.ClaimOrphansHeartbeat(ctx, n.cfg.Node.DeadNodeThresholdSeconds)
+		orphansClaimed, err = n.registry.ClaimOrphansHeartbeat(ctx, time.Duration(n.cfg.Node.DeadNodeThresholdSeconds)*time.Second)
 	}
 	if err != nil {
 		n.log.Warn("orphan claim failed", zap.Error(err))

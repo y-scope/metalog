@@ -110,22 +110,24 @@
 --    For the last case, check state column: IR_* states = IR-only, IR_ARCHIVE_* = HYBRID.
 --
 -- 10. Sketches SET Column Limited to 64 Members
---     MySQL SET type supports up to 64 distinct values.
---     For high-frequency sketch fields (user_id, trace_id, request_id), this is sufficient.
---     Evolution via: ALTER TABLE MODIFY COLUMN sketches SET('existing', 'new_field')
---     Online operation: ALGORITHM=INPLACE, LOCK=NONE preserves existing data.
+--     MySQL SET type supports up to 64 distinct values (hard limit).
+--     All 64 slots (s01-s64) are pre-allocated in the template DDL to avoid
+--     ALTER TABLE MODIFY (which requires a table rebuild). The column is NULL
+--     for most rows, so the 8-byte bitmask only applies to rows with sketches.
+--     If 64 sketch fields are exhausted, the design must be revisited.
 --
--- 11. Timestamps as BIGINT (Epoch Nanoseconds)
---     File-level timestamps (min_timestamp, max_timestamp, clp_archive_created_at, expires_at)
---     are stored as BIGINT epoch nanoseconds for sub-second precision. This matches the
---     resolution of CLP's internal timestamps and avoids precision loss when round-tripping
---     through the metadata layer. BIGINT uses 8 bytes per column — double the 4-byte INT
---     UNSIGNED alternative — adding ~20 bytes/row across 5 timestamp columns (~3 GB at
---     150M rows). The trade-off is justified: nanosecond precision enables accurate split
---     pruning, consistent ordering of files written within the same second, and alignment
---     with protobuf int64 wire types that already carry nanosecond values.
---     Operational timestamps (task queue, node registry, column registries) remain epoch
---     seconds via INT UNSIGNED — they don't need sub-second precision.
+-- 11. All Timestamps Are BIGINT (Epoch Nanoseconds)
+--     Every timestamp column across all tables uses BIGINT epoch nanoseconds.
+--     This includes both file-level timestamps (min_timestamp, max_timestamp,
+--     clp_archive_created_at, expires_at) and operational timestamps
+--     (created_at, claimed_at, heartbeat_at, etc. in task queue, node registry,
+--     column registries, and table assignment).
+--     Rationale: uniform units eliminate unit-mismatch bugs when joining or
+--     comparing timestamps across tables. The storage overhead for operational
+--     tables is negligible (tens to low thousands of rows). Nanosecond
+--     precision aligns with CLP's internal timestamps and protobuf int64 wire
+--     types. No DEFAULT (UNIX_TIMESTAMP()) is used — the application must
+--     supply time.Now().UnixNano() on insert to ensure correct units.
 --
 -- 12. State Transition Enforcement Is Application-Layer Only
 --     The state ENUM constrains the set of valid values, but valid transitions
@@ -169,10 +171,61 @@
 -- Split into identity, Kafka routing, feature config, and node assignment.
 -- Each sub-table uses table_name as PK/FK for 1:1 relationships.
 --
+-- WHY 4 TABLES INSTEAD OF 1?
+--
+-- The split is driven by write cadence and deployment topology, not entity
+-- modeling theory. Each sub-table is written at a different frequency and
+-- potentially by different nodes:
+--
+--   _table            Stable identity. Written once at provisioning, rarely
+--                     changed. Anchor for all FKs.
+--
+--   _table_kafka      Environment-specific routing (bootstrap servers, topic).
+--                     Different coordinators in dev/prod/staging can point to
+--                     different Kafka clusters for the same logical table.
+--                     Updated during Kafka migrations, not during normal ops.
+--
+--   _table_config     Feature flags and operational parameters. Read-heavy,
+--                     hot-reloaded by coordinators. Rarely written (operator
+--                     config changes). Must not contend with assignment writes.
+--
+--   _table_assignment Hot table. Heartbeats, lease expiry, and progress
+--                     timestamps updated every few seconds by whichever
+--                     coordinator currently owns the table. Coordinators are
+--                     stateless — any node can take over on restart — so the
+--                     assignment row is the lightweight lease mechanism.
+--                     Keeping it narrow minimizes the critical section during
+--                     failover.
+--
+-- A single wide row would mean every heartbeat UPDATE touches a row that
+-- config reads also need, creating unnecessary InnoDB row-lock contention.
+--
+-- FK CASCADE POLICY:
+-- All child tables use ON DELETE CASCADE. Deleting a row from _table
+-- automatically cleans up config, assignment, Kafka routing, registries,
+-- and tasks. This is safe because table decommissioning is a rare,
+-- operator-initiated action, and CASCADE eliminates the risk of orphaned
+-- rows across 7 child tables. The active flag on _table supports
+-- soft-delete for normal operations; hard delete is reserved for full
+-- decommissioning.
+--
+-- ON UPDATE CASCADE is intentionally omitted. table_name is an immutable
+-- identifier — table renames are not supported. Renaming would require
+-- updating the cloned data table name, all Kafka consumer group IDs,
+-- storage paths, and monitoring dashboards. If a name change is needed,
+-- provision a new table and migrate data.
+--
 -- See: ../../../../docs/design/coordinator-ha.md
 --
 
--- Identity: slim registry of managed tables
+-- Identity: slim registry of managed tables.
+--
+-- table_id (UUID):  Used to build globally unique Kafka consumer group IDs
+--   (e.g., clp-coordinator-{table_name}-{table_id}) so that multiple
+--   environments (dev, staging, prod) consuming the same Kafka topic
+--   maintain independent offsets — even when coordinators fail over to
+--   different nodes via HA. NOT used as a FK; table_name is the FK
+--   everywhere for human-readable queries, logs, and debugging.
 CREATE TABLE IF NOT EXISTS _table (
     table_id      CHAR(36) NOT NULL DEFAULT (UUID()) PRIMARY KEY,
     table_name    VARCHAR(64) NOT NULL UNIQUE,
@@ -186,7 +239,7 @@ CREATE TABLE IF NOT EXISTS _table_kafka (
     kafka_bootstrap_servers VARCHAR(255) NOT NULL DEFAULT 'localhost:9092',
     kafka_topic             VARCHAR(255) NOT NULL,
     record_transformer      VARCHAR(64) NULL,
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Feature config: typed columns instead of JSON blob.
@@ -214,7 +267,7 @@ CREATE TABLE IF NOT EXISTS _table_config (
     storage_deletion_delay_ms           INT UNSIGNED NOT NULL DEFAULT 100,
     policy_config_path                  VARCHAR(512) NULL,
     index_config_path                   VARCHAR(512) NULL,
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Node assignment: which node owns this table
@@ -222,12 +275,12 @@ CREATE TABLE IF NOT EXISTS _table_config (
 CREATE TABLE IF NOT EXISTS _table_assignment (
     table_name            VARCHAR(64) NOT NULL PRIMARY KEY,
     node_id               VARCHAR(64) NULL,
-    node_assigned_at      INT UNSIGNED NULL,
-    assignment_updated_at INT UNSIGNED NULL,
-    last_progress_at      INT UNSIGNED NULL,
-    lease_expiry          INT UNSIGNED NULL,
+    node_assigned_at      BIGINT NULL,
+    assignment_updated_at BIGINT NULL,
+    last_progress_at      BIGINT NULL,
+    lease_expiry          BIGINT NULL,
     INDEX idx_node_id (node_id),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Node registry: tracks live nodes via heartbeat for orphan detection
@@ -236,8 +289,8 @@ CREATE TABLE IF NOT EXISTS _table_assignment (
 -- See: ../../../../docs/design/coordinator-ha.md
 CREATE TABLE IF NOT EXISTS _node_registry (
     node_id           VARCHAR(64) PRIMARY KEY,
-    last_heartbeat_at INT UNSIGNED NOT NULL,
-    started_at        INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
+    last_heartbeat_at BIGINT NOT NULL,
+    started_at        BIGINT NOT NULL,
     INDEX idx_heartbeat (last_heartbeat_at)
 ) ENGINE=InnoDB;
 
@@ -293,29 +346,37 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- LIFECYCLE STATE
     -- ========================================================================
 
-    -- Two independent lifecycle chains — a file enters ONE chain at creation
-    -- and never crosses to the other:
+    -- Three lifecycle chains — a file enters ONE chain at creation:
     --
     --   IR-only chain (no consolidation):
     --     IR_BUFFERING → IR_CLOSED → IR_PURGING
     --
+    --   Archive-only chain (pre-built archives, no IR stage):
+    --     ARCHIVE_CLOSED → ARCHIVE_PURGING
+    --
     --   Hybrid chain (IR ingested, then consolidated into archive):
     --     IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
     --
-    -- The starting state is chosen by the producer at file creation time.
-    -- There is NO transition between chains (e.g., IR_BUFFERING cannot
-    -- become IR_ARCHIVE_BUFFERING).
+    -- The hybrid and archive-only chains share the ARCHIVE_CLOSED →
+    -- ARCHIVE_PURGING tail. The starting state is chosen by the producer
+    -- at file creation time. There is NO transition between the IR-only
+    -- chain and the other chains (e.g., IR_BUFFERING cannot become
+    -- IR_ARCHIVE_BUFFERING or ARCHIVE_CLOSED).
     state ENUM(
-        -- IR-only chain
+        -- IR-only chain (ordinals 1-3, lifecycle order)
         'IR_BUFFERING',                      -- IR file still being written (entry point)
         'IR_CLOSED',                         -- IR file closed, queryable
         'IR_PURGING',                        -- IR file scheduled for deletion
 
-        -- Hybrid chain
-        'ARCHIVE_CLOSED',                    -- Archive created (entry point for archive-only, or post-consolidation)
-        'ARCHIVE_PURGING',                   -- Archive scheduled for deletion
+        -- Hybrid chain (ordinals 4-5, lifecycle order)
+        -- Continues into archive chain below after consolidation
         'IR_ARCHIVE_BUFFERING',              -- IR file being written, will be consolidated (entry point)
-        'IR_ARCHIVE_CONSOLIDATION_PENDING'   -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
+        'IR_ARCHIVE_CONSOLIDATION_PENDING',  -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
+
+        -- Archive chain (ordinals 6-7, lifecycle order)
+        -- Shared tail for both archive-only and hybrid chains
+        'ARCHIVE_CLOSED',                    -- Archive created (entry point for archive-only, or post-consolidation)
+        'ARCHIVE_PURGING'                    -- Archive scheduled for deletion
     ) NOT NULL,
 
     -- ========================================================================
@@ -331,8 +392,13 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- RETENTION
     -- ========================================================================
 
+    -- retention_days: default policy (how long to keep data).
+    -- expires_at: effective expiration, initially min_timestamp + retention_days.
+    -- These are independent — expires_at may be extended manually (e.g., after a
+    -- security incident) without changing the policy. Do not recompute expires_at
+    -- from retention_days; treat it as the authoritative expiration.
     retention_days              SMALLINT UNSIGNED NOT NULL DEFAULT 30,
-    expires_at                  BIGINT NOT NULL DEFAULT 0,            -- min_timestamp + retention_days (nanos)
+    expires_at                  BIGINT NOT NULL DEFAULT 0,
 
     -- ========================================================================
     -- DIMENSIONS (Dynamic)
@@ -352,8 +418,10 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     --
     -- SET column indicates which fields have data sketches (bloom/cuckoo filters) in ext.
     -- NULL for most rows (no sketches); non-NULL when sketches are available.
-    -- Auto-evolved via ALTER TABLE MODIFY when new sketch fields are discovered.
-    -- MySQL SET supports up to 64 members.
+    -- All 64 SET members are pre-allocated to avoid ALTER TABLE MODIFY, which
+    -- requires a table rebuild. The column is NULL for most rows, so the 8-byte
+    -- bitmask storage only applies to rows that actually have sketches.
+    -- MySQL SET supports up to 64 members (hard limit).
     --
     -- Usage: sketches IS NOT NULL AND FIND_IN_SET('user_id', sketches) > 0
     --
@@ -361,7 +429,11 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     sketches                    SET('s01','s02','s03','s04','s05','s06','s07','s08',
                                     's09','s10','s11','s12','s13','s14','s15','s16',
                                     's17','s18','s19','s20','s21','s22','s23','s24',
-                                    's25','s26','s27','s28','s29','s30','s31','s32') NULL,
+                                    's25','s26','s27','s28','s29','s30','s31','s32',
+                                    's33','s34','s35','s36','s37','s38','s39','s40',
+                                    's41','s42','s43','s44','s45','s46','s47','s48',
+                                    's49','s50','s51','s52','s53','s54','s55','s56',
+                                    's57','s58','s59','s60','s61','s62','s63','s64') NULL,
 
     -- ========================================================================
     -- EXTENSION DATA (Msgpack-encoded) - USE SPARINGLY
@@ -487,10 +559,14 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     -- No FK to _node_registry: workers may deregister before their tasks are
     -- reclaimed. Orphaned worker_id values are handled by stale task detection.
     worker_id           VARCHAR(64) NULL,
-    created_at          INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    claimed_at          INT UNSIGNED NULL,
-    completed_at        INT UNSIGNED NULL,
+    created_at          BIGINT NOT NULL,
+    claimed_at          BIGINT NULL,
+    completed_at        BIGINT NULL,
     retry_count         TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    -- MEDIUMBLOB (16 MB max) is used instead of BLOB (64 KB) to avoid a
+    -- table-rebuild ALTER if payloads ever grow beyond 64 KB. Typical payloads
+    -- are LZ4+msgpack-encoded file path lists, well under 64 KB. The application
+    -- layer should enforce a reasonable size limit (e.g., 1 MB) before insert.
     input               MEDIUMBLOB NOT NULL,
     output              MEDIUMBLOB NULL,
 
@@ -510,15 +586,8 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     -- and cleaned up aggressively, so a worker_id index would add write
     -- overhead without meaningful query benefit.
 
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
-
--- Schema migrations for existing installations
--- Note: IF EXISTS / IF NOT EXISTS in ALTER TABLE is MariaDB-only syntax.
--- On MySQL 8.0 these will produce a syntax error, but EnsureSystemTables
--- catches and skips ALTER TABLE errors gracefully.
-ALTER TABLE _task_queue CHANGE COLUMN IF EXISTS payload input MEDIUMBLOB NOT NULL;
-ALTER TABLE _task_queue ADD COLUMN IF NOT EXISTS output MEDIUMBLOB NULL;
 
 
 -- ============================================================================
@@ -543,11 +612,11 @@ CREATE TABLE IF NOT EXISTS _dim_registry (
     dim_key         VARCHAR(1024) NOT NULL,
     alias_column    VARCHAR(64)   NULL,
     state           ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
-    created_at      INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    invalidated_at  INT UNSIGNED NULL,
+    created_at      BIGINT NOT NULL,
+    invalidated_at  BIGINT NULL,
     PRIMARY KEY (table_name, column_name),
     INDEX idx_dim_lookup (table_name, dim_key(255), state),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Aggregate column registry: maps agg_fNN placeholders to field metadata
@@ -560,11 +629,11 @@ CREATE TABLE IF NOT EXISTS _agg_registry (
     value_type        ENUM('INT','FLOAT') NOT NULL DEFAULT 'INT',
     alias_column      VARCHAR(64)   NULL,
     state             ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
-    created_at        INT UNSIGNED  NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    invalidated_at    INT UNSIGNED  NULL,
+    created_at        BIGINT  NOT NULL,
+    invalidated_at    BIGINT  NULL,
     PRIMARY KEY (table_name, column_name),
     INDEX idx_agg_lookup (table_name, agg_key(255), state),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Sketch registry: maps SET members (s01..s32) to field metadata
@@ -574,8 +643,8 @@ CREATE TABLE IF NOT EXISTS _sketch_registry (
     sketch_name     VARCHAR(8) NOT NULL,
     sketch_key      VARCHAR(1024) NULL,
     state           ENUM('ACTIVE','INVALIDATED','AVAILABLE') NOT NULL,
-    created_at      INT UNSIGNED NOT NULL DEFAULT (UNIX_TIMESTAMP()),
-    invalidated_at  INT UNSIGNED NULL,
+    created_at      BIGINT NOT NULL,
+    invalidated_at  BIGINT NULL,
     PRIMARY KEY (table_name, sketch_name),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;

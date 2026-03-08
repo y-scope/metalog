@@ -140,7 +140,9 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 	cutoffName := timeutil.DayPartitionName(cutoff.UnixNano())
 
 	for _, p := range partitions {
-		// Never drop p_future or partitions that are too recent
+		// Never drop p_future or partitions that are too recent.
+		// String comparison works because partition names use p_YYYYMMDD format,
+		// which sorts lexicographically in chronological order.
 		if p.Name == "p_future" || p.Name >= cutoffName {
 			continue
 		}

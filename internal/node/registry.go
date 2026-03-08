@@ -175,7 +175,7 @@ func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.
 
 // ClaimTable attempts to claim an unassigned table for this node.
 func (r *CoordinatorRegistry) ClaimTable(ctx context.Context, tableName string) (bool, error) {
-	now := time.Now().Unix()
+	now := time.Now().UnixNano()
 	query, args, err := sq.Update(metastore.TableRegistryAssignment).
 		Set("node_id", r.nodeID).
 		Set("node_assigned_at", now).
@@ -262,10 +262,11 @@ func (r *CoordinatorRegistry) ReleaseAllTables(ctx context.Context) error {
 
 // SendHeartbeat updates the heartbeat timestamp for this node.
 func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
+	now := time.Now().UnixNano()
 	query, args, _ := sq.Insert(metastore.NodeRegistryTable).
-		Columns("node_id", "last_heartbeat_at").
-		Values(r.nodeID, sq.Expr("UNIX_TIMESTAMP()")).
-		Suffix("ON DUPLICATE KEY UPDATE last_heartbeat_at = UNIX_TIMESTAMP()").
+		Columns("node_id", "last_heartbeat_at", "started_at").
+		Values(r.nodeID, now, now).
+		Suffix("ON DUPLICATE KEY UPDATE last_heartbeat_at = VALUES(last_heartbeat_at)").
 		ToSql()
 	_, err := r.db.ExecContext(ctx, query, args...)
 	return err
@@ -273,15 +274,16 @@ func (r *CoordinatorRegistry) SendHeartbeat(ctx context.Context) error {
 
 // ClaimOrphansHeartbeat claims tables from nodes whose heartbeat is stale.
 // Uses LEFT JOIN to also catch nodes that never registered (crashed before first heartbeat).
-func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThresholdSeconds int) ([]string, error) {
+func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThreshold time.Duration) ([]string, error) {
+	cutoff := time.Now().Add(-deadThreshold).UnixNano()
 	// Find orphans: owner is dead (stale heartbeat) or never registered (LEFT JOIN NULL)
 	query := "SELECT a.table_name, a.node_id FROM " + metastore.TableRegistryAssignment + " a " +
 		"JOIN " + metastore.TableRegistry + " t ON a.table_name = t.table_name " +
 		"LEFT JOIN " + metastore.NodeRegistryTable + " n ON a.node_id = n.node_id " +
 		"WHERE t.active = true AND a.node_id IS NOT NULL AND a.node_id != ? " +
-		"AND (n.node_id IS NULL OR n.last_heartbeat_at < UNIX_TIMESTAMP() - ?)"
+		"AND (n.node_id IS NULL OR n.last_heartbeat_at < ?)"
 
-	rows, err := r.db.QueryContext(ctx, query, r.nodeID, deadThresholdSeconds)
+	rows, err := r.db.QueryContext(ctx, query, r.nodeID, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("find heartbeat orphans: %w", err)
 	}
@@ -306,7 +308,7 @@ func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThr
 	// Claim each orphan with compare-and-swap on dead owner's node_id
 	var claimed []string
 	for _, o := range orphans {
-		now := time.Now().Unix()
+		now := time.Now().UnixNano()
 		claimQuery, claimArgs, _ := sq.Update(metastore.TableRegistryAssignment).
 			Set("node_id", r.nodeID).
 			Set("node_assigned_at", now).
@@ -328,27 +330,28 @@ func (r *CoordinatorRegistry) ClaimOrphansHeartbeat(ctx context.Context, deadThr
 }
 
 // ClaimOrphansLease claims tables whose lease has expired or is NULL.
-func (r *CoordinatorRegistry) ClaimOrphansLease(ctx context.Context, leaseTTLSeconds int) ([]string, error) {
+func (r *CoordinatorRegistry) ClaimOrphansLease(ctx context.Context, leaseTTL time.Duration) ([]string, error) {
+	now := time.Now().UnixNano()
 	query := "SELECT a.table_name FROM " + metastore.TableRegistryAssignment + " a " +
 		"JOIN " + metastore.TableRegistry + " t ON a.table_name = t.table_name " +
 		"WHERE t.active = true AND a.node_id IS NOT NULL AND a.node_id != ? " +
-		"AND (a.lease_expiry < UNIX_TIMESTAMP() OR a.lease_expiry IS NULL)"
+		"AND (a.lease_expiry < ? OR a.lease_expiry IS NULL)"
 
-	orphans, err := r.scanTableNames(ctx, query, r.nodeID)
+	orphans, err := r.scanTableNames(ctx, query, r.nodeID, now)
 	if err != nil {
 		return nil, fmt.Errorf("find lease orphans: %w", err)
 	}
 
 	var claimed []string
-	now := time.Now().Unix()
 	for _, t := range orphans {
+		claimNow := time.Now().UnixNano()
 		claimQuery, claimArgs, _ := sq.Update(metastore.TableRegistryAssignment).
 			Set("node_id", r.nodeID).
-			Set("node_assigned_at", now).
-			Set("assignment_updated_at", now).
-			Set("lease_expiry", now+int64(leaseTTLSeconds)).
+			Set("node_assigned_at", claimNow).
+			Set("assignment_updated_at", claimNow).
+			Set("lease_expiry", claimNow+leaseTTL.Nanoseconds()).
 			Where(sq.Eq{"table_name": t}).
-			Where("(lease_expiry < UNIX_TIMESTAMP() OR lease_expiry IS NULL)").
+			Where(sq.Or{sq.Lt{"lease_expiry": claimNow}, sq.Eq{"lease_expiry": nil}}).
 			ToSql()
 		res, err := r.db.ExecContext(ctx, claimQuery, claimArgs...)
 		if err != nil {
@@ -364,9 +367,9 @@ func (r *CoordinatorRegistry) ClaimOrphansLease(ctx context.Context, leaseTTLSec
 }
 
 // RenewLeases extends lease_expiry for all tables owned by this node.
-func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTLSeconds int) error {
+func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTL time.Duration) error {
 	query, args, err := sq.Update(metastore.TableRegistryAssignment).
-		Set("lease_expiry", sq.Expr("UNIX_TIMESTAMP() + ?", leaseTTLSeconds)).
+		Set("lease_expiry", time.Now().Add(leaseTTL).UnixNano()).
 		Where(sq.Eq{"node_id": r.nodeID}).
 		ToSql()
 	if err != nil {
@@ -379,10 +382,11 @@ func (r *CoordinatorRegistry) RenewLeases(ctx context.Context, leaseTTLSeconds i
 }
 
 // CountActiveNodes returns the number of nodes with a recent heartbeat.
-func (r *CoordinatorRegistry) CountActiveNodes(ctx context.Context, deadThresholdSeconds int) (int, error) {
+func (r *CoordinatorRegistry) CountActiveNodes(ctx context.Context, deadThreshold time.Duration) (int, error) {
+	cutoff := time.Now().Add(-deadThreshold).UnixNano()
 	query, args, _ := sq.Select("COUNT(*)").
 		From(metastore.NodeRegistryTable).
-		Where("last_heartbeat_at >= UNIX_TIMESTAMP() - ?", deadThresholdSeconds).
+		Where(sq.GtOrEq{"last_heartbeat_at": cutoff}).
 		ToSql()
 	var count int
 	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
@@ -414,7 +418,7 @@ func (r *CoordinatorRegistry) CountMyTables(ctx context.Context) (int, error) {
 // UpdateProgress writes last_progress_at for operator visibility.
 func (r *CoordinatorRegistry) UpdateProgress(ctx context.Context, tableName string) error {
 	query, args, _ := sq.Update(metastore.TableRegistryAssignment).
-		Set("last_progress_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Set("last_progress_at", time.Now().UnixNano()).
 		Where(sq.Eq{"table_name": tableName, "node_id": r.nodeID}).
 		ToSql()
 	_, err := r.db.ExecContext(ctx, query, args...)

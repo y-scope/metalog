@@ -5,6 +5,7 @@ package node_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -259,13 +260,14 @@ func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	node1.ClaimTable(ctx, "orphan_table")
 
 	// Set dead-node's heartbeat to the past (simulate death)
+	pastNanos := time.Now().Add(-300 * time.Second).UnixNano()
 	mc.DB.ExecContext(ctx,
-		"UPDATE _node_registry SET last_heartbeat_at = UNIX_TIMESTAMP() - 300 WHERE node_id = ?",
-		"dead-node")
+		"UPDATE _node_registry SET last_heartbeat_at = ? WHERE node_id = ?",
+		pastNanos, "dead-node")
 
 	// Alive node sends heartbeat and claims orphans
 	node2.SendHeartbeat(ctx)
-	claimed, err := node2.ClaimOrphansHeartbeat(ctx, 60)
+	claimed, err := node2.ClaimOrphansHeartbeat(ctx, 60*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

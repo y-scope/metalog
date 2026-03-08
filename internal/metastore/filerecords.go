@@ -353,13 +353,17 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 		return result, tx.Commit()
 	}
 
-	// Delete by hash (batched)
+	// Delete by hash with re-check of expiration criteria to prevent TOCTOU race:
+	// another transaction may have extended expires_at between SELECT and DELETE.
 	hashArgs := make([]any, len(hashes))
 	for i, h := range hashes {
 		hashArgs[i] = h
 	}
 	delQuery, delArgs, _ := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
 		Where(sq.Eq{ColClpIRPathHash: hashArgs}).
+		Where(sq.Gt{ColExpiresAt: 0}).
+		Where(sq.Lt{ColExpiresAt: currentNanos}).
+		Where(sq.Eq{ColState: []string{string(StateIRPurging), string(StateArchivePurging)}}).
 		ToSql()
 	res, err := tx.ExecContext(ctx, delQuery, delArgs...)
 	if err != nil {

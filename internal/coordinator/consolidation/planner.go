@@ -343,8 +343,7 @@ func (p *Planner) cleanupOldTasks(ctx context.Context) error {
 }
 
 func (p *Planner) reclaimStaleTasks(ctx context.Context) error {
-	staleTimeoutSec := int(config.DefaultTaskStaleTimeout.Seconds())
-	staleTasks, err := p.taskQueue.FindStaleTasks(ctx, p.tableName, staleTimeoutSec)
+	staleTasks, err := p.taskQueue.FindStaleTasks(ctx, p.tableName, config.DefaultTaskStaleTimeout)
 	if err != nil {
 		return fmt.Errorf("reclaim stale tasks: %w", err)
 	}

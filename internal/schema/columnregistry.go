@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -294,6 +295,12 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	}
 	cr.mu.RUnlock()
 
+	// Slot numbers above 99 would produce 3-digit names (dim_f100) breaking the
+	// %02d zero-padding convention. The practical limit is enforced by
+	// schema_evolution_max_dim_columns (default 50), but guard here as a safety net.
+	if cr.nextDimSlot > 99 {
+		return "", fmt.Errorf("dim slot exhausted: slot %d exceeds maximum 99", cr.nextDimSlot)
+	}
 	colName := fmt.Sprintf("%s%02d", metastore.DimColumnPrefix, cr.nextDimSlot)
 
 	// Determine SQL type
@@ -312,8 +319,8 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 
 	// INSERT into registry (safe now — the physical column exists)
 	insertQuery, insertArgs, _ := sq.Insert(metastore.DimRegistryTable).
-		Columns("table_name", "column_name", "base_type", "width", "dim_key", "state").
-		Values(cr.tableName, colName, baseType, width, dimKey, statusActive).
+		Columns("table_name", "column_name", "base_type", "width", "dim_key", "state", "created_at").
+		Values(cr.tableName, colName, baseType, width, dimKey, statusActive, time.Now().UnixNano()).
 		ToSql()
 	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert dim registry: %w", err)
@@ -366,6 +373,9 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	}
 	cr.mu.RUnlock()
 
+	if cr.nextAggSlot > 99 {
+		return "", fmt.Errorf("agg slot exhausted: slot %d exceeds maximum 99", cr.nextAggSlot)
+	}
 	colName := fmt.Sprintf("%s%02d", metastore.AggColumnPrefix, cr.nextAggSlot)
 
 	sqlType := "BIGINT"
@@ -385,8 +395,8 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 
 	// INSERT into registry (safe now — the physical column exists)
 	insertQuery, insertArgs, _ := sq.Insert(metastore.AggRegistryTable).
-		Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "state").
-		Values(cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType, statusActive).
+		Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "state", "created_at").
+		Values(cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType, statusActive, time.Now().UnixNano()).
 		ToSql()
 	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert agg registry: %w", err)

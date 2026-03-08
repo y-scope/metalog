@@ -31,8 +31,8 @@ func NewQueue(database *sql.DB, log *zap.Logger) *Queue {
 // CreateTask inserts a new pending task and returns its ID.
 func (q *Queue) CreateTask(ctx context.Context, tableName string, input []byte) (int64, error) {
 	query, args, err := sq.Insert(TableName).
-		Columns("table_name", "input").
-		Values(tableName, input).
+		Columns("table_name", "created_at", "input").
+		Values(tableName, time.Now().UnixNano(), input).
 		ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("create task: build query: %w", err)
@@ -123,7 +123,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	updateQuery, updateArgs, err := sq.Update(TableName).
 		Set("state", string(TaskStateProcessing)).
 		Set("worker_id", workerID).
-		Set("claimed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Set("claimed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskIDs}).
 		ToSql()
 	if err != nil {
@@ -150,7 +150,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (int64, error) {
 	builder := sq.Update(TableName).
 		Set("state", string(TaskStateCompleted)).
-		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Set("completed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)})
 	if output != nil {
 		builder = builder.Set("output", output)
@@ -178,7 +178,7 @@ func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	query, args, err := sq.Update(TableName).
 		Set("retry_count", sq.Expr("retry_count + 1")).
 		Set("state", sq.Expr("IF(retry_count >= ?, 'dead_letter', 'failed')", defaultMaxRetries)).
-		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Set("completed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
 		ToSql()
 	if err != nil {
@@ -206,12 +206,13 @@ func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	return n, nil
 }
 
-// FindStaleTasks returns processing tasks older than timeoutSeconds.
-func (q *Queue) FindStaleTasks(ctx context.Context, tableName string, timeoutSeconds int) ([]*Task, error) {
+// FindStaleTasks returns processing tasks older than the given timeout.
+func (q *Queue) FindStaleTasks(ctx context.Context, tableName string, timeout time.Duration) ([]*Task, error) {
+	cutoff := time.Now().Add(-timeout).UnixNano()
 	query, args, err := sq.Select("task_id", "table_name", "state", "retry_count", "input", "worker_id").
 		From(TableName).
 		Where(sq.Eq{"table_name": tableName, "state": string(TaskStateProcessing)}).
-		Where("claimed_at <= UNIX_TIMESTAMP() - ?", timeoutSeconds).
+		Where(sq.LtOrEq{"claimed_at": cutoff}).
 		ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("find stale tasks: build query: %w", err)
@@ -253,7 +254,7 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 
 	updateQuery, updateArgs, err := sq.Update(TableName).
 		Set("state", newState).
-		Set("completed_at", sq.Expr("UNIX_TIMESTAMP()")).
+		Set("completed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
 		ToSql()
 	if err != nil {
@@ -277,10 +278,11 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 	}
 
 	// Re-enqueue: copy input from old task into new pending task
+	nowNano := time.Now().UnixNano()
 	insertQuery, insertArgs, err := sq.Insert(TableName).
-		Columns("table_name", "input", "retry_count").
+		Columns("table_name", "created_at", "input", "retry_count").
 		Select(
-			sq.Select("table_name", "input", "retry_count + 1").
+			sq.Select("table_name", fmt.Sprintf("%d", nowNano), "input", "retry_count + 1").
 				From(TableName).
 				Where(sq.Eq{"task_id": taskID}),
 		).
@@ -301,7 +303,7 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 
 // CleanupOldTasks deletes completed/failed/timed_out tasks older than maxAge.
 func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-maxAge).Unix()
+	cutoff := time.Now().Add(-maxAge).UnixNano()
 	query, args, err := sq.Delete(TableName).
 		Where(sq.Eq{
 			"table_name": tableName,
