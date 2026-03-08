@@ -38,14 +38,12 @@ grpcurl -plaintext -d '{
     "record_transformer": "spark"
   },
   "kafka_poller_enabled": true,
-  "consolidation_enabled": false,
-  "schema_evolution_enabled": true,
-  "loop_interval_ms": 5000
+  "consolidation_enabled": false
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 ```
 
-> **Note:** `deletion_enabled` and `retention_cleanup_enabled` are not exposed by the `RegisterTable` RPC and must be set directly via SQL on `_table_config` if needed.
+> **Note:** `retention_cleanup_enabled` is not exposed by the `RegisterTable` RPC and must be set directly via SQL on `_table_config` if needed.
 
 See [gRPC API — CoordinatorService](../reference/grpc-api.md#coordinatorservice) for full field reference.
 
@@ -68,7 +66,6 @@ tables:
     # consolidationEnabled: true
     # deletionEnabled: true
     # retentionCleanupEnabled: true
-    # loopIntervalMs: 5000
 ```
 
 See [Write Transformers](write-transformers.md) for the list of valid `recordTransformer` values and how they map ingested Kafka messages to IR file metadata.
@@ -124,18 +121,12 @@ SELECT * FROM _table_config WHERE table_name = 'spark';
 
 Each per-table coordinator goroutine can be individually enabled/disabled via `_table_config` columns:
 
-| Goroutine | Column (`_table_config`) | Default | Description |
-|-----------|--------------------------|---------|-------------|
+| Feature | Column (`_table_config`) | Default | Description |
+|---------|--------------------------|---------|-------------|
 | Kafka Consumer | `kafka_poller_enabled` | true | Polls Kafka, submits to BatchingWriter |
-| Planner | `consolidation_enabled` | true | Creates IR→Archive consolidation tasks |
-| Storage Deletion | `deletion_enabled` | true | Deletes files from object storage after state transitions |
-| Retention Cleanup | `retention_cleanup_enabled` | true | DELETEs expired rows from the metadata table |
-
-> **Note:** `metadata_writer_enabled` exists in `_table_config` but is not currently read by the coordinator. The BatchingWriter is a node-level component shared across all tables and is not controlled per-table.
-
-Partition management (`partition_manager_enabled`) also runs at the node level, not as a per-table goroutine. See [Metadata Schema](../concepts/metadata-schema.md#partitioning) and [Architecture Overview](../concepts/overview.md) for the full goroutine model.
-
-> **Note:** `schemaEvolutionEnabled` is not a goroutine toggle — it controls whether the service automatically adds new `dim_*` and `agg_*` columns via online DDL when new fields are discovered. See [Schema Evolution](evolve-schema.md).
+| Metadata Writer | `metadata_writer_enabled` | true | Accepts and batch-UPSERTs ingested records |
+| Consolidation | `consolidation_enabled` | true | Creates IR→Archive consolidation tasks |
+| Retention Cleanup | `retention_cleanup_enabled` | true | Purges expired rows and storage objects |
 
 ---
 

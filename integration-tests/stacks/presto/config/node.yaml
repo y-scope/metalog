@@ -19,7 +19,7 @@ coordinator:
   nodeIdEnvVar: HOSTNAME
 
 worker:
-  numWorkers: 0
+  concurrency: 0
 
 tables:
   - name: clp_cockroachdb

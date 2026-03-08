@@ -296,8 +296,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	cr.mu.RUnlock()
 
 	// Slot numbers above 99 would produce 3-digit names (dim_f100) breaking the
-	// %02d zero-padding convention. The practical limit is enforced by
-	// schema_evolution_max_dim_columns (default 50), but guard here as a safety net.
+	// %02d zero-padding convention.
 	if cr.nextDimSlot > 99 {
 		return "", fmt.Errorf("dim slot exhausted: slot %d exceeds maximum 99", cr.nextDimSlot)
 	}

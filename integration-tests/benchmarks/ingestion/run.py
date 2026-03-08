@@ -334,7 +334,7 @@ tables:
   - name: clp_spark
 {kafka_section}
 worker:
-  numWorkers: 0
+  concurrency: 0
 """)
 
     # Step 5: For Kafka modes, produce all records BEFORE starting coordinator.

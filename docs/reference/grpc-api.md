@@ -577,8 +577,6 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 | `kafka` | KafkaConfig | Yes | Kafka routing configuration |
 | `kafka_poller_enabled` | optional bool | No | Enable/disable Kafka consumer goroutine. Default: `true` when `kafka` is provided. |
 | `consolidation_enabled` | optional bool | No | Enable/disable consolidation planner. Uses DB default if omitted. |
-| `schema_evolution_enabled` | optional bool | No | Enable/disable auto-DDL for new fields. Uses DB default if omitted. |
-| `loop_interval_ms` | optional int32 | No | Override coordinator loop interval (ms). Uses DB default if omitted. |
 
 **`KafkaConfig` fields:**
 
@@ -625,9 +623,7 @@ grpcurl -plaintext -d '{
     "bootstrap_servers": "kafka:29092",
     "record_transformer": "spark"
   },
-  "consolidation_enabled": false,
-  "schema_evolution_enabled": true,
-  "loop_interval_ms": 5000
+  "consolidation_enabled": false
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.CoordinatorService/RegisterTable
 ```

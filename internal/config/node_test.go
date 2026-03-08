@@ -44,7 +44,7 @@ tables:
       topic: spark-ir
       bootstrapServers: kafka:29092
 worker:
-  numWorkers: 4
+  concurrency: 4
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.yaml")

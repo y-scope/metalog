@@ -185,8 +185,8 @@ func (n *Node) Start() error {
 	}
 
 	// Start workers
-	if n.cfg.Worker.NumWorkers > 0 {
-		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.NumWorkers, n.nodeID, n.shared, n.log)
+	if n.cfg.Worker.Concurrency > 0 {
+		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
 		n.workerUnit.Start()
 	}
 
@@ -229,7 +229,7 @@ func (n *Node) Start() error {
 
 	n.log.Info("node started",
 		zap.Int("coordinators", len(n.coordinators)),
-		zap.Int("workers", n.cfg.Worker.NumWorkers),
+		zap.Int("workers", n.cfg.Worker.Concurrency),
 	)
 	return nil
 }

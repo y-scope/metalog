@@ -188,12 +188,12 @@ The actual archive size (bytes) is returned by `createArchive()` and stored in t
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `worker.numWorkers` | `4` | Number of worker goroutines per process |
+| `worker.concurrency` | `4` | Number of worker goroutines per process |
 | `worker.prefetchQueueSize` | `5` | Tasks held in-memory; one DB batch-claim per refill |
 
 Backoff on empty polls uses exponential backoff (1s → 32s) with a 2× multiplier.
 
-Note: In containerized environments, set `worker.numWorkers` explicitly based on the container's CPU limit (cgroup).
+Note: In containerized environments, set `worker.concurrency` explicitly based on the container's CPU limit (cgroup).
 
 ### Database Connection Pool
 

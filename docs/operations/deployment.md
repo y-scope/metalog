@@ -24,7 +24,7 @@ In `node.yaml`:
 
 ```yaml
 worker:
-  numWorkers: 4   # Workers run as goroutines inside the Node process
+  concurrency: 4   # Workers run as goroutines inside the Node process
 ```
 
 ### Production: Separate Coordinator and Worker Pools
@@ -38,14 +38,14 @@ In production, run coordinators and workers as **separate processes** on dedicat
 │  ./metalog-node              │   │  ./metalog-worker            │
 │    --config node.yaml        │   │    (standalone worker mode)   │
 │                              │   │                              │
-│  worker.numWorkers: 0        │   │  DB_HOST=db                  │
+│  worker.concurrency: 0       │   │  DB_HOST=db                  │
 │  (coordinator-only)          │   │  WORKER_TABLE_NAME=clp_spark │
 └──────────────────────────────┘   └──────────────────────────────┘
           │                                     │
           └──────────────── Database ───────────┘
 ```
 
-Set `worker.numWorkers: 0` on coordinator nodes to disable in-process workers.
+Set `worker.concurrency: 0` on coordinator nodes to disable in-process workers.
 
 ### Production: Separate API Server
 

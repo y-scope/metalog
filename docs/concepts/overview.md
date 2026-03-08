@@ -131,7 +131,7 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Per-coordinator goroutines are individually enabled or disabled via `_table_config` columns.
 
-Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.numWorkers` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)). Partition management runs at the node level (see [Metadata Schema: Partitioning](metadata-schema.md#partitioning)).
+Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)). Partition management runs at the node level (see [Metadata Schema: Partitioning](metadata-schema.md#partitioning)).
 
 ### Per-Coordinator Goroutines (4 per table)
 

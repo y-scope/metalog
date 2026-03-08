@@ -273,21 +273,8 @@ CREATE TABLE IF NOT EXISTS _table_config (
     table_name                          VARCHAR(64) NOT NULL PRIMARY KEY,
     kafka_poller_enabled                BOOLEAN NOT NULL DEFAULT TRUE,
     metadata_writer_enabled             BOOLEAN NOT NULL DEFAULT TRUE,
-    deletion_enabled                    BOOLEAN NOT NULL DEFAULT TRUE,
     consolidation_enabled               BOOLEAN NOT NULL DEFAULT TRUE,
     retention_cleanup_enabled           BOOLEAN NOT NULL DEFAULT TRUE,
-    retention_cleanup_interval_ms       INT UNSIGNED NOT NULL DEFAULT 60000,
-    partition_manager_enabled           BOOLEAN NOT NULL DEFAULT TRUE,
-    partition_maintenance_interval_ms   INT UNSIGNED NOT NULL DEFAULT 3600000,
-    policy_hot_reload_enabled           BOOLEAN NOT NULL DEFAULT TRUE,
-    index_hot_reload_enabled            BOOLEAN NOT NULL DEFAULT TRUE,
-    schema_evolution_enabled            BOOLEAN NOT NULL DEFAULT FALSE,
-    schema_evolution_max_dim_columns    SMALLINT UNSIGNED NOT NULL DEFAULT 50,
-    schema_evolution_max_count_columns  SMALLINT UNSIGNED NOT NULL DEFAULT 20,
-    loop_interval_ms                    INT UNSIGNED NOT NULL DEFAULT 5000,
-    storage_deletion_delay_ms           INT UNSIGNED NOT NULL DEFAULT 100,
-    policy_config_path                  VARCHAR(512) NULL,
-    index_config_path                   VARCHAR(512) NULL,
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 

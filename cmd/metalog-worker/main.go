@@ -67,9 +67,9 @@ func main() {
 	// Create task queue and prefetcher
 	tq := taskqueue.NewQueue(pool, log)
 	nodeID := cfg.ResolveNodeID()
-	numWorkers := cfg.Worker.NumWorkers
-	if numWorkers <= 0 {
-		numWorkers = 4
+	concurrency := cfg.Worker.Concurrency
+	if concurrency <= 0 {
+		concurrency = 4
 	}
 
 	prefetcher := worker.NewPrefetcher(tq, nodeID, config.DefaultTaskClaimBatchSize, log)
@@ -95,8 +95,8 @@ func main() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		workerDone := make(chan struct{}, numWorkers)
-		for i := 0; i < numWorkers; i++ {
+		workerDone := make(chan struct{}, concurrency)
+		for i := 0; i < concurrency; i++ {
 			core := worker.NewCore(
 				tq, archiveCreator, prefetcher,
 				log.With(zap.Int("workerId", i)),
@@ -106,12 +106,12 @@ func main() {
 				workerDone <- struct{}{}
 			}()
 		}
-		for i := 0; i < numWorkers; i++ {
+		for i := 0; i < concurrency; i++ {
 			<-workerDone
 		}
 	}()
 
-	log.Info("standalone worker started", zap.Int("workers", numWorkers), zap.String("nodeId", nodeID))
+	log.Info("standalone worker started", zap.Int("workers", concurrency), zap.String("nodeId", nodeID))
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)

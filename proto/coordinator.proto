@@ -26,8 +26,6 @@ message RegisterTableRequest {
   KafkaConfig kafka                   = 3; // required
   optional bool  kafka_poller_enabled     = 4;
   optional bool  consolidation_enabled    = 5;
-  optional bool  schema_evolution_enabled = 6;
-  optional int32 loop_interval_ms         = 7;
 }
 
 message RegisterTableResponse {

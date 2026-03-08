@@ -65,7 +65,7 @@ tables:
 
 # Shared worker pool (claims tasks from all tables).
 worker:
-  numWorkers: 4                  # Default: 4. Set to 0 for coordinator-only node.
+  concurrency: 4                 # Default: 4. Set to 0 for coordinator-only node.
   # database:                    # Optional separate DB pool for workers
   #   host: read-replica
   #   port: 3306
@@ -101,7 +101,7 @@ worker:
 | `coordinator.deadNodeThresholdSeconds` | `180` | Heartbeat mode: seconds before node is dead |
 | `coordinator.leaseTtlSeconds` | `180` | Lease mode: lease duration in seconds |
 | `coordinator.leaseRenewalIntervalSeconds` | `30` | Lease mode: renewal interval (must be < TTL) |
-| `worker.numWorkers` | `4` | Worker goroutines. `0` = coordinator-only node |
+| `worker.concurrency` | `4` | Concurrent task goroutines. `0` = coordinator-only node |
 | `worker.database.*` | _(inherits database)_ | Optional separate DB pool for workers |
 | `tables[].name` | — | **Required.** Table name |
 | `tables[].displayName` | — | Human-readable name |
@@ -142,7 +142,7 @@ All schema setup is automatic. On startup, the node creates the database, initia
 - [Port Configuration](../operations/port-configuration.md) — Customizing infrastructure ports
 - [Performance Tuning](../operations/performance-tuning.md) — DSN tuning, batch size impact
 - [Deploy HA](../guides/deploy-ha.md) — Node assignment, liveness, and failover
-- [Scale Workers](../guides/scale-workers.md) — Scaling worker nodes and `numWorkers` tuning
+- [Scale Workers](../guides/scale-workers.md) — Scaling worker nodes and `concurrency` tuning
 - [Ingestion Paths](../concepts/ingestion.md) — gRPC vs Kafka ingestion, when to use each
 - [Write Transformers](../guides/write-transformers.md) — Transformer interface and registration
 - [Schema Evolution](../guides/evolve-schema.md) — Online DDL for new fields

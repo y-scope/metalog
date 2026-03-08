@@ -159,7 +159,7 @@ tables:
 
 # Shared worker pool (claims tasks from all tables)
 worker:
-  numWorkers: 4    # 0 = coordinator-only node
+  concurrency: 4    # 0 = coordinator-only node
 ```
 
 See [Configuration Reference](../reference/configuration.md) for full details.

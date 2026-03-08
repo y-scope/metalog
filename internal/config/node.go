@@ -74,7 +74,7 @@ type TableKafkaConfig struct {
 
 // WorkerConfig holds worker settings.
 type WorkerConfig struct {
-	NumWorkers int             `yaml:"numWorkers"`
+	Concurrency int            `yaml:"concurrency"`
 	Database   *DatabaseConfig `yaml:"database"`
 }
 
@@ -182,8 +182,8 @@ func applyDefaults(cfg *NodeConfig) {
 	if cfg.Coordinator.ReconciliationIntervalSeconds == 0 {
 		cfg.Coordinator.ReconciliationIntervalSeconds = 60
 	}
-	if cfg.Worker.NumWorkers == 0 {
-		cfg.Worker.NumWorkers = 4
+	if cfg.Worker.Concurrency == 0 {
+		cfg.Worker.Concurrency = 4
 	}
 	if cfg.Storage.ClpProcessTimeoutSeconds == 0 {
 		cfg.Storage.ClpProcessTimeoutSeconds = 300

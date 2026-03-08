@@ -63,7 +63,7 @@ tables:
       bootstrapServers: kafka:29092
 
 worker:
-  numWorkers: 4
+  concurrency: 4
   # Optional: separate database for workers (e.g., read replica).
   # If omitted, workers use the top-level database config.
   # database:
