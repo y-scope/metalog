@@ -39,6 +39,7 @@ type Planner struct {
 func NewPlanner(
 	db *sql.DB,
 	tableName string,
+	isMariaDB bool,
 	policy Policy,
 	inFlight *InFlightSet,
 	taskQueue *taskqueue.Queue,
@@ -48,7 +49,7 @@ func NewPlanner(
 	interval time.Duration,
 	log *zap.Logger,
 ) (*Planner, error) {
-	fr, err := metastore.NewFileRecords(db, tableName, log)
+	fr, err := metastore.NewFileRecords(db, tableName, isMariaDB, log)
 	if err != nil {
 		return nil, fmt.Errorf("new planner: %w", err)
 	}

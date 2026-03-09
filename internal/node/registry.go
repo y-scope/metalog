@@ -127,61 +127,6 @@ func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 	return nil
 }
 
-// UpsertTables registers tables from the config into the registry.
-// Note: VALUES() in ON DUPLICATE KEY UPDATE is deprecated in MySQL 8.0.20+ but
-// fully supported in MariaDB 10.6+ (our target). If migrating to MySQL 8.0.20+,
-// use the alias form: INSERT INTO ... AS new ON DUPLICATE KEY UPDATE col = new.col.
-func (r *CoordinatorRegistry) UpsertTables(ctx context.Context, tables []config.TableConfig) error {
-	for _, t := range tables {
-		tableInsert := sq.Insert(metastore.TableRegistry).
-			Columns("table_name", "display_name").
-			Values(t.Name, t.DisplayName)
-		if r.isMariaDB {
-			tableInsert = tableInsert.Suffix("ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)")
-		} else {
-			tableInsert = tableInsert.Suffix("AS new ON DUPLICATE KEY UPDATE display_name = COALESCE(new.display_name, display_name)")
-		}
-		query, args, _ := tableInsert.ToSql()
-		if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("upsert table %s: %w", t.Name, err)
-		}
-
-		assignQuery, assignArgs, _ := sq.Insert(metastore.TableRegistryAssignment).Options("IGNORE").
-			Columns("table_name").
-			Values(t.Name).
-			ToSql()
-		if _, err := r.db.ExecContext(ctx, assignQuery, assignArgs...); err != nil {
-			return fmt.Errorf("ensure assignment %s: %w", t.Name, err)
-		}
-
-		if t.Kafka.Topic != "" {
-			kafkaInsert := sq.Insert(metastore.TableRegistryKafka).
-				Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
-				Values(t.Name, t.Kafka.Topic, t.Kafka.BootstrapServers, t.Kafka.RecordTransformer)
-			kafkaCols := []string{"kafka_topic", "kafka_bootstrap_servers", "record_transformer"}
-			if r.isMariaDB {
-				kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateValues(kafkaCols...))
-			} else {
-				kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateAlias("new", kafkaCols...))
-			}
-			kQuery, kArgs, _ := kafkaInsert.ToSql()
-			if _, err := r.db.ExecContext(ctx, kQuery, kArgs...); err != nil {
-				return fmt.Errorf("upsert kafka config %s: %w", t.Name, err)
-			}
-		} else {
-			// No Kafka config in YAML — delete any stale DB row so
-			// startCoordinator does not spin up an unwanted consumer.
-			delQuery, delArgs, _ := sq.Delete(metastore.TableRegistryKafka).
-				Where(sq.Eq{"table_name": t.Name}).
-				ToSql()
-			if _, err := r.db.ExecContext(ctx, delQuery, delArgs...); err != nil {
-				return fmt.Errorf("delete stale kafka config %s: %w", t.Name, err)
-			}
-		}
-	}
-	return nil
-}
-
 // GetTableKafkaConfig reads Kafka routing config from the DB for a table.
 // Returns a zero-value config (empty topic) if no row exists.
 func (r *CoordinatorRegistry) GetTableKafkaConfig(ctx context.Context, tableName string) (config.TableKafkaConfig, error) {

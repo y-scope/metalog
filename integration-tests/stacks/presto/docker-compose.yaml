@@ -4,14 +4,17 @@ services:
     image: mariadb:10.6
     environment:
       MARIADB_ROOT_PASSWORD: password
-      MARIADB_DATABASE: metalog_metadata
+      MARIADB_DATABASE: metalog_metastore
     ports:
       - "3307:3306"
     healthcheck:
-      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
+      # Use 127.0.0.1 (not localhost) to force TCP — localhost uses Unix socket
+      # which responds during the init phase before TCP port 3306 is ready.
+      test: ["CMD", "mariadb", "-h", "127.0.0.1", "-P", "3306", "-uroot", "-ppassword", "-e", "SELECT 1"]
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 15s
     networks:
       metalog-network:
         aliases:
@@ -37,10 +40,30 @@ services:
       timeout: 3s
       retries: 20
       start_period: 30s
+    restart: on-failure
     networks:
       - metalog-network
 
-  # Data loader — sends test records via gRPC; coordinator auto-creates the table
+  # Register test table via admin gRPC API (must run before data-loader)
+  table-register:
+    build:
+      context: ../../..
+      dockerfile: integration-tests/stacks/presto/Dockerfile
+    entrypoint: ["/app/metalog", "admin", "register-table"]
+    command:
+      - --addr=coordinator:9091
+      - --table=clp_cockroachdb
+      - --display-name=CockroachDB Logs
+      - --kafka-poller-enabled=false
+      - --consolidation-enabled=false
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - metalog-network
+
+  # Data loader — sends test records via gRPC ingestion
   data-loader:
     build:
       context: ../../..
@@ -50,8 +73,8 @@ services:
       GRPC_PORT: "9091"
       TABLE_NAME: clp_cockroachdb
     depends_on:
-      coordinator:
-        condition: service_healthy
+      table-register:
+        condition: service_completed_successfully
     restart: on-failure
     networks:
       - metalog-network
@@ -61,7 +84,7 @@ services:
     build:
       context: ../../..
       dockerfile: integration-tests/stacks/presto/Dockerfile
-    entrypoint: ["/app/metalog"]
+    # Uses Dockerfile ENTRYPOINT ["/app/metalog", "serve"], just override CMD
     command: ["--config", "/etc/clp/node.yaml"]
     ports:
       - "50051:9091"

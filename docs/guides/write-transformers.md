@@ -60,17 +60,7 @@ type RecordTransformer interface {
 
 ## Configuration
 
-Set the transformer per table in `node.yaml`:
-
-```yaml
-tables:
-  - name: clp_spark
-    kafka:
-      topic: clp-metadata-spark
-      recordTransformer: json
-```
-
-Or via the `_table_kafka` registry table:
+Set the transformer per table via the `_table_kafka` registry table:
 
 ```sql
 UPDATE _table_kafka
@@ -126,13 +116,10 @@ func init() {
 
 ### Step 3: Configure
 
-Enable for your table in `node.yaml`:
+Enable for your table via the admin API or SQL:
 
-```yaml
-tables:
-  - name: spark_logs
-    kafka:
-      recordTransformer: spark
+```sql
+UPDATE _table_kafka SET record_transformer = 'spark' WHERE table_name = 'spark_logs';
 ```
 
 ## Field Mapping Reference

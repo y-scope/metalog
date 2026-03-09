@@ -48,6 +48,8 @@ grpc:
   metadata: true
 
 coordinator:
+  enabled: true
+
   # Environment variable to read for node_id (used in _table_assignment.node_id).
   # Default: HOSTNAME (set automatically in Docker containers).
   nodeIdEnvVar: HOSTNAME
@@ -65,16 +67,9 @@ coordinator:
   # leaseTtlSeconds: 180             # Lease duration (lease mode)
   # leaseRenewalIntervalSeconds: 30  # Lease renewal interval, must be < leaseTtlSeconds (lease mode)
 
-# Declarative table registration.
-# Tables listed here are auto-UPSERTed on startup. Only specified fields
-# are updated; omitted fields keep their DB defaults or existing values.
-tables:
-  - name: clp_spark
-    displayName: Spark Logs
-    kafka:
-      topic: spark-ir
-      bootstrapServers: kafka:29092
-      # recordTransformer: ""   # Transformer name. Empty or omitted = default transformer.
+# Tables are registered via the admin gRPC API (AdminService/RegisterTable).
+# The coordinator discovers assigned tables from the DB on startup and via
+# periodic reconciliation. See docs/guides/configure-tables.md.
 
 worker:
   concurrency: 4

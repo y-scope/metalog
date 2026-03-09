@@ -139,7 +139,7 @@ SELECT table_name, node_id, last_progress_at FROM _table_assignment;
 1. **No coordinator running** — verify at least one coordinator process is up.
 2. **Reconciliation not running** — check logs for reconciliation messages. Reconciliation runs every `reconciliationIntervalSeconds` (default 60s). Wait one cycle.
 3. **All nodes at capacity** — each node claims tables up to its fair share. Add more coordinator nodes.
-4. **Table not registered** — the table must exist in `_table_assignment`. Declare it in `node.yaml` under `tables:` for auto-registration on startup.
+4. **Table not registered** — the table must exist in `_table_assignment`. Register it via the admin gRPC API (`AdminService/RegisterTable`) or direct SQL insert.
 
 ### Stalled coordinator
 

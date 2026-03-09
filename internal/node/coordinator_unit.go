@@ -74,7 +74,7 @@ func NewCoordinatorUnit(
 		taskQueue := taskqueue.NewQueue(shared.DB, log)
 
 		planner, err = consolidation.NewPlanner(
-			shared.DB, tableName, policy, inFlight, taskQueue,
+			shared.DB, tableName, shared.IsMariaDB, policy, inFlight, taskQueue,
 			shared.StorageRegistry,
 			shared.ArchiveBackend, shared.ArchiveBucket,
 			config.DefaultPlannerInterval,

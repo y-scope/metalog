@@ -24,15 +24,18 @@ const MaxExpirationBatch = 1000
 type FileRecords struct {
 	db        *sql.DB
 	tableName string
+	isMariaDB bool
 	log       *zap.Logger
 }
 
 // NewFileRecords creates a FileRecords repository for the given table.
-func NewFileRecords(db *sql.DB, tableName string, log *zap.Logger) (*FileRecords, error) {
+// isMariaDB selects the ON DUPLICATE KEY UPDATE syntax variant:
+// MariaDB uses VALUES(col), MySQL 8.0.20+ uses the AS alias form.
+func NewFileRecords(db *sql.DB, tableName string, isMariaDB bool, log *zap.Logger) (*FileRecords, error) {
 	if err := dbutil.ValidateSQLIdentifier(tableName); err != nil {
 		return nil, fmt.Errorf("new file records: %w", err)
 	}
-	return &FileRecords{db: db, tableName: tableName, log: log}, nil
+	return &FileRecords{db: db, tableName: tableName, isMariaDB: isMariaDB, log: log}, nil
 }
 
 // UpsertBatch inserts or updates multiple file records with guarded UPSERT.
@@ -57,7 +60,7 @@ func (fr *FileRecords) UpsertBatch(
 		}
 		batch := records[start:end]
 
-		query, _, paramsPerRow := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch), false)
+		query, _, paramsPerRow := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch), fr.isMariaDB)
 
 		// Fill args for each row
 		allArgs := make([]any, 0, len(batch)*paramsPerRow)

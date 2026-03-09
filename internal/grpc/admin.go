@@ -29,19 +29,18 @@ func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableR
 		return nil, status.Error(codes.InvalidArgument, "table_name is required")
 	}
 
-	kafkaCfg := req.GetKafka()
-	if kafkaCfg == nil {
-		return nil, status.Error(codes.InvalidArgument, "kafka is required")
+	var kafkaTopic, kafkaBootstrap, transformer string
+	if kafkaCfg := req.GetKafka(); kafkaCfg != nil {
+		if kafkaCfg.GetTopic() == "" {
+			return nil, status.Error(codes.InvalidArgument, "kafka.topic is required when kafka is set")
+		}
+		if kafkaCfg.GetBootstrapServers() == "" {
+			return nil, status.Error(codes.InvalidArgument, "kafka.bootstrap_servers is required when kafka is set")
+		}
+		kafkaTopic = kafkaCfg.GetTopic()
+		kafkaBootstrap = kafkaCfg.GetBootstrapServers()
+		transformer = kafkaCfg.GetRecordTransformer()
 	}
-	if kafkaCfg.GetTopic() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kafka.topic is required")
-	}
-	if kafkaCfg.GetBootstrapServers() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kafka.bootstrap_servers is required")
-	}
-	kafkaTopic := kafkaCfg.GetTopic()
-	kafkaBootstrap := kafkaCfg.GetBootstrapServers()
-	transformer := kafkaCfg.GetRecordTransformer()
 
 	created, err := h.registration.RegisterTable(ctx,
 		req.GetTableName(), req.GetDisplayName(),

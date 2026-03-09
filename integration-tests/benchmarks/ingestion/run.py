@@ -301,16 +301,12 @@ def main():
         log_warn("Skipping database cleanup")
 
     # Step 4: Write coordinator config
-    kafka_section = ""
-    grpc_section = ""
-    if needs_kafka:
-        kafka_section = f"""    kafka:
-      topic: clp_spark
-      bootstrapServers: localhost:{kafka_port}"""
-    if args.mode == "grpc":
-        grpc_section = f"""grpc:
+    # Always enable gRPC with admin (needed for table registration).
+    # Ingestion is only needed in gRPC mode.
+    grpc_section = f"""grpc:
   port: {grpc_port}
-  ingestion: true"""
+  ingestion: {'true' if args.mode == 'grpc' else 'false'}
+  admin: true"""
 
     with tempfile.NamedTemporaryFile(
         mode="w", prefix="metalog-bench-", suffix=".yaml", delete=False
@@ -336,11 +332,9 @@ storage:
       secretKey: minioadmin
       forcePathStyle: true
 coordinator:
+  enabled: true
   nodeIdEnvVar: HOSTNAME
 {grpc_section}
-tables:
-  - name: clp_spark
-{kafka_section}
 worker:
   concurrency: 0
 """)
@@ -360,23 +354,41 @@ worker:
         log_success(f"All {args.records} records produced to Kafka")
 
     # Step 6: Start coordinator
-    if args.mode == "grpc":
-        subprocess.run(["fuser", "-k", f"{grpc_port}/tcp"], capture_output=True)
-        if not wait_for_port_free(grpc_port, timeout=15):
-            log_error(f"gRPC port {grpc_port} still in use")
-            sys.exit(1)
+    subprocess.run(["fuser", "-k", f"{grpc_port}/tcp"], capture_output=True)
+    if not wait_for_port_free(grpc_port, timeout=15):
+        log_error(f"gRPC port {grpc_port} still in use")
+        sys.exit(1)
 
     log_info("Starting coordinator...")
     _coordinator_proc = subprocess.Popen([str(SERVER_BIN), "serve", "--config", _temp_config])
     log_info(f"Coordinator started (PID: {_coordinator_proc.pid})")
 
-    if args.mode == "grpc":
-        log_info(f"Waiting for gRPC endpoint on port {grpc_port}...")
-        took = wait_for_port("localhost", grpc_port, timeout=30)
-        if took is None:
-            log_error("Coordinator did not open gRPC port within 30s")
-            sys.exit(1)
-        log_success(f"Coordinator gRPC ready (took {took}s)")
+    log_info(f"Waiting for gRPC endpoint on port {grpc_port}...")
+    took = wait_for_port("localhost", grpc_port, timeout=30)
+    if took is None:
+        log_error("Coordinator did not open gRPC port within 30s")
+        sys.exit(1)
+    log_success(f"Coordinator gRPC ready (took {took}s)")
+
+    # Step 6b: Register the benchmark table via admin API
+    register_cmd = [str(SERVER_BIN), "admin", "register-table",
+                    "--addr", f"localhost:{grpc_port}",
+                    "--table", "clp_spark",
+                    "--kafka-poller-enabled", "true" if needs_kafka else "false",
+                    "--consolidation-enabled", "false"]
+    if needs_kafka:
+        register_cmd += ["--kafka-topic", "clp_spark",
+                         "--kafka-bootstrap-servers", f"localhost:{kafka_port}"]
+    log_info("Registering benchmark table via admin API...")
+    result = subprocess.run(register_cmd)
+    if result.returncode != 0:
+        log_error("Failed to register benchmark table")
+        _stop_coordinator()
+        sys.exit(1)
+    log_success("Benchmark table registered")
+
+    # Allow coordinator to pick up the new table via reconciliation
+    time.sleep(3)
 
     # Step 7: Run benchmark / monitor ingestion
     if args.mode == "grpc":

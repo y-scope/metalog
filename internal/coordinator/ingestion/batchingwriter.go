@@ -20,6 +20,7 @@ const shutdownFlushTimeout = 5 * time.Second
 // tableWriter is a goroutine that batches and flushes records for a single table.
 type tableWriter struct {
 	tableName string
+	isMariaDB bool
 	ch        chan *metastore.FileRecord
 	db        *sql.DB
 	registry  *schema.ColumnRegistry
@@ -30,8 +31,9 @@ type tableWriter struct {
 // BatchingWriter manages per-table writer goroutines that batch records and
 // flush them to the database using guarded UPSERTs.
 type BatchingWriter struct {
-	db  *sql.DB
-	log *zap.Logger
+	db        *sql.DB
+	isMariaDB bool
+	log       *zap.Logger
 
 	mu      sync.RWMutex
 	writers map[string]*tableWriter
@@ -45,10 +47,11 @@ type BatchingWriter struct {
 }
 
 // NewBatchingWriter creates a BatchingWriter.
-func NewBatchingWriter(ctx context.Context, db *sql.DB, log *zap.Logger) *BatchingWriter {
+func NewBatchingWriter(ctx context.Context, db *sql.DB, isMariaDB bool, log *zap.Logger) *BatchingWriter {
 	ctx, cancel := context.WithCancel(ctx)
 	return &BatchingWriter{
 		db:         db,
+		isMariaDB:  isMariaDB,
 		log:        log,
 		writers:    make(map[string]*tableWriter),
 		registries: make(map[string]*schema.ColumnRegistry),
@@ -102,7 +105,7 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 	reg := bw.registries[tableName]
 	bw.regMu.RUnlock()
 
-	fr, err := metastore.NewFileRecords(bw.db, tableName, bw.log)
+	fr, err := metastore.NewFileRecords(bw.db, tableName, bw.isMariaDB, bw.log)
 	if err != nil {
 		bw.log.Error("failed to create file records for table writer", zap.String("table", tableName), zap.Error(err))
 		// Fall back to creating FileRecords per-flush.
@@ -111,6 +114,7 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 
 	tw = &tableWriter{
 		tableName: tableName,
+		isMariaDB: bw.isMariaDB,
 		ch:        make(chan *metastore.FileRecord, config.DefaultBatchSize),
 		db:        bw.db,
 		registry:  reg,
@@ -187,7 +191,7 @@ func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRe
 	fr := tw.fileRecs
 	if fr == nil {
 		var err error
-		fr, err = metastore.NewFileRecords(tw.db, tw.tableName, tw.log)
+		fr, err = metastore.NewFileRecords(tw.db, tw.tableName, tw.isMariaDB, tw.log)
 		if err != nil {
 			tw.log.Error("failed to create file records", zap.Error(err))
 			tw.notifyBatch(batch, err)

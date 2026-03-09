@@ -4,12 +4,12 @@ package node_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/node"
 	"github.com/y-scope/metalog/internal/testutil"
 )
@@ -22,6 +22,45 @@ func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *node.Coordinato
 	log := zap.NewNop()
 	cr := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
 	return mc, cr
+}
+
+// registerTestTable inserts a table into the registry, assignment, and optionally
+// Kafka config tables. This replaces UpsertTables for test setup — tables are
+// now registered via admin API in production.
+func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafkaTopic, kafkaBootstrapServers string) {
+	t.Helper()
+	ctx := context.Background()
+
+	_, err := db.ExecContext(ctx,
+		"INSERT IGNORE INTO _table (table_name, display_name) VALUES (?, ?)",
+		name, displayName)
+	if err != nil {
+		t.Fatalf("insert _table %s: %v", name, err)
+	}
+
+	_, err = db.ExecContext(ctx,
+		"INSERT IGNORE INTO _table_assignment (table_name) VALUES (?)",
+		name)
+	if err != nil {
+		t.Fatalf("insert _table_assignment %s: %v", name, err)
+	}
+
+	_, err = db.ExecContext(ctx,
+		"INSERT IGNORE INTO _table_config (table_name, kafka_poller_enabled) VALUES (?, ?)",
+		name, kafkaTopic != "")
+	if err != nil {
+		t.Fatalf("insert _table_config %s: %v", name, err)
+	}
+
+	if kafkaTopic != "" {
+		_, err = db.ExecContext(ctx,
+			"INSERT INTO _table_kafka (table_name, kafka_topic, kafka_bootstrap_servers) VALUES (?, ?, ?) "+
+				"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers)",
+			name, kafkaTopic, kafkaBootstrapServers)
+		if err != nil {
+			t.Fatalf("insert _table_kafka %s: %v", name, err)
+		}
+	}
 }
 
 func TestCoordinatorRegistry_EnsureSystemTables(t *testing.T) {
@@ -37,27 +76,15 @@ func TestCoordinatorRegistry_EnsureSystemTables(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_UpsertTables(t *testing.T) {
+func TestCoordinatorRegistry_RegisterAndList(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
-	ctx := context.Background()
 
-	tables := []config.TableConfig{
-		{Name: "logs_app", DisplayName: "Application Logs", Kafka: config.TableKafkaConfig{
-			Topic: "app-ir", BootstrapServers: "kafka:9092",
-		}},
-		{Name: "logs_infra", DisplayName: "Infrastructure Logs", Kafka: config.TableKafkaConfig{
-			Topic: "infra-ir", BootstrapServers: "kafka:9092",
-		}},
-	}
-
-	err := cr.UpsertTables(ctx, tables)
-	if err != nil {
-		t.Fatalf("UpsertTables() error = %v", err)
-	}
+	registerTestTable(t, mc.DB, "logs_app", "Application Logs", "app-ir", "kafka:9092")
+	registerTestTable(t, mc.DB, "logs_infra", "Infrastructure Logs", "infra-ir", "kafka:9092")
 
 	// Verify tables registered
-	allTables, err := cr.GetAllRegisteredTables(ctx)
+	allTables, err := cr.GetAllRegisteredTables(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +92,14 @@ func TestCoordinatorRegistry_UpsertTables(t *testing.T) {
 		t.Errorf("registered tables = %d, want 2", len(allTables))
 	}
 
-	// Idempotent: call again
-	err = cr.UpsertTables(ctx, tables)
+	// Idempotent: insert again
+	registerTestTable(t, mc.DB, "logs_app", "Application Logs", "app-ir", "kafka:9092")
+	allTables, err = cr.GetAllRegisteredTables(context.Background())
 	if err != nil {
-		t.Fatalf("UpsertTables() second call error = %v", err)
+		t.Fatal(err)
+	}
+	if len(allTables) != 2 {
+		t.Errorf("registered tables after re-insert = %d, want 2", len(allTables))
 	}
 }
 
@@ -77,10 +108,7 @@ func TestCoordinatorRegistry_ClaimAndRelease(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Register a table first
-	cr.UpsertTables(ctx, []config.TableConfig{
-		{Name: "claim_test", DisplayName: "Claim Test"},
-	})
+	registerTestTable(t, mc.DB, "claim_test", "Claim Test", "", "")
 
 	// Claim
 	claimed, err := cr.ClaimTable(ctx, "claim_test")
@@ -127,11 +155,9 @@ func TestCoordinatorRegistry_GetAssignedTables(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	cr.UpsertTables(ctx, []config.TableConfig{
-		{Name: "assigned_a", DisplayName: "A"},
-		{Name: "assigned_b", DisplayName: "B"},
-		{Name: "unassigned_c", DisplayName: "C"},
-	})
+	registerTestTable(t, mc.DB, "assigned_a", "A", "", "")
+	registerTestTable(t, mc.DB, "assigned_b", "B", "", "")
+	registerTestTable(t, mc.DB, "unassigned_c", "C", "", "")
 
 	cr.ClaimTable(ctx, "assigned_a")
 	cr.ClaimTable(ctx, "assigned_b")
@@ -179,10 +205,8 @@ func TestCoordinatorRegistry_ReleaseAllTables(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	cr.UpsertTables(ctx, []config.TableConfig{
-		{Name: "release_all_a", DisplayName: "A"},
-		{Name: "release_all_b", DisplayName: "B"},
-	})
+	registerTestTable(t, mc.DB, "release_all_a", "A", "", "")
+	registerTestTable(t, mc.DB, "release_all_b", "B", "", "")
 	cr.ClaimTable(ctx, "release_all_a")
 	cr.ClaimTable(ctx, "release_all_b")
 
@@ -207,9 +231,7 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	node1 := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
 	node2 := node.NewCoordinatorRegistry(mc.DB, "node-2", true, log)
 
-	node1.UpsertTables(ctx, []config.TableConfig{
-		{Name: "contested", DisplayName: "Contested"},
-	})
+	registerTestTable(t, mc.DB, "contested", "Contested", "", "")
 
 	// Node 1 claims
 	claimed1, err := node1.ClaimTable(ctx, "contested")
@@ -257,11 +279,7 @@ func TestCoordinatorRegistry_GetTableKafkaConfig(t *testing.T) {
 	}
 
 	// Register table with Kafka config
-	cr.UpsertTables(ctx, []config.TableConfig{
-		{Name: "kafka_test", DisplayName: "Kafka Test", Kafka: config.TableKafkaConfig{
-			Topic: "test-topic", BootstrapServers: "kafka:9092", RecordTransformer: "custom",
-		}},
-	})
+	registerTestTable(t, mc.DB, "kafka_test", "Kafka Test", "test-topic", "kafka:9092")
 
 	cfg, err = cr.GetTableKafkaConfig(ctx, "kafka_test")
 	if err != nil {
@@ -272,27 +290,6 @@ func TestCoordinatorRegistry_GetTableKafkaConfig(t *testing.T) {
 	}
 	if cfg.BootstrapServers != "kafka:9092" {
 		t.Errorf("BootstrapServers = %q, want kafka:9092", cfg.BootstrapServers)
-	}
-	if cfg.RecordTransformer != "custom" {
-		t.Errorf("RecordTransformer = %q, want custom", cfg.RecordTransformer)
-	}
-
-	// Update Kafka config and verify upsert
-	cr.UpsertTables(ctx, []config.TableConfig{
-		{Name: "kafka_test", DisplayName: "Kafka Test", Kafka: config.TableKafkaConfig{
-			Topic: "new-topic", BootstrapServers: "kafka:29092",
-		}},
-	})
-
-	cfg, err = cr.GetTableKafkaConfig(ctx, "kafka_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Topic != "new-topic" {
-		t.Errorf("Topic after update = %q, want new-topic", cfg.Topic)
-	}
-	if cfg.BootstrapServers != "kafka:29092" {
-		t.Errorf("BootstrapServers after update = %q, want kafka:29092", cfg.BootstrapServers)
 	}
 }
 
@@ -307,9 +304,7 @@ func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	node2 := node.NewCoordinatorRegistry(mc.DB, "alive-node", true, log)
 
 	// Dead node registers and claims a table
-	node1.UpsertTables(ctx, []config.TableConfig{
-		{Name: "orphan_table", DisplayName: "Orphan"},
-	})
+	registerTestTable(t, mc.DB, "orphan_table", "Orphan", "", "")
 	node1.SendHeartbeat(ctx)
 	node1.ClaimTable(ctx, "orphan_table")
 

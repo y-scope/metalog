@@ -14,9 +14,8 @@ type NodeConfig struct {
 	Storage     ObjectStorageConfig `yaml:"storage"`
 	GRPC        GRPCConfig          `yaml:"grpc"`
 	Health      HealthConfig        `yaml:"health"`
-	Coordinator CoordinatorConfig   `yaml:"coordinator"`
-	Tables      []TableConfig       `yaml:"tables"`
-	Worker      WorkerConfig        `yaml:"worker"`
+	Coordinator CoordinatorConfig `yaml:"coordinator"`
+	Worker      WorkerConfig     `yaml:"worker"`
 }
 
 // DatabaseSection holds primary (RW) and optional replica (RO) pool configs.
@@ -35,6 +34,7 @@ const (
 
 // CoordinatorConfig holds coordinator-specific settings (HA, identity).
 type CoordinatorConfig struct {
+	Enabled      bool   `yaml:"enabled"`
 	Name         string `yaml:"name"`
 	NodeIDEnvVar string `yaml:"nodeIdEnvVar"`
 
@@ -75,14 +75,8 @@ func (c *GRPCConfig) HasAnyService() bool {
 	return c.Ingestion || c.Admin || c.Query || c.Metadata
 }
 
-// TableConfig defines a table declared in the config file.
-type TableConfig struct {
-	Name        string           `yaml:"name"`
-	DisplayName string           `yaml:"displayName"`
-	Kafka       TableKafkaConfig `yaml:"kafka"`
-}
-
 // TableKafkaConfig holds Kafka settings for a single table.
+// Used as a data transfer type for DB-sourced Kafka config.
 type TableKafkaConfig struct {
 	Topic             string `yaml:"topic"`
 	BootstrapServers  string `yaml:"bootstrapServers"`
@@ -142,9 +136,9 @@ func (c *NodeConfig) EffectiveReplica() DatabaseConfig {
 	return c.Database.Primary
 }
 
-// HasCoordinator returns true if the coordinator section has meaningful config.
+// HasCoordinator returns true if the coordinator subsystem is enabled.
 func (c *NodeConfig) HasCoordinator() bool {
-	return len(c.Tables) > 0 || c.Coordinator.HAStrategy != ""
+	return c.Coordinator.Enabled
 }
 
 // validateRaw checks user-provided values before defaults are applied.
@@ -200,7 +194,7 @@ func (c *NodeConfig) validate() error {
 		}
 		// Ingestion requires coordinator (tables + batching writer)
 		if c.GRPC.Ingestion && !c.HasCoordinator() {
-			return fmt.Errorf("grpc.ingestion requires coordinator config (tables must be configured)")
+			return fmt.Errorf("grpc.ingestion requires coordinator.enabled=true")
 		}
 		// Query and metadata require at least one database
 		if !hasPrimary && !hasReplica && (c.GRPC.Query || c.GRPC.Metadata) {
@@ -228,13 +222,8 @@ func (c *NodeConfig) validate() error {
 		return fmt.Errorf("clp-s binary not found: set worker.clpBinaryPath or add clp-s to $PATH")
 	}
 
-	// Coordinator validation — only when coordinator section is present
+	// Coordinator validation
 	if c.HasCoordinator() {
-		for i, t := range c.Tables {
-			if t.Name == "" {
-				return fmt.Errorf("tables[%d].name is required", i)
-			}
-		}
 		switch c.Coordinator.HAStrategy {
 		case HAStrategyHeartbeat, HAStrategyLease:
 		default:

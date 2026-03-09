@@ -22,7 +22,7 @@ func setupFileRecordsIT(t *testing.T) (*testutil.MariaDBContainer, *metastore.Fi
 	mc.CreateTestTable(t, testTable)
 
 	log := zap.NewNop()
-	fr, err := metastore.NewFileRecords(mc.DB, testTable, log)
+	fr, err := metastore.NewFileRecords(mc.DB, testTable, true, log)
 	if err != nil {
 		mc.Teardown(t)
 		t.Fatal(err)

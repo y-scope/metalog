@@ -164,18 +164,11 @@ fi
 
 # Verify exactly one node claimed it (Go zap JSON: "msg":"claimed table","table":"clp_spark")
 CLAIM_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c '"claimed table".*"clp_spark"' || true)
-SKIP_COUNT=$($COMPOSE logs coordinator-node 2>&1 | grep -c '"table already claimed by another node".*"clp_spark"' || true)
 
 if [ "$CLAIM_COUNT" -eq 1 ]; then
     pass "Exactly 1 node claimed 'clp_spark' (no double-claim)"
 else
     fail "Expected 1 claim for 'clp_spark', got $CLAIM_COUNT"
-fi
-
-if [ "$SKIP_COUNT" -ge 1 ]; then
-    pass "Other node(s) saw 'clp_spark' already claimed and skipped"
-else
-    info "No skip log found (other node may not have raced for 'clp_spark')"
 fi
 
 # =========================================================================
@@ -377,9 +370,10 @@ else
 fi
 
 # Verify coordinator was started for the new table (Go zap JSON log).
+# node.go logs "starting coordinator" with table=<name> when startCoordinator() is called.
 FLINK_LOG=$(mktemp)
 if wait_for_condition "coordinator for clp_flink started" \
-    "$COMPOSE logs coordinator-node >\"$FLINK_LOG\" 2>&1 && grep -q '\"new assignment detected, starting coordinator\".*\"clp_flink\"' \"$FLINK_LOG\"" \
+    "$COMPOSE logs coordinator-node >\"$FLINK_LOG\" 2>&1 && grep -q '\"starting coordinator\".*\"clp_flink\"' \"$FLINK_LOG\"" \
     10 2; then
     pass "CoordinatorUnit started for clp_flink after reconciliation"
 else

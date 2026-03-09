@@ -153,12 +153,13 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 }
 
 // Start initializes the node based on configuration. Coordinator and worker
-// subsystems only start when configured (tables present + primary DB).
+// subsystems only start when configured (coordinator.enabled + primary DB).
+// Tables are discovered from DB assignments — registered via admin API.
 // A node with only a replica DB and gRPC enabled runs as a read-only API server.
 func (n *Node) Start() error {
 	ctx := n.ctx
 
-	// Coordinator and ingestion subsystems require primary DB + tables
+	// Coordinator and ingestion subsystems require primary DB
 	if n.cfg.HasCoordinator() {
 		if err := n.registry.EnsureSystemTables(ctx); err != nil {
 			return err
@@ -166,45 +167,20 @@ func (n *Node) Start() error {
 		if err := n.registry.ValidateSchemaReady(ctx); err != nil {
 			return err
 		}
-		if err := n.registry.UpsertTables(ctx, n.cfg.Tables); err != nil {
-			return err
-		}
 
-		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.log)
+		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.shared.IsMariaDB, n.log)
 		n.ingestSvc = ingestion.NewService(n.writer, n.log)
 
-		// Claim and start coordinators — startCoordinator calls EnsureTable internally.
-		for _, t := range n.cfg.Tables {
-			claimed, err := n.registry.ClaimTable(ctx, t.Name)
-			if err != nil {
-				n.log.Error("failed to claim table", zap.String("table", t.Name), zap.Error(err))
-				continue
-			}
-			if !claimed {
-				n.log.Info("table already claimed by another node", zap.String("table", t.Name))
-				continue
-			}
-			if err := n.startCoordinator(t.Name); err != nil {
-				n.log.Error("failed to start coordinator", zap.String("table", t.Name), zap.Error(err))
-			}
-		}
-
-		// Resume coordinators for tables already assigned to this node in the DB
-		// (e.g., from a previous run or registered via admin API).
+		// Resume coordinators for tables assigned to this node in the DB
+		// (registered via admin API, assigned by reconciliation).
 		assigned, err := n.registry.GetAssignedTables(ctx)
 		if err != nil {
 			n.log.Warn("failed to get assigned tables from DB", zap.Error(err))
 		} else {
 			for _, t := range assigned {
-				n.coordMu.Lock()
-				_, running := n.coordinators[t]
-				n.coordMu.Unlock()
-				if running {
-					continue
-				}
-				n.log.Info("resuming coordinator for previously assigned table", zap.String("table", t))
+				n.log.Info("resuming coordinator for assigned table", zap.String("table", t))
 				if err := n.startCoordinator(t); err != nil {
-					n.log.Error("failed to resume coordinator", zap.String("table", t), zap.Error(err))
+					n.log.Error("failed to start coordinator", zap.String("table", t), zap.Error(err))
 				}
 			}
 		}
@@ -352,7 +328,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
 
-	// Read Kafka config from DB (source of truth — seeded by UpsertTables or admin API).
+	// Read Kafka config from DB (source of truth — set via admin API).
 	kafkaCfg, err := n.registry.GetTableKafkaConfig(n.ctx, tableName)
 	if err != nil {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)

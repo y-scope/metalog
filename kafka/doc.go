@@ -6,6 +6,6 @@
 // pipeline's back-pressure mechanism by waiting for Flushed channel signals
 // before committing offsets.
 //
-// The [Poller] and [PollerFactory] manage consumer lifecycle within a
-// coordinator unit, handling subscription, polling, and graceful shutdown.
+// The [Poller] manages consumer lifecycle within a coordinator unit,
+// handling subscription, polling, and graceful shutdown.
 package kafka

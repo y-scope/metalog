@@ -8,7 +8,7 @@ Configuration is loaded from `node.yaml` (node-level settings). Per-table config
 
 ## node.yaml — Node Settings
 
-Settings are organized by role: shared resources (`database`, `storage`), network (`grpc`, `health`), coordinator logic (`coordinator`), declarative tables (`tables`), and worker pool (`worker`).
+Settings are organized by role: shared resources (`database`, `storage`), network (`grpc`, `health`), coordinator logic (`coordinator`), and worker pool (`worker`). Per-table configuration (Kafka routing, feature flags) is managed via the admin gRPC API and stored in the database.
 
 ```yaml
 database:
@@ -57,6 +57,7 @@ grpc:
   metadata: true                 # Uses database.replica, falls back to primary
 
 coordinator:
+  enabled: true                      # Enable coordinator subsystem
   nodeIdEnvVar: HOSTNAME         # Env var whose value becomes node_id in _table_assignment
                                  # Falls back to os.Hostname()
   reconciliationIntervalSeconds: 60  # Default: 60. How often to reconcile table assignments.
@@ -68,14 +69,9 @@ coordinator:
   leaseTtlSeconds: 180               # Default: 180. Lease mode: lease duration.
   leaseRenewalIntervalSeconds: 30    # Default: 30. Lease mode: renewal interval (must be < leaseTtlSeconds).
 
-# Tables to manage on this node.
-tables:
-  - name: clp_spark
-    displayName: Spark Logs       # Human-readable name (optional)
-    kafka:
-      topic: clp-metadata-spark
-      bootstrapServers: kafka:29092
-      recordTransformer: ""       # Transformer name (empty = default)
+# Tables are registered via admin gRPC API (AdminService/RegisterTable).
+# The coordinator discovers assigned tables from the DB on startup and via
+# periodic reconciliation. See docs/guides/configure-tables.md.
 
 # Shared worker pool (claims tasks from all tables).
 worker:
@@ -110,6 +106,7 @@ worker:
 | `grpc.admin` | `false` | Enable admin gRPC service (requires `database.primary`) |
 | `grpc.query` | `false` | Enable query gRPC service (uses `database.replica`, falls back to primary) |
 | `grpc.metadata` | `false` | Enable metadata gRPC service (uses `database.replica`, falls back to primary) |
+| `coordinator.enabled` | `false` | Enable coordinator subsystem |
 | `coordinator.nodeIdEnvVar` | `HOSTNAME` | Env var for node identity |
 | `coordinator.reconciliationIntervalSeconds` | `60` | Table assignment reconciliation interval |
 | `coordinator.haStrategy` | `heartbeat` | HA mode: `heartbeat` or `lease` |
@@ -120,11 +117,6 @@ worker:
 | `worker.concurrency` | `0` (disabled) | Concurrent task goroutines |
 | `worker.clpBinaryPath` | `$PATH` lookup | Path to clp-s binary. Auto-resolved from `$PATH` if omitted |
 | `worker.clpProcessTimeoutSeconds` | `300` | CLP process timeout |
-| `tables[].name` | — | **Required.** Table name |
-| `tables[].displayName` | — | Human-readable name |
-| `tables[].kafka.topic` | — | Kafka topic for this table |
-| `tables[].kafka.bootstrapServers` | — | Kafka bootstrap servers |
-| `tables[].kafka.recordTransformer` | `""` (default) | Transformer name. Empty or omitted uses the default transformer |
 
 ### Internal Constants
 
@@ -155,7 +147,7 @@ All schema setup is automatic. On startup, the node creates the database, initia
 
 - [Architecture Overview](../concepts/overview.md) — System overview and startup sequence
 - [Quickstart](../getting-started/quickstart.md) — Setup and first run
-- [Configure Tables](../guides/configure-tables.md) — Declarative table registration and feature flags
+- [Configure Tables](../guides/configure-tables.md) — Table registration and feature flags
 - [Port Configuration](../operations/port-configuration.md) — Customizing infrastructure ports
 - [Performance Tuning](../operations/performance-tuning.md) — DSN tuning, batch size impact
 - [Deploy HA](../guides/deploy-ha.md) — Node assignment, liveness, and failover

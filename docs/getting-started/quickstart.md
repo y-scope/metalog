@@ -66,9 +66,9 @@ For a read-only query API node, configure only `database.replica` and enable `gr
 
 Where `apiserver.yaml` sets `database.replica` (no primary) and enables `grpc.query: true` / `grpc.metadata: true`. See [Deployment](../operations/deployment.md) for details.
 
-### 5. Register a Table via CLI (Optional)
+### 5. Register a Table via CLI
 
-Tables declared in the `tables:` YAML section are registered automatically on startup. You can also register (or update) a table from the command line without starting a server:
+Tables are registered via the admin gRPC API. Register a table from the command line:
 
 ```bash
 ./metalog admin register-table \
@@ -137,7 +137,7 @@ go test -tags=integration ./internal/...
 
 ### Node Configuration (YAML)
 
-Settings are organized by role: `database` (primary + optional replica), `storage`, `grpc`, `health`, `coordinator`, `tables`, and `worker`. Per-table configuration lives in the database, but tables can be declared in YAML for automatic registration on startup:
+Settings are organized by role: `database` (primary + optional replica), `storage`, `grpc`, `health`, `coordinator`, and `worker`. Per-table configuration (Kafka routing, feature flags) is managed via the admin gRPC API and stored in the database:
 
 ```yaml
 database:
@@ -164,16 +164,12 @@ health:
   port: 8081
 
 coordinator:
+  enabled: true
   nodeIdEnvVar: HOSTNAME       # env var for _table_assignment.node_id
 
-# Declarative table registration (auto-UPSERTed on startup).
-# Only specified fields are updated; omitted fields keep DB defaults.
-tables:
-  - name: clp_spark
-    displayName: Spark Logs
-    kafka:
-      topic: spark-ir
-      bootstrapServers: localhost:9092
+# Tables are registered via admin gRPC API (AdminService/RegisterTable).
+# The coordinator discovers assigned tables from the DB on startup and via
+# periodic reconciliation. See docs/guides/configure-tables.md.
 
 # Shared worker pool (claims tasks from all tables)
 worker:

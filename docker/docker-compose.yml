@@ -143,8 +143,8 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "${GRPC_PORT:-9090}:9090"
-      - "${HEALTH_PORT:-8081}:8081"
+      - "9090"   # ephemeral host port — allows --scale coordinator-node=N
+      - "8081"   # ephemeral host port
     volumes:
       - ../config/coordinator-node.yaml:/etc/clp/node.yaml:ro
     environment:

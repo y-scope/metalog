@@ -14,7 +14,7 @@ import (
 // Supports two layouts:
 //  1. Single file: the directory contains a "node.yaml" file (same as LoadNodeConfig).
 //  2. Multi-key: separate files for "database", "storage", "grpc", "health",
-//     "coordinator", "tables", "worker" are merged into one config.
+//     "coordinator", "worker" are merged into one config.
 func ParseConfigMap(dir string) (*NodeConfig, error) {
 	// Check for single-file layout first.
 	singleFile := filepath.Join(dir, "node.yaml")
@@ -62,14 +62,6 @@ func ParseConfigMap(dir string) (*NodeConfig, error) {
 			Coordinator *CoordinatorConfig `yaml:"coordinator"`
 		}{Coordinator: &cfg.Coordinator}); err != nil {
 			return nil, fmt.Errorf("parse configmap key 'coordinator': %w", err)
-		}
-	}
-
-	if data, err := readConfigMapKey(dir, "tables"); err == nil {
-		if err := yaml.Unmarshal(data, &struct {
-			Tables *[]TableConfig `yaml:"tables"`
-		}{Tables: &cfg.Tables}); err != nil {
-			return nil, fmt.Errorf("parse configmap key 'tables': %w", err)
 		}
 	}
 

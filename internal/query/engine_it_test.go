@@ -161,10 +161,10 @@ func TestSplitQueryEngine_ColumnProjection(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("rows = %d, want 3", len(rows))
 	}
-	// Should only have the 3 requested columns
+	// Should have the 3 requested columns + max_timestamp (always included as system column)
 	for _, r := range rows {
-		if len(r.Values) != 3 {
-			t.Errorf("column count = %d, want 3", len(r.Values))
+		if len(r.Values) != 4 {
+			t.Errorf("column count = %d, want 4 (3 requested + max_timestamp system column)", len(r.Values))
 		}
 		if _, ok := r.Values["id"]; !ok {
 			t.Error("missing id column")

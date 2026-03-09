@@ -30,17 +30,12 @@ health:
   enabled: true
   port: 8081
 coordinator:
+  enabled: true
   name: test-node
   nodeIdEnvVar: HOSTNAME
   haStrategy: heartbeat
   heartbeatIntervalSeconds: 30
   deadNodeThresholdSeconds: 180
-tables:
-  - name: clp_spark
-    displayName: Spark Logs
-    kafka:
-      topic: spark-ir
-      bootstrapServers: kafka:29092
 worker:
   concurrency: 4
   clpBinaryPath: /usr/bin/clp-s
@@ -62,14 +57,8 @@ worker:
 	if cfg.Database.Primary.Host != "localhost" {
 		t.Errorf("Database.Primary.Host = %q, want %q", cfg.Database.Primary.Host, "localhost")
 	}
-	if len(cfg.Tables) != 1 {
-		t.Fatalf("len(Tables) = %d, want 1", len(cfg.Tables))
-	}
-	if cfg.Tables[0].Name != "clp_spark" {
-		t.Errorf("Tables[0].Name = %q, want %q", cfg.Tables[0].Name, "clp_spark")
-	}
-	if cfg.Tables[0].Kafka.Topic != "spark-ir" {
-		t.Errorf("Tables[0].Kafka.Topic = %q, want %q", cfg.Tables[0].Kafka.Topic, "spark-ir")
+	if !cfg.HasCoordinator() {
+		t.Error("HasCoordinator() should be true")
 	}
 }
 
@@ -98,12 +87,8 @@ storage:
       secretKey: minioadmin
       forcePathStyle: true
 coordinator:
+  enabled: true
   nodeIdEnvVar: HOSTNAME
-tables:
-  - name: clp_spark
-    kafka:
-      topic: spark-ir
-      bootstrapServers: kafka:29092
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.yaml")
@@ -198,12 +183,8 @@ storage:
       secretKey: minioadmin
       forcePathStyle: true
 coordinator:
+  enabled: true
   nodeIdEnvVar: HOSTNAME
-tables:
-  - name: clp_spark
-    kafka:
-      topic: spark-ir
-      bootstrapServers: kafka:29092
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.yaml")
@@ -314,12 +295,8 @@ storage:
       secretKey: minioadmin
       forcePathStyle: true
 coordinator:
+  enabled: true
   nodeIdEnvVar: HOSTNAME
-tables:
-  - name: clp_spark
-    kafka:
-      topic: spark-ir
-      bootstrapServers: kafka:29092
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.yaml")

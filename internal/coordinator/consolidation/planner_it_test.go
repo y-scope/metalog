@@ -29,7 +29,7 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 	taskQueue := taskqueue.NewQueue(mc.DB, log)
 
 	planner, err := consolidation.NewPlanner(
-		mc.DB, plannerTable, policy, inFlight, taskQueue,
+		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
 		nil, "", "",
 		1*time.Second, log,
 	)
@@ -97,7 +97,7 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 	policy := consolidation.NewTimeWindowPolicy(24*time.Hour, 2, 100)
 
 	planner, err := consolidation.NewPlanner(
-		mc.DB, plannerTable, policy, inFlight, taskQueue,
+		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
 		nil, "", "",
 		1*time.Second, log,
 	)

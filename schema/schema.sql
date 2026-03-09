@@ -265,9 +265,8 @@ CREATE TABLE IF NOT EXISTS _table_kafka (
 
 -- Feature config: typed columns instead of JSON blob.
 -- Note: DDL DEFAULT values are used for columns not explicitly set by INSERT.
--- The TableProvisioner (tableprovisioner.go) may override specific defaults
--- (e.g., kafka_poller_enabled defaults to TRUE here but is inserted as FALSE
--- during table provisioning). Check both DDL defaults and insertRegistryRows()
+-- The TableProvisioner (tableprovisioner.go) inserts rows with explicit values
+-- that match these DDL defaults. Check both DDL defaults and insertRegistryRows()
 -- when changing defaults.
 CREATE TABLE IF NOT EXISTS _table_config (
     table_name                          VARCHAR(64) NOT NULL PRIMARY KEY,

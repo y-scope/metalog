@@ -70,14 +70,22 @@ func (s *TableRegistration) RegisterTable(
 		}
 	}
 
-	// Upsert Kafka config
-	kafkaQuery, kafkaArgs, _ := sq.Insert(metastore.TableRegistryKafka).
-		Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
-		Values(tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer).
-		Suffix(db.OnDuplicateKeyUpdateValues("kafka_topic", "kafka_bootstrap_servers", "record_transformer")).
-		ToSql()
-	if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
-		return false, err
+	// Upsert Kafka config only when Kafka settings were provided.
+	// Skipping prevents clobbering existing config on re-registration without Kafka.
+	if kafkaTopic != "" {
+		kafkaInsert := sq.Insert(metastore.TableRegistryKafka).
+			Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
+			Values(tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer)
+		kafkaCols := []string{"kafka_topic", "kafka_bootstrap_servers", "record_transformer"}
+		if s.isMariaDB {
+			kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateValues(kafkaCols...))
+		} else {
+			kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateAlias("new", kafkaCols...))
+		}
+		kafkaQuery, kafkaArgs, _ := kafkaInsert.ToSql()
+		if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
+			return false, err
+		}
 	}
 
 	// Update table config flags if explicitly set

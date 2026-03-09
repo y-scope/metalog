@@ -49,29 +49,6 @@ See [gRPC API — AdminService](../reference/grpc-api.md#coordinatorservice) for
 
 ---
 
-## Declarative Registration (node.yaml)
-
-Tables declared in `node.yaml` are auto-UPSERTed into the `_table*` registry on startup. The registry comprises 4 sub-tables with 1:1 relationships via `table_name`. Only explicitly specified fields are updated; omitted fields retain their DB defaults.
-
-```yaml
-tables:
-  - name: clp_spark                  # required — metadata table name
-    displayName: Spark Logs           # optional, defaults to name
-    kafka:                            # required
-      topic: spark-ir                 # required — Kafka topic to consume from
-      bootstrapServers: kafka:29092   # optional, DB default: localhost:9092
-      recordTransformer: spark        # optional — see Record Transformers doc
-    # All feature flags below are optional. Omitted = use DB default.
-    # kafkaPollerEnabled: true
-    # consolidationEnabled: true
-    # deletionEnabled: true
-    # retentionCleanupEnabled: true
-```
-
-See [Write Transformers](write-transformers.md) for the list of valid `recordTransformer` values and how they map ingested Kafka messages to IR file metadata.
-
----
-
 ## SQL Registration
 
 Tables can also be registered directly via SQL:
