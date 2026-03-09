@@ -53,6 +53,13 @@ type CoordinatorConfig struct {
 	LeaseRenewalIntervalSeconds int        `yaml:"leaseRenewalIntervalSeconds"`
 }
 
+// RetentionConfig selects the retention cleanup strategy for a table.
+// Type selects the strategy implementation ("default" if empty).
+// Stored per-table in _table_config; read at coordinator startup.
+type RetentionConfig struct {
+	Type string
+}
+
 // HealthConfig controls the HTTP health endpoint.
 type HealthConfig struct {
 	Enabled bool `yaml:"enabled"`
@@ -207,11 +214,8 @@ func (c *NodeConfig) validate() error {
 		return fmt.Errorf("database.primary is required when coordinator or worker is enabled")
 	}
 
-	// Storage validation — when coordinator or workers need storage
-	if c.HasCoordinator() || c.Worker.Concurrency > 0 {
-		if c.Storage.DefaultBackend == "" {
-			return fmt.Errorf("storage.defaultBackend is required when coordinator or worker is enabled")
-		}
+	// Storage validation — defaultBackend must reference a known backend
+	if c.Storage.DefaultBackend != "" {
 		if _, ok := c.Storage.Backends[c.Storage.DefaultBackend]; !ok {
 			return fmt.Errorf("storage.defaultBackend %q not found in storage.backends", c.Storage.DefaultBackend)
 		}
@@ -267,6 +271,22 @@ func applyDefaults(cfg *NodeConfig) {
 		}
 		if cfg.Coordinator.LeaseRenewalIntervalSeconds == 0 {
 			cfg.Coordinator.LeaseRenewalIntervalSeconds = 30
+		}
+	}
+
+	// Storage defaults — auto-provision a local filesystem backend when
+	// no storage is configured. This lets minimal configs (e.g., metadata-only
+	// nodes or integration tests) work without requiring a storage section.
+	if cfg.Storage.DefaultBackend == "" {
+		cfg.Storage.DefaultBackend = "local"
+		if cfg.Storage.Backends == nil {
+			cfg.Storage.Backends = make(map[string]StorageBackendConfig)
+		}
+		if _, ok := cfg.Storage.Backends["local"]; !ok {
+			cfg.Storage.Backends["local"] = StorageBackendConfig{
+				Type:     "fs",
+				BasePath: "/tmp/clp-storage",
+			}
 		}
 	}
 
