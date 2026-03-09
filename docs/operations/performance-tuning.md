@@ -12,9 +12,8 @@ Rough measured characteristics on a local testcontainers-go setup:
 
 | Metric | Ballpark | Notes |
 |--------|----------|-------|
-| **batch-UPSERT** | 20,000–22,000 records/sec | Default mode (batch size 5000) |
-| **batch INSERT IGNORE** | 24,000–26,000 records/sec | Fast mode for bulk loading |
-| **Kafka Consumption** | 30,000+ msg/sec | Kafka path (bounded by DB write speed) |
+| **batch-UPSERT (gRPC)** | ~32,000 records/sec | Default mode (batch size 5000, MariaDB) |
+| **Kafka ingestion** | ~10,000 rec/sec | Kafka path (consumer poll + reconciliation overhead) |
 | **Query (Pending Files)** | < 50ms | With proper indexing |
 
 > **Critical:** These numbers require proper database driver configuration. See [Performance Gotchas](#performance-gotchas).
@@ -30,15 +29,9 @@ The benchmark measures:
 6. **Full archive lifecycle** (5 state transitions, full consolidation workflow)
 7. **Mixed workload** (existing data + new inserts + state updates)
 
-### Lifecycle Benchmark Results
+### Lifecycle Overhead
 
-In production, each file goes through multiple state transitions, requiring multiple upserts. These figures are from local testcontainers-go runs — re-run the benchmark for production-representative numbers:
-
-| Scenario | Upserts/File | Throughput | Effective Files/sec | 25M files/day Headroom |
-|----------|--------------|------------|---------------------|------------------------|
-| IR-Only Lifecycle | 3 | ~21,000 ups/sec | ~7,000 files/sec | **24x** |
-| Full Archive Lifecycle | 5 | ~20,000 ups/sec | ~4,000 files/sec | **13.8x** |
-| Mixed Workload | varies | ~22,000 ops/sec | — | — |
+In production, each file goes through multiple state transitions (3-5 upserts per file). Effective files/sec is the batch-UPSERT rate divided by upserts-per-file. Run `integration-tests/benchmarks/ingestion/run.py` for production-representative numbers.
 
 ---
 
@@ -79,15 +72,11 @@ Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each act
 
 Optimal batch sizes for database batch-UPSERT (with `interpolateParams=true` in the DSN):
 
-| Batch Size | Throughput | Latency | Notes |
-|------------|------------|---------|-------|
-| 500 | ~14,500 rec/sec | ~35ms | Low latency |
-| 1,000 | ~8,000 rec/sec | 125ms | Moderate overhead |
-| 2,000 | ~12,000 rec/sec | 170ms | Good balance |
-| 5,000 | ~21,000 rec/sec | 350ms | **Default** — good throughput/latency balance |
-| 10,000 | ~24,000 rec/sec | 550ms | Maximum throughput, highest memory |
+| Batch Size | Throughput | Notes |
+|------------|------------|-------|
+| 5,000 | ~32,000 rec/sec | **Default** — flushes when buffer reaches 5K records, or after 1 second if fewer than 5K have arrived |
 
-**Recommendation:** The default of 5000 balances throughput and latency. Decrease to 500 if you need lower latency under light load. See [Performance Gotchas](#performance-gotchas) for critical driver settings.
+**Recommendation:** The default batch size and flush interval balance throughput and latency. See [Performance Gotchas](#performance-gotchas) for critical driver settings.
 
 ---
 
@@ -97,7 +86,7 @@ Optimal batch sizes for database batch-UPSERT (with `interpolateParams=true` in 
 
 Each coordinator is responsible for an **independent** database table (and optionally a Kafka topic). This provides workload isolation rather than shared scaling.
 
-Each coordinator owns an independent database table (one-to-one mapping). For Kafka ingestion, each coordinator also owns a dedicated Kafka topic. Total throughput scales linearly: N coordinators × 21K records/sec. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
+Each coordinator owns an independent database table (one-to-one mapping). For Kafka ingestion, each coordinator also owns a dedicated Kafka topic. Total throughput scales linearly with coordinators. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
 
 ### 2. Vertical Scaling
 
@@ -120,13 +109,7 @@ Each coordinator owns an independent database table (one-to-one mapping). For Ka
 
 ## Production Projections
 
-Given measured throughput of 21,000 records/sec per coordinator (UPSERT mode):
-
-| Metric | Per Coordinator | 3 Coordinators | 10 Coordinators |
-|--------|-----------------|-----------------|------------------|
-| Records/minute | 1,260,000 | 3,780,000 | 12,600,000 |
-| Records/hour | 75,600,000 | 226,800,000 | 756,000,000 |
-| Records/day | 1.8 billion | 5.4 billion | 18 billion |
+Throughput scales linearly with coordinators (each owns independent tables). Measured baseline: ~32K rec/sec per coordinator (gRPC, batch size 5000, MariaDB). Run the ingestion benchmark on your target hardware for accurate projections.
 
 ---
 
@@ -135,8 +118,8 @@ Given measured throughput of 21,000 records/sec per coordinator (UPSERT mode):
 ### Current Design Bottlenecks
 
 1. **Database Write Throughput** (most common)
-   - Single goroutine batch-UPSERT: 20K-22K records/sec (measured)
-   - Mitigation: Larger batches, horizontal scaling, fast insert mode for bulk loads
+   - Single goroutine batch-UPSERT: ~32K records/sec (measured, MariaDB)
+   - Mitigation: Larger batches, horizontal scaling
 
 2. **Network Latency**
    - Kafka polling: Mitigated by background consumer goroutine
@@ -156,7 +139,7 @@ Given measured throughput of 21,000 records/sec per coordinator (UPSERT mode):
 
 ## Recommendations
 
-1. **Start with 1 coordinator** - sufficient for < 75M records/hour
+1. **Start with 1 coordinator** - sufficient for most workloads
 2. **Scale horizontally** when approaching 80% capacity
 3. **Monitor database slow query log** for index optimization opportunities
 4. **Keep default batch size of 5000** unless you need lower latency (decrease to 500 for latency-sensitive workloads)
@@ -197,46 +180,11 @@ The Go implementation uses `strings.Builder` to construct multi-row INSERT state
 
 **Problem:** Small batch sizes increase per-batch overhead; large sizes increase memory and latency.
 
-**Measured performance:**
+**Measured performance (batch size 5000, gRPC):** ~32,000 rec/sec (MariaDB).
 
-| Batch Size | Throughput | Latency per Batch |
-|------------|------------|-------------------|
-| 500 | ~14,500 rec/sec | ~35ms | Low latency |
-| 1,000 | ~8,000 rec/sec | ~125ms |
-| 5,000 | ~21,000 rec/sec | ~350ms |
-| 10,000 | ~24,000 rec/sec | ~550ms |
+**Recommendation:** The default of 5000 balances throughput and latency. Run the ingestion benchmark to measure other batch sizes on your hardware.
 
-**Recommendation:** The default of 5000 balances throughput and latency. Decrease to 500 for latency-sensitive workloads.
-
-### 3. Fast Insert Mode (Bulk Loading)
-
-**Problem:** `INSERT ... ON DUPLICATE KEY UPDATE` has overhead from:
-- Uniqueness checking (MD5 hash computation on functional index)
-- Update logic for duplicates
-
-**Solution:** For initial bulk loads where duplicates are rare, enable fast insert:
-
-```bash
-export COORDINATOR_INSERT_FAST_ENABLED=true
-```
-
-**Comparison:**
-
-| Mode | SQL | Use Case | Throughput |
-|------|-----|----------|------------|
-| Safe (default) | `INSERT ... ON DUPLICATE KEY UPDATE` | Production | ~21,000 rec/sec |
-| Fast | `INSERT IGNORE ...` | Bulk loading | ~25,000 rec/sec |
-
-**When to use fast mode:**
-- Initial data migration
-- Backfill operations
-- Benchmark testing
-
-**When NOT to use fast mode:**
-- Production (state updates would be silently skipped)
-- Re-processing scenarios
-
-### 4. Kafka Consumer Design
+### 3. Kafka Consumer Design
 
 The Go Kafka consumer uses a **single-threaded poll loop** — all consumer operations (`Poll()`, `CommitOffsets()`, offset tracking) happen on one goroutine. This eliminates the thread-safety issues common with multi-threaded Kafka consumers.
 
