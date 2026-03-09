@@ -46,24 +46,25 @@ In production, each file goes through multiple state transitions, requiring mult
 
 ### Single Coordinator Constraints
 
-For the Kafka ingestion path, effective throughput is bounded by the slower stage: Kafka consumption (30K+ msg/sec) vs database batch-UPSERT (20-22K rec/sec). The bottleneck is database write throughput (index maintenance), giving an effective rate of ~20-22K records/sec per coordinator. Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each active table gets a dedicated `tableWriter` goroutine that batch-UPSERTs to the database.
+Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each active table gets a dedicated `tableWriter` goroutine that batch-UPSERTs to the database. Measured throughput: gRPC concurrent push achieves ~32K rec/sec, while Kafka consumption reaches ~10K rec/sec (limited by consumer poll overhead and reconciliation).
 
 ### Goroutine Architecture Benefits
 
-**Per-coordinator goroutines (up to 4 per table, each independently toggleable):**
+**Per-coordinator goroutines (up to 5 per table):**
 
 | Goroutine | Purpose | Throughput Impact |
 |-----------|---------|-------------------|
-| **Kafka Consumer** | Hides Kafka latency, sustains 30K+ msg/sec (Kafka path) |
+| **Kafka Consumer** | Hides Kafka latency, sustains ~10K rec/sec (Kafka path) |
 | **Planner** | Task creation, policy evaluation, completion processing |
-| **Storage Deletion** | Non-blocking cleanup, rate-limited |
-| **Retention Cleanup** | Background retention policy enforcement |
+| **Retention Strategy** | Three-phase cleanup (transition → delete rows → delete storage), rate-limited at 500 ops/sec |
+| **Partition Maintenance** | Lookahead creation, old partition merge/drop |
+| **Alias Refresh** | Re-read alias_column values from registry |
 
 **Node-level data path goroutines:**
 
 | Goroutine | Purpose | Throughput Impact |
 |-----------|---------|-------------------|
-| **BatchingWriter** | 1 `tableWriter` goroutine per active table — batch-UPSERT to database | 20-22K upserts/sec per goroutine |
+| **BatchingWriter** | 1 `tableWriter` goroutine per active table — batch-UPSERT to database | ~32K upserts/sec per goroutine |
 
 **Node-level HA & maintenance goroutines:**
 

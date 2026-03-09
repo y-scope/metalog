@@ -334,6 +334,7 @@ storage:
 coordinator:
   enabled: true
   nodeIdEnvVar: HOSTNAME
+  reconciliationIntervalSeconds: 2
 {grpc_section}
 worker:
   concurrency: 0
@@ -387,8 +388,14 @@ worker:
         sys.exit(1)
     log_success("Benchmark table registered")
 
-    # Allow coordinator to pick up the new table via reconciliation
-    time.sleep(3)
+    # Wait for coordinator to claim the table via reconciliation
+    log_info("Waiting for coordinator to claim table...")
+    claimed = _wait_for_table_claimed(dc, "clp_spark", timeout=30)
+    if not claimed:
+        log_error("Coordinator did not claim table within 30s")
+        _stop_coordinator()
+        sys.exit(1)
+    log_success("Table claimed by coordinator")
 
     # Step 7: Run benchmark / monitor ingestion
     if args.mode == "grpc":
@@ -438,6 +445,20 @@ worker:
     # Step 8: Stop coordinator
     _stop_coordinator()
     sys.exit(0 if passed else 1)
+
+
+def _wait_for_table_claimed(dc, table, timeout=30):
+    """Poll _table_assignment until node_id is non-NULL for the given table."""
+    for _ in range(timeout):
+        r = subprocess.run(
+            dc + ["exec", "-T", "mariadb", "mariadb", "-h", "127.0.0.1", "-uroot", "-ppassword", "metalog_metastore",
+                  "-sN", "-e", f"SELECT node_id FROM _table_assignment WHERE table_name = '{table}';"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and r.stdout.strip() and r.stdout.strip() != "NULL":
+            return True
+        time.sleep(1)
+    return False
 
 
 def _wait_for_db(dc, initial_count, target_records, timeout):
