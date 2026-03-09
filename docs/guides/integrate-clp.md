@@ -98,7 +98,7 @@ Serialization and deserialization is handled by `TaskPayload.Serialize()` / `Tas
 
 ### Step 1: Claim Task
 
-Worker claims a task using a `SELECT ... FOR UPDATE` + `UPDATE` transaction (READ COMMITTED isolation) that transitions `state` from `pending` to `processing`. See [Task Queue](../concepts/task-queue.md) for the full claiming protocol.
+Worker claims a task using a `SELECT ... FOR UPDATE` + `UPDATE` transaction (READ COMMITTED isolation) that transitions `state` from `pending` to `processing`. See [Task Queue Design](../design/task-queue.md) for the full claiming protocol.
 
 ### Step 2: Deserialize Payload
 
@@ -321,5 +321,5 @@ mc ls local/logs/tenant/table/partition/
 
 - [Scale Workers](scale-workers.md) — Worker scaling and troubleshooting
 - [Consolidation](../concepts/consolidation.md) — IR→Archive pipeline and policies
-- [Task Queue](../concepts/task-queue.md) — Task claiming and recovery
+- [Task Queue Design](../design/task-queue.md) — Task claiming and recovery
 - [Architecture Overview](../concepts/overview.md) — System overview and data lifecycle

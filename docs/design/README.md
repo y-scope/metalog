@@ -11,6 +11,7 @@ Design documents capture the "why" behind architectural decisions — edge cases
 | Document | Summary |
 |----------|---------|
 | [Coordinator HA](coordinator-ha.md) | Heartbeat vs lease liveness, edge cases (split-brain, race conditions, clock skew), data model, walkthroughs |
+| [Task Queue](task-queue.md) | DB-backed task queue schema, claim protocol, recovery, self-healing, design decisions |
 | [Early Termination](early-termination.md) | TopN watermark algorithm details, runnable example, Presto integration, streaming cursors |
 | [Keyset Pagination](keyset-pagination.md) | PK-based keyset cursor design for streaming split queries |
 

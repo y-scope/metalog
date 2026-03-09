@@ -2,7 +2,7 @@
 
 [← Back to docs](../README.md)
 
-**Related:** [Architecture Overview](overview.md) · [Metadata Schema](metadata-schema.md) · [Task Queue](task-queue.md) · [Scale Workers](../guides/scale-workers.md) · [Naming Conventions](../reference/naming-conventions.md)
+**Related:** [Architecture Overview](overview.md) · [Metadata Schema](metadata-schema.md) · [Task Queue Design](../design/task-queue.md) · [Scale Workers](../guides/scale-workers.md) · [Naming Conventions](../reference/naming-conventions.md)
 
 ## Table of Contents
 
@@ -186,7 +186,56 @@ Workers execute the full consolidation pipeline:
 4. **Write archive** atomically to object storage
 5. **Mark complete** by updating task state in database
 
-**On failure:** Coordinator's stale task detection finds stuck tasks, marks them `timed_out`, and creates retry tasks. Workers self-heal by deleting orphan outputs when task row is missing. See [Task Queue](task-queue.md).
+**On failure:** Coordinator's stale task detection finds stuck tasks, marks them `timed_out`, and creates retry tasks. Workers self-heal by deleting orphan outputs when task row is missing. See [Task Queue Design](../design/task-queue.md).
+
+---
+
+## Task Distribution
+
+The task queue uses the same database that stores metadata — no message broker, no gRPC coordination, no additional infrastructure. The `_task_queue` table holds all pending, in-progress, and completed tasks with LZ4+msgpack payloads.
+
+### State Machine
+
+```
+pending ──► processing ──► completed
+               │
+               ├─► (timeout, retry_count < max) ──► timed_out ──► NEW pending task
+               │
+               ├─► (timeout, retry_count >= max) ──► dead_letter
+               │
+               └─► (worker error) ──► failed ──► (deleted by cleanup)
+```
+
+On timeout, the coordinator inserts a NEW row with incremented `retry_count`. Each retry attempt has a unique `task_id`, ensuring unique archive paths and enabling self-cleaning.
+
+### Claim Protocol
+
+A single **Prefetcher** goroutine per node batch-claims tasks into a buffered channel; worker goroutines receive from the channel instead of hitting the database directly.
+
+| Step | Component | Action |
+|------|-----------|--------|
+| 1 | Prefetcher | `SELECT ... FOR UPDATE SKIP LOCKED` — lock pending rows without blocking other nodes |
+| 2 | Prefetcher | `UPDATE ... SET state = 'processing'` — claim locked rows in same transaction |
+| 3 | Prefetcher | Send claimed tasks to buffered channel (`batchSize × 2` capacity) |
+| 4 | Worker goroutines | Receive from channel, execute, mark completed or failed |
+
+`SKIP LOCKED` is the key: concurrent Prefetchers on different nodes skip each other's locked rows instead of blocking. Exponential backoff (2s → 32s) reduces DB polling during idle periods.
+
+### Recovery
+
+| Scenario | Detection | Response |
+|----------|-----------|----------|
+| Worker dies mid-task | `processing` task exceeds stale timeout (5 min) | Coordinator creates new `pending` retry task |
+| Max retries exceeded | `retry_count >= maxRetries` on reclaim | Task moves to `dead_letter` (kept for investigation) |
+| Coordinator restarts | Startup flow | Delete all non-dead-letter tasks; Kafka resumes from last committed offset |
+
+Workers self-heal: on failure, they delete the archive they just created. On success with a missing task row (reclaimed), they leave the archive for the coordinator's retry logic.
+
+### Backpressure
+
+The Planner skips creating new tasks if `pending + processing > maxBackpressureDepth` (100), preventing unbounded growth during worker stalls.
+
+For the full design — schema DDL, SQL operations, design decisions, performance analysis — see [Task Queue Design](../design/task-queue.md).
 
 ---
 
@@ -312,7 +361,7 @@ policy:
 ## See Also
 
 - [Architecture Overview](overview.md) — Goroutine model, Planner creates consolidation tasks
-- [Task Queue](task-queue.md) — Task claiming protocol and recovery
+- [Task Queue Design](../design/task-queue.md) — Task claiming protocol, schema, recovery, design decisions
 - [Scale Workers](../guides/scale-workers.md) — Worker scaling and troubleshooting
 - [Metadata Schema](metadata-schema.md) — Metadata table design and state columns
 - [Semantic Extraction](semantic-extraction.md) — MPT, ERT, log-surgeon, and LLM-powered variable labeling

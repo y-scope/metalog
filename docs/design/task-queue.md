@@ -6,6 +6,8 @@
 
 The task queue uses the same database that stores metadata as the work distribution mechanism. A single **Prefetcher** goroutine per node batch-claims tasks from `_task_queue` into a buffered channel; worker goroutines receive from that channel instead of hitting the database directly. No message broker, no gRPC coordination, no additional infrastructure. The database already exists, already handles failover, and already provides the transactional guarantees that task distribution requires.
 
+For the conceptual overview and how the task queue fits into the consolidation pipeline, see [Consolidation](../concepts/consolidation.md).
+
 ---
 
 ## Table of Contents
@@ -513,8 +515,8 @@ This schema is compatible with **MariaDB 10.4+** and **MySQL 8.0+**.
 
 ## See Also
 
-- [Architecture Overview](overview.md) — Planner creates tasks
+- [Architecture Overview](../concepts/overview.md) — Planner creates tasks
 - [Scale Workers](../guides/scale-workers.md) — Workers claim and execute tasks
-- [Consolidation](consolidation.md) — IR→Archive pipeline that tasks drive
+- [Consolidation](../concepts/consolidation.md) — IR→Archive pipeline that tasks drive
 - [Performance Tuning](../operations/performance-tuning.md) — Task queue benchmarks and claim throughput
-- [Coordinator HA](../design/coordinator-ha.md) — Task recovery on failover
+- [Coordinator HA Design](coordinator-ha.md) — Task recovery on failover

@@ -507,5 +507,5 @@ ORDER BY COUNT_STAR DESC LIMIT 10;
 - [Metadata Schema](../concepts/metadata-schema.md) — Table design, UPSERT strategy, partitioning
 - [Metadata Tables Reference](../reference/metadata-tables.md) — DDL, column reference, index reference
 - [Query Execution](../concepts/query-execution.md) — Index design and query patterns
-- [Task Queue](../concepts/task-queue.md) — Task queue protocol and state machine
+- [Task Queue Design](../design/task-queue.md) — Task queue protocol and state machine
 - [Configuration Reference](../reference/configuration.md) — DSN settings, batch size tuning

@@ -76,7 +76,7 @@ There are two worker deployment modes with different claiming strategies:
 
 ## Database Protocol
 
-Workers interact with the `_task_queue` table using `SELECT ... FOR UPDATE` + `UPDATE` (READ COMMITTED isolation) for transactional task claiming. For the complete task queue schema, claiming protocol, state machine, recovery model, and performance analysis, see [Task Queue](../concepts/task-queue.md).
+Workers interact with the `_task_queue` table using `SELECT ... FOR UPDATE` + `UPDATE` (READ COMMITTED isolation) for transactional task claiming. For the complete task queue schema, claiming protocol, state machine, recovery model, and performance analysis, see [Task Queue Design](../design/task-queue.md).
 
 ### TaskPayload Fields
 
@@ -228,7 +228,7 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 
 ## See Also
 
-- [Task Queue](../concepts/task-queue.md) — Full task queue protocol, schema, recovery, performance
+- [Task Queue Design](../design/task-queue.md) — Full task queue protocol, schema, recovery, performance
 - [CLP Integration](integrate-clp.md) — Worker-CLP binary integration for IR→Archive
 - [Consolidation](../concepts/consolidation.md) — Consolidation pipeline and policies
 - [Architecture Overview](../concepts/overview.md) — System overview and data lifecycle

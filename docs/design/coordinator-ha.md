@@ -466,5 +466,5 @@ Design B's simplicity advantage (one fewer table, one fewer goroutine) is real b
 - [Architecture Overview](../concepts/overview.md) — System overview and deployment options
 - [Ingestion Paths](../concepts/ingestion.md) — gRPC and Kafka protocols, BatchingWriter
 - [Configuration](../reference/configuration.md) — HA strategy and heartbeat/lease settings
-- [Task Queue](../concepts/task-queue.md) — Task recovery on failover
+- [Task Queue Design](task-queue.md) — Task recovery on failover
 - [Metadata Schema: Partitioning](../concepts/metadata-schema.md#partitioning) — Daily partitions, advisory lock coordination

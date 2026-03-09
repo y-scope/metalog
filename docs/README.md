@@ -18,7 +18,7 @@ The CLP Metastore Service is a file-level metadata catalog for CLP's compressed 
 [Query Execution](concepts/query-execution.md) → [gRPC API Reference](reference/grpc-api.md) → [Metadata Tables Reference](reference/metadata-tables.md)
 
 **Extending the codebase?**
-[Architecture Overview](concepts/overview.md) → [Task Queue](concepts/task-queue.md) → [Metadata Schema](concepts/metadata-schema.md) → [Design Documents](design/README.md)
+[Architecture Overview](concepts/overview.md) → [Consolidation](concepts/consolidation.md) → [Metadata Schema](concepts/metadata-schema.md) → [Design Documents](design/README.md)
 
 **Understanding CLP's semantic capabilities?**
 [Semantic Extraction](concepts/semantic-extraction.md) → [gRPC API Reference](reference/grpc-api.md)
@@ -27,15 +27,19 @@ The CLP Metastore Service is a file-level metadata catalog for CLP's compressed 
 
 ## Concepts
 
-Understanding-oriented explanations of how the system works.
+Understanding-oriented explanations of how the system works, organized by subsystem.
 
+**Subsystems:**
+- [Metadata Schema](concepts/metadata-schema.md) — Column registry, partitioning, schema evolution, denormalization
+- [Ingestion Paths](concepts/ingestion.md) — gRPC and Kafka ingestion, BatchingWriter, choosing a path
+- [Query Execution](concepts/query-execution.md) — Pruning pipeline, early termination, query catalog
+- [Consolidation](concepts/consolidation.md) — IR→Archive pipeline, policies, task distribution, worker workflow
+- [Deletion & Lifecycle](concepts/deletion-lifecycle.md) — File state machine, retention, purging, partition cleanup
+- [High Availability & Node Lifecycle](concepts/high-availability.md) — Coordination, heartbeat/lease, watchdog, shutdown
+
+**Cross-cutting:**
 - [Data Model](concepts/data-model.md) — What data CLP handles, file formats, deployment modes
 - [Architecture Overview](concepts/overview.md) — System overview, data lifecycle, goroutine model, components
-- [Metadata Schema](concepts/metadata-schema.md) — Entry types, lifecycle, denormalization rationale, partitioning
-- [Ingestion Paths](concepts/ingestion.md) — gRPC and Kafka ingestion, BatchingWriter, choosing a path
-- [Consolidation](concepts/consolidation.md) — IR→Archive pipeline, policies, worker workflow
-- [Task Queue](concepts/task-queue.md) — Database-backed task queue, claim protocol, recovery
-- [Query Execution](concepts/query-execution.md) — Pruning pipeline, early termination, query catalog
 - [Semantic Extraction](concepts/semantic-extraction.md) — log-surgeon, MPT, ERTs, LLM-powered schema generation
 - [Glossary](concepts/glossary.md) — CLP terminology: data formats, schema columns, lifecycle states
 
@@ -84,5 +88,6 @@ ADR-style documents capturing the "why" behind architectural decisions.
 
 - [Design Documents Index](design/README.md)
 - [Coordinator HA Design](design/coordinator-ha.md) — Edge cases, walkthroughs, data model, design alternatives
+- [Task Queue Design](design/task-queue.md) — Schema, claim protocol, recovery, design decisions
 - [Early Termination Design](design/early-termination.md) — Runnable example, Presto integration, streaming cursors
 - [Keyset Pagination](design/keyset-pagination.md) — PK-based keyset cursor design
