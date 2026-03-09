@@ -22,9 +22,9 @@ type Task struct {
 	TableName   string
 	State       TaskState
 	WorkerID    sql.NullString
-	CreatedAt   uint32
-	ClaimedAt   sql.NullInt32
-	CompletedAt sql.NullInt32
+	CreatedAt   int64
+	ClaimedAt   sql.NullInt64
+	CompletedAt sql.NullInt64
 	RetryCount  uint8
 	Input       []byte
 	Output      []byte

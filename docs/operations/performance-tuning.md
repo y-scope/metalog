@@ -245,7 +245,7 @@ The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` 
 
 ### 5. Index Overhead
 
-**Problem:** The `clp_spark` table has 7 base indexes, each updated on every INSERT. Dimension indexes are added dynamically by `DynamicIndexManager` as new `dim_*` columns are discovered.
+**Problem:** The `clp_spark` table has 7 base indexes, each updated on every INSERT. Dimension indexes are added dynamically by `IndexManager` as new `dim_*` columns are discovered.
 
 **Base indexes:**
 1. PRIMARY KEY (min_timestamp, id)

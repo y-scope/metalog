@@ -32,7 +32,7 @@ DDL, column reference, index reference, and scalability projections for the `clp
 |----------|---------------|---------|:------------:|
 | **Dimensions** | `dim_fNN` (opaque placeholder) | Filter by categorical content attributes | Yes |
 | **Aggregations** | `agg_fNN` (opaque placeholder) | Pre-computed match counts | Yes |
-| **Sketches** | `sketches` SET + `ext` BLOB | Probabilistic "definitely not" pruning | No |
+| **Sketches** | `sketches` SET + `ext` MEDIUMBLOB | Probabilistic "definitely not" pruning | No |
 
 *See [Storage Design: Denormalized Fact Table](../concepts/metadata-schema.md#denormalized-fact-table) for design rationale.*
 

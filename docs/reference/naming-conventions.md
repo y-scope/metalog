@@ -25,6 +25,7 @@ The **`_dim_registry`** table maps each physical name to its logical metadata:
 | `dim_key` | Field name from ingested records (any characters allowed) | `k8s.pod.name`, `@timestamp`, `service/region` |
 | `base_type` | SQL type family | `str`, `str_utf8`, `bool`, `int`, `float` |
 | `width` | Max VARCHAR length for `str`/`str_utf8` types | `128`, `256` |
+| `alias_column` | Optional human-readable alias | `hostname`, `NULL` |
 
 **Base types:**
 
@@ -165,7 +166,7 @@ All index names begin with `idx_` followed by a short description of the index's
 | `idx_expiration` | `(expires_at)` | Retention: expired files |
 | `idx_max_timestamp` | `(max_timestamp)` | Queries: time-range overlap |
 
-Dimension indexes added by `DynamicIndexManager` follow the same `idx_` prefix convention (e.g., `idx_dim_f01` for a dimension column index).
+Dimension indexes added by `IndexManager` follow the same `idx_` prefix convention (e.g., `idx_dim_f01` for a dimension column index).
 
 ---
 
@@ -190,7 +191,7 @@ Add a `dim_*` column when **all three criteria** are met:
 
 Dimension and aggregation columns are **auto-discovered** — no manual DDL is needed. When a new field appears in ingested records, `ColumnRegistry` allocates the next available slot and runs online DDL to add the physical column.
 
-1. **Include the field in record metadata** — send it in the `IngestBatch` gRPC request or Kafka message. The coordinator discovers it on first ingestion and allocates a `dim_fNN` slot automatically.
+1. **Include the field in record metadata** — send it in the `Ingest` gRPC request or Kafka message. The coordinator discovers it on first ingestion and allocates a `dim_fNN` slot automatically.
 
 2. **Verify discovery** — check the registry to confirm the field was picked up with the expected type and width:
    ```sql
@@ -207,9 +208,9 @@ Dimension and aggregation columns are **auto-discovered** — no manual DDL is n
 4. **Add an index if frequently filtered:** Configure it in the table settings or create manually:
    ```sql
    CREATE INDEX idx_dim_f01 ON clp_spark (min_timestamp, dim_f01)
-   ALGORITHM=INPLACE, LOCK=NONE;
+   ALGORITHM=INPLACE, LOCK=SHARED;  -- LOCK=NONE on MySQL 8.0+
    ```
-   `DynamicIndexManager` reconciles configured indexes at startup and on config reload.
+   `IndexManager` reconciles configured indexes at startup and on config reload.
 
 See [Schema Evolution](../guides/evolve-schema.md) for DDL procedures, the 255-byte width expansion rule, and MariaDB vs MySQL locking differences.
 

@@ -111,7 +111,7 @@ Node: BatchingWriter → TableWriter (per-table) — batch-UPSERT to clp_spark t
 MariaDB: clp_spark table — queryable metadata
 ```
 
-The gRPC ingestion path is similar but shorter: the gRPC client sends an `IngestBatch` request directly to the node, which validates, batches, and commits to the database — then acks the client.
+The gRPC ingestion path is similar but shorter: the gRPC client sends an `Ingest` request directly to the node, which validates, batches, and commits to the database — then acks the client.
 
 In a production deployment, the cycle continues: the Planner goroutine creates consolidation tasks, workers claim and execute them (semantic enrichment, PII handling, CLP compression), and the resulting archives are stored in object storage. See [Architecture Overview](../concepts/overview.md) for the full data lifecycle.
 

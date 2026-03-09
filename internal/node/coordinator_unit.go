@@ -89,7 +89,7 @@ func NewCoordinatorUnit(
 		}
 	}
 
-	partMgr := schema.NewPartitionManager(shared.DB, tableName, 3, 90, 1000, log)
+	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, 1000, log)
 
 	// Create Kafka consumer if configured — routes through IngestionService
 	// for proper dim/agg column resolution. Kafka config is cleared by the

@@ -101,9 +101,9 @@ Each per-table coordinator goroutine can be individually enabled/disabled via `_
 | Feature | Column (`_table_config`) | Default | Description |
 |---------|--------------------------|---------|-------------|
 | Kafka Consumer | `kafka_poller_enabled` | true | Polls Kafka, submits to BatchingWriter |
-| Metadata Writer | `metadata_writer_enabled` | true | Accepts and batch-UPSERTs ingested records |
 | Consolidation | `consolidation_enabled` | true | Creates IR→Archive consolidation tasks |
-| Retention Cleanup | `retention_cleanup_enabled` | true | Purges expired rows and storage objects |
+
+> **Note:** The `_table_config` schema also defines `metadata_writer_enabled` and `retention_cleanup_enabled` columns, but these are reserved for future use and are not currently read by the coordinator.
 
 ---
 

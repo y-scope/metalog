@@ -49,8 +49,8 @@ Schema is created automatically on startup. If it fails:
 
 **Symptom:**
 ```
-ERROR HealthCheckServer - Address already in use: 8081
-ERROR GrpcServer - Address already in use: 9090
+"health server starting" ... listen tcp :8081: bind: address already in use
+"gRPC server starting"   ... listen tcp :9090: bind: address already in use
 ```
 
 Change ports in config:
@@ -231,7 +231,7 @@ UPDATE _task_queue SET state = 'pending', retry_count = 0 WHERE id = <task_id>;
 **Symptom:** Ingestion latency spikes; `SHOW PROCESSLIST` shows many `Waiting for lock`.
 
 1. **Missing `interpolateParams=true`** — verify it is in the DSN. Without it, each parameter requires a separate protocol round-trip.
-2. **Too many indexes** — each `ALTER TABLE ADD INDEX` (from `DynamicIndexManager`) locks the table briefly. Monitor with:
+2. **Too many indexes** — each `ALTER TABLE ADD INDEX` (from `IndexManager`) locks the table briefly. Monitor with:
    ```sql
    SHOW PROCESSLIST;
    -- Look for: ALTER TABLE ... with "waiting for metadata lock"
@@ -295,7 +295,7 @@ grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
 **Fix:**
 1. Check `SHOW PROCESSLIST` for long-running write transactions.
 2. Increase `innodb_lock_wait_timeout` on the database (default 50s).
-3. If caused by `DynamicIndexManager` running an online DDL, wait for the ALTER to complete — it will not block reads indefinitely.
+3. If caused by `IndexManager` running an online DDL, wait for the ALTER to complete — it will not block reads indefinitely.
 
 ---
 

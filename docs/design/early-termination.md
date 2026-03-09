@@ -280,11 +280,11 @@ SELECT * FROM clp_streaming.data ORDER BY ts DESC LIMIT 100;   -- optimized
 
 ```sql
 -- Time range (for ordering and overlap pruning)
-min_timestamp          INT UNSIGNED NOT NULL DEFAULT 0,
-max_timestamp          INT UNSIGNED NOT NULL DEFAULT 0,
+min_timestamp          BIGINT NOT NULL DEFAULT 0,
+max_timestamp          BIGINT NOT NULL DEFAULT 0,
 
 -- Total event count (for basic early termination)
-record_count           INT UNSIGNED NOT NULL,
+record_count           BIGINT NOT NULL DEFAULT 0,
 
 -- File-level dimensions (for filtered early termination)
 -- Physical names are opaque placeholders: dim_f01, dim_f02, ...
@@ -292,14 +292,14 @@ record_count           INT UNSIGNED NOT NULL,
 dim_service     VARCHAR(128) NULL,
 dim_host        VARCHAR(128) NULL,
 dim_path        VARCHAR(1024) NULL,
-dim_port        SMALLINT UNSIGNED NULL,
+dim_port        BIGINT NULL,
 
 -- Per-field aggregations (for non-dimension filters)
 -- Physical names are opaque placeholders: agg_f01, agg_f02, ...
 -- Illustrative names used here for readability
-agg_gte_level_warn   INT UNSIGNED NULL,
-agg_gte_level_error  INT UNSIGNED NULL,
-agg_gte_level_fatal  INT UNSIGNED NULL,
+agg_gte_level_warn   BIGINT NULL,
+agg_gte_level_error  BIGINT NULL,
+agg_gte_level_fatal  BIGINT NULL,
 ```
 
 **Semantic contracts:** The `dim_` and `agg_` column families signal invariants:

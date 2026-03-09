@@ -263,7 +263,7 @@ WHERE clp_ir_path = '/path/to/file'
 
 ## Dynamic Index Management
 
-Indexes prefixed with `idx_` can be added or removed based on query patterns without a service restart. `DynamicIndexManager` reconciles the current index state against the YAML config: it creates enabled indexes that are missing and drops disabled indexes that exist. Config reloads are triggered externally (e.g., by `YamlConfigLoader`).
+Indexes prefixed with `idx_` can be added or removed based on query patterns without a service restart. `IndexManager` reconciles the current index state against the YAML config: it creates enabled indexes that are missing and drops disabled indexes that exist. Config reloads are triggered externally (e.g., by `YamlConfigLoader`).
 
 **Three indexes are always protected and cannot be dropped:**
 - `PRIMARY` — the clustered index
@@ -275,7 +275,7 @@ Indexes prefixed with `idx_` can be added or removed based on query patterns wit
 **Workflow:**
 1. Monitor slow queries and index usage statistics in the database
 2. Update the YAML index configuration
-3. Trigger a config reload — `DynamicIndexManager.reconcile()` applies the diff
+3. Trigger a config reload — `IndexManager.reconcile()` applies the diff
 4. Validate query performance improvement
 
 ---

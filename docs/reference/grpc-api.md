@@ -93,6 +93,7 @@ Each `IngestRequest` carries a `MetadataRecord` with typed `DimEntry` and `AggEn
 ```protobuf
 service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+  rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse);
 }
 ```
 
@@ -287,14 +288,17 @@ If there is no dot, the whole thing is `key` with no value qualifier.
 | `min_timestamp` | int64 | Earliest log timestamp in split |
 | `max_timestamp` | int64 | Latest log timestamp in split |
 | `record_count` | int64 | Number of log records |
+| `raw_size_bytes` | int64 | Raw (uncompressed) size in bytes |
 | `clp_ir_size_bytes` | int64 | IR file size in bytes |
+| `clp_archive_size_bytes` | int64 | Archive file size in bytes |
+| `clp_archive_created_at` | int64 | Archive creation timestamp (epoch nanoseconds) |
 | `clp_ir_path` | string | IR file object key |
 | `clp_ir_bucket` | string | IR file bucket |
 | `clp_ir_storage_backend` | string | IR file storage type |
 | `clp_archive_path` | string | Archive object key |
 | `clp_archive_bucket` | string | Archive bucket |
 | `clp_archive_storage_backend` | string | Archive storage type |
-| `expires_at` | int64 | Retention expiry (Unix seconds) |
+| `expires_at` | int64 | Retention expiry (epoch nanoseconds) |
 | `retention_days` | int32 | Retention policy in days |
 
 ### Operators and syntax
@@ -596,7 +600,7 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 #### Behaviour
 
 1. Validates `table_name`, `kafka`, `kafka.topic`, `kafka.bootstrap_servers` → `INVALID_ARGUMENT` on failure.
-2. Writes `_table`, `_table_kafka`, `_table_config`, `_table_assignment`, and 32 `_sketch_registry` slots (all idempotent).
+2. Writes `_table`, `_table_kafka`, `_table_config`, `_table_assignment`, and 64 `_sketch_registry` slots (all idempotent).
 3. Provisions the physical metadata table with lookahead partitions (no-op if already exists).
 4. The coordinator's periodic `reconcileUnits()` loop claims the new `_table_assignment` row (with `node_id = NULL`) on its next cycle (default: 60 s).
 
@@ -633,6 +637,58 @@ grpcurl -plaintext -d '{
 | gRPC Status | Cause |
 |-------------|-------|
 | `INVALID_ARGUMENT` | `table_name` blank, `kafka` absent, `kafka.topic` blank, `kafka.bootstrap_servers` blank |
+| `INTERNAL` | Database error |
+
+### `SetColumnAlias`
+
+```
+rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse)
+```
+
+Sets or clears a human-readable alias for a dimension or aggregation column. Updates the database
+only — all nodes pick up changes via periodic alias refresh (~60 seconds).
+
+#### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `table_name` | string | Yes | Metadata table name |
+| `column_name` | string | Yes | Physical column name (must start with `dim_f` or `agg_f`) |
+| `alias_column` | string | No | Alias to set. Empty string clears the alias. Must match `[a-zA-Z_][a-zA-Z0-9_./-]*` and be ≤128 chars. |
+
+#### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `column_name` | string | The column that was updated |
+| `alias_column` | string | The alias now stored (empty if cleared) |
+
+#### Examples
+
+```bash
+# Set an alias
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "column_name": "dim_f01",
+  "alias_column": "hostname"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias
+
+# Clear an alias
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "column_name": "dim_f01",
+  "alias_column": ""
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias
+```
+
+#### Error codes
+
+| gRPC Status | Cause |
+|-------------|-------|
+| `INVALID_ARGUMENT` | `table_name` blank, `column_name` blank, invalid prefix, alias too long or invalid pattern |
+| `NOT_FOUND` | No ACTIVE column with that name in the specified table |
 | `INTERNAL` | Database error |
 
 ### CLI: `metalog admin register-table`

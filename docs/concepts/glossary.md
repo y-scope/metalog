@@ -67,7 +67,7 @@ Stateless workers that consolidate IR files into Archives. Claim tasks via `SELE
 ### ColumnRegistry
 Service component that manages the mapping between opaque physical column names (`dim_fNN`, `agg_fNN`) and logical field names. Auto-discovers new fields from ingested records, allocates slots sequentially, and runs online DDL to add physical columns. State is loaded from `_dim_registry` and `_agg_registry` at startup. See [Schema Evolution](../guides/evolve-schema.md).
 
-### DynamicIndexManager
+### IndexManager
 Component that reconciles index configuration at startup and on config reload. Creates indexes enabled in config, drops indexes disabled in config (except protected base indexes: `PRIMARY`, `idx_consolidation`, `idx_expiration`). Uses `ALGORITHM=INPLACE, LOCK=NONE` for online DDL with an automatic fallback to default DDL if the engine does not support it. See [Schema Evolution](../guides/evolve-schema.md) and [Naming Conventions](../reference/naming-conventions.md).
 
 ### clp-s

@@ -648,7 +648,7 @@ CREATE TABLE IF NOT EXISTS _agg_registry (
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
--- Sketch registry: maps SET members (s01..s32) to field metadata
+-- Sketch registry: maps SET members (s01..s64) to field metadata
 -- Slots are pre-populated as AVAILABLE during table registration
 CREATE TABLE IF NOT EXISTS _sketch_registry (
     table_name      VARCHAR(64) NOT NULL,

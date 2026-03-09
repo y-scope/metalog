@@ -124,7 +124,7 @@ These are not configurable via YAML but are defined in `internal/config/timeouts
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `DefaultBatchFlushInterval` | 500ms | Batching writer flush interval |
+| `DefaultBatchFlushInterval` | 1s | Batching writer flush interval |
 | `DefaultBatchSize` | 5000 | UPSERT batch size |
 | `DefaultTaskClaimBatchSize` | 10 | Tasks claimed per worker poll |
 | `DefaultTaskStaleTimeout` | 5m | Processing task reclaim timeout |
@@ -132,7 +132,8 @@ These are not configurable via YAML but are defined in `internal/config/timeouts
 | `DefaultWorkerPollInterval` | 2s | Worker task poll interval |
 | `DefaultWorkerBackoffMax` | 30s | Max backoff when no tasks available |
 | `DefaultPlannerInterval` | 60s | Consolidation planner run interval |
-| `DefaultQueryLimit` | 1000 | Default split query page size |
+| `DefaultQueryLimit` | 1000 | Default total result limit for split queries (0 = unlimited) |
+| `DefaultQueryPageSize` | 1000 | Internal SQL LIMIT per page for streaming queries |
 | `DefaultDeadlockMaxRetries` | 10 | Max retries on SQL deadlock |
 
 ---

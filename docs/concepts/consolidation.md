@@ -132,19 +132,23 @@ The policy determines how IR files are grouped into archives. Policies are **dom
 
 ### Policy Types
 
-**Dimension-Based** (e.g., Spark logs):
-- Group by `application_id`
-- All logs from a single Spark job in the same archive(s)
+Three built-in policy types are registered in the `consolidation` package:
+
+**`spark_job`** — Dimension-based grouping (e.g., Spark logs):
+- Groups IR files by a dimension key (e.g., `application_id` via `groupingDimKey`)
+- All logs from a single Spark job end up in the same archive(s)
 - Enables efficient job-level queries
 
-**Time-Window** (e.g., microservices):
-- Group by 15-minute or 1-hour windows per service
+**`time_window`** — Time-window grouping (e.g., microservices):
+- Groups IR files by configurable time windows (e.g., 15 min, 1 hour)
 - Optimized for time-range filtering
+- This is the default policy when no type is specified
 
-**Hybrid Triggers:**
-- Job completion detection
-- Size limits
-- Timeout fallbacks (e.g., consolidate after 4 hours regardless)
+**`audit`** — Exact-day grouping:
+- Groups IR files by calendar day boundaries
+- Designed for compliance/audit logs where day-aligned archives simplify retention
+
+All policies support common triggers: size limits (`minFiles`/`maxFiles`) and timeout fallbacks.
 
 ### Archive Size Feedback Loop
 

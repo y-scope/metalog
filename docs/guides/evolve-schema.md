@@ -109,26 +109,34 @@ CREATE TABLE _agg_registry (
 
 ## Slot Allocation
 
-### How It Works
+### Single-Slot Allocation
 
-1. Check in-memory cache: if `dimKey` already mapped, return cached column name
-2. Acquire mutex: re-check cache (double-checked locking)
-3. Assign next slot number (`nextDimSlot++`)
-4. Insert registry row with `PRIMARY KEY (table_name, column_name)`
-5. `ALTER TABLE <tableName> ADD COLUMN dim_fNN <type>, ALGORITHM=INPLACE, LOCK=...`
-6. Update in-memory cache
+Used by `ResolveOrAllocateDim` / `ResolveOrAllocateAgg` for individual field resolution:
+
+1. **Fast path** (RLock): check in-memory cache — if `dimKey` already mapped, return cached column name
+2. **Slow path** (allocMu): re-check cache (double-checked locking), then:
+   1. `ALTER TABLE ADD COLUMN dim_fNN <type>, ALGORITHM=INPLACE, LOCK=<mode>`
+   2. Insert registry row (physical column exists, so no orphaned registry row on crash)
+   3. Advance `nextDimSlot` and update in-memory cache
+
+### Batch Allocation
+
+Used by `ResolveOrAllocateDims` / `ResolveOrAllocateAggs` (called from the ingestion service) for bulk field resolution. On cold start — when a table first encounters many new fields — this avoids N individual `ALTER TABLE` statements:
+
+1. **Fast path** (RLock): partition requests into resolved, needs-widening, and unresolved
+2. Width expansion cases are handled individually (each is a `MODIFY COLUMN`)
+3. **Batch path** (allocMu): all unresolved columns are added in a single multi-column `ALTER TABLE`:
+   ```sql
+   ALTER TABLE t ADD COLUMN dim_f01 VARCHAR(255) NULL, ADD COLUMN dim_f02 BIGINT NULL, ...
+   ```
+4. If the batch ALTER fails with a duplicate column error (crash recovery), falls back to per-column ALTERs with `isDuplicateColumn` tolerance
+5. `nextDimSlot` is advanced immediately after the ALTER succeeds, before registry INSERTs — so if an INSERT fails mid-batch, retries generate fresh slot names
 
 ### Concurrency Safety
 
-The `allocateNewDimSlot` and `allocateNewAggSlot` methods are guarded by a `sync.Mutex` on the `ColumnRegistry` instance, so slot assignment is single-goroutine within a process.
+The `allocateNewDimSlot`, `allocateNewAggSlot`, `batchAllocateDimSlots`, and `batchAllocateAggSlots` methods are guarded by `allocMu` (`sync.Mutex`) on the `ColumnRegistry` instance, serializing all DDL within a process. The ALTER-before-INSERT ordering ensures no orphaned registry rows: if the node crashes after ALTER but before INSERT, the next allocation attempt will encounter `isDuplicateColumn` and skip the existing physical column.
 
-As an additional guard, if the registry `INSERT` fails with a duplicate key error (e.g., a column was added by another process):
-
-1. The slot number is rolled back (`nextDimSlot--`)
-2. Reloads from the database by `dimKey`
-3. Returns the found entry's column name (or re-returns the error if the reload finds nothing)
-
-Slot numbers may have gaps if a slot was tentatively reserved but then rolled back. That's safe — the sequence is never relied upon for correctness.
+Slot numbers may have gaps (e.g., from crash recovery). That's safe — the sequence is never relied upon for correctness.
 
 ### Dim Column SQL Types
 
@@ -160,17 +168,19 @@ The 255 boundary is the InnoDB row-format threshold where MySQL changes internal
 
 ## Online DDL Locking
 
-Physical column additions use `ALGORITHM=INPLACE` with a database-specific `LOCK` mode:
+All ALTER TABLE statements across the `schema` package use `ALGORITHM=INPLACE` with a dialect-aware `LOCK` mode, centralized via the `lockMode(isMariaDB)` helper in `ddl.go`:
 
 ```go
-// From ColumnRegistry.addPhysicalColumn():
-lockMode := "NONE"
-if dialect == DialectMariaDB {
-    lockMode = "SHARED"
+// lockMode returns "SHARED" for MariaDB, "NONE" for MySQL 8.0+.
+func lockMode(isMariaDB bool) string {
+    if isMariaDB {
+        return "SHARED"
+    }
+    return "NONE"
 }
-sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s, ALGORITHM=INPLACE, LOCK=%s",
-    tableName, columnName, columnDef, lockMode)
 ```
+
+This applies to: `ColumnRegistry` (ADD COLUMN, MODIFY COLUMN), `Evolver` (ADD COLUMN), and `IndexManager` (ADD INDEX).
 
 ### MariaDB 10.4+: `LOCK=SHARED`
 
@@ -201,13 +211,13 @@ MySQL 8.0 supports `LOCK=NONE` even with indexed virtual columns, giving zero-im
 
 ## Dynamic Indexes
 
-The `DynamicIndexManager` type (in the `schema` package) reconciles index configuration at startup and on config reload:
+The `IndexManager` type (in the `schema` package) reconciles index configuration at startup and on config reload:
 
 - **Creates** indexes that are enabled in config but missing from the table
 - **Drops** indexes that are disabled in config (if they exist and aren't protected)
 - **Skips** columns that haven't been allocated yet (logs a warning)
 
-Index DDL also uses `ALGORITHM=INPLACE, LOCK=NONE` with a fallback to default DDL if not supported.
+Index DDL uses `ALGORITHM=INPLACE, LOCK=<mode>` via the same `lockMode` helper as column allocation.
 
 ### Protected Indexes (Never Dropped)
 
@@ -216,6 +226,24 @@ Index DDL also uses `ALGORITHM=INPLACE, LOCK=NONE` with a fallback to default DD
 | `PRIMARY` | Primary key |
 | `idx_consolidation` | Core index for pending file queries |
 | `idx_expiration` | Core index for retention/deletion queries |
+
+## Column Aliases
+
+Both `_dim_registry` and `_agg_registry` have an `alias_column` field that provides a human-readable name for a physical column. Aliases are used by the query path to return semantic names (e.g., `hostname`) instead of physical names (e.g., `dim_f01`).
+
+### Setting Aliases
+
+Aliases are managed via the `SetColumnAlias` admin gRPC RPC. The RPC writes directly to the database only — it does not update in-memory caches. This keeps the admin API stateless and safe in multi-node deployments.
+
+### Multi-Node Propagation
+
+Each coordinator node runs a `runAliasRefresh` goroutine that calls `ColumnRegistry.RefreshAliases()` every minute. This method:
+
+1. SELECTs `column_name, alias_column` from both registry tables
+2. Compares with the in-memory cache under a write lock
+3. Replaces entries whose alias changed with new immutable copies (preserving concurrent reader safety)
+
+The 1-minute polling interval means alias changes propagate to all nodes within ~60 seconds.
 
 ## Demo
 
@@ -233,11 +261,17 @@ Prerequisites: Docker, Go 1.22+.
 
 ## Startup Behaviour
 
-At coordinator startup, `ColumnRegistry` loads all `ACTIVE` entries for the table from `_dim_registry` and `_agg_registry` into in-memory caches. Subsequent `resolveOrAllocateDim()` / `resolveOrAllocateAgg()` calls check the cache first (no DB round-trip for known fields).
+At coordinator startup:
+
+1. `BaseSchemaValidator` checks all system tables and the template table against expected columns, types, indexes, and partitioning (catches stale schemas before data operations begin)
+2. `ColumnRegistry` loads all `ACTIVE` entries for the table from `_dim_registry` and `_agg_registry` into in-memory caches (including `alias_column`)
+3. Subsequent `ResolveOrAllocateDim()` / `ResolveOrAllocateAgg()` calls check the cache first (no DB round-trip for known fields)
+4. The `runAliasRefresh` goroutine starts polling for alias changes every minute
 
 Log output on startup:
 ```
-ColumnRegistry loaded for table=clp_spark: 12 dim entries, 5 agg entries
+base schema validation passed
+column registry loaded  {"table": "clp_spark", "dims": 12, "aggs": 5}
 ```
 
 ## See Also

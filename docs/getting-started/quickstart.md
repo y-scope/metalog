@@ -126,14 +126,10 @@ go test -tags=integration ./internal/...
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka bootstrap servers |
-| `DB_HOST` | `localhost` | Database host |
-| `DB_PORT` | `3306` | Database port |
-| `DB_USER` | `root` | Database user |
-| `DB_PASSWORD` | `password` | Database password |
-| `MINIO_ENDPOINT` | `http://localhost:9000` | MinIO endpoint |
-| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
-| `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key |
+| `CONFIG_PATH` | `node.yaml` | Path to the YAML config file (or ConfigMap directory) |
+| `HOSTNAME` | _(OS hostname)_ | Used as `node_id` for table assignment (configurable via `coordinator.nodeIdEnvVar`) |
+
+All other settings (database, Kafka, storage) are configured in the YAML file. The YAML supports `${VAR:-default}` expansion for injecting secrets from the environment (see [Configuration Reference](../reference/configuration.md)).
 
 ### Node Configuration (YAML)
 

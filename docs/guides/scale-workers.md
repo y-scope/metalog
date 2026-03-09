@@ -148,8 +148,8 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 | `DB_USER` | `root` | Database user |
 | `DB_PASSWORD` | `password` | Database password |
 | `WORKER_TABLE_NAME` | `clp_spark` | Target metadata table |
-| `WORKER_POLL_MIN_BACKOFF_MS` | `1000` | Minimum Prefetcher backoff |
-| `WORKER_POLL_MAX_BACKOFF_MS` | `32000` | Maximum Prefetcher backoff |
+| `WORKER_POLL_MIN_BACKOFF_MS` | `2000` | Minimum Prefetcher backoff |
+| `WORKER_POLL_MAX_BACKOFF_MS` | `30000` | Maximum Prefetcher backoff |
 | `WORKER_ID` | auto-generated | Unique worker identifier |
 
 ### Storage

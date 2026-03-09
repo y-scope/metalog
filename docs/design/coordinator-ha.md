@@ -318,8 +318,8 @@ CREATE TABLE _table_assignment (
 
 CREATE TABLE _node_registry (
     node_id           VARCHAR(64) PRIMARY KEY,
-    started_at        BIGINT NOT NULL,
     last_heartbeat_at BIGINT NOT NULL,
+    started_at        BIGINT NOT NULL,
     INDEX idx_heartbeat (last_heartbeat_at)
 ) ENGINE=InnoDB;
 ```
