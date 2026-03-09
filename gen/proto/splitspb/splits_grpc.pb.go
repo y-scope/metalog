@@ -19,27 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QuerySplitsService_StreamSplits_FullMethodName = "/com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits"
+	SplitQueryService_StreamSplits_FullMethodName = "/com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits"
 )
 
-// QuerySplitsServiceClient is the client API for QuerySplitsService service.
+// SplitQueryServiceClient is the client API for SplitQueryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type QuerySplitsServiceClient interface {
+type SplitQueryServiceClient interface {
 	StreamSplits(ctx context.Context, in *StreamSplitsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamSplitsResponse], error)
 }
 
-type querySplitsServiceClient struct {
+type splitQueryServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewQuerySplitsServiceClient(cc grpc.ClientConnInterface) QuerySplitsServiceClient {
-	return &querySplitsServiceClient{cc}
+func NewSplitQueryServiceClient(cc grpc.ClientConnInterface) SplitQueryServiceClient {
+	return &splitQueryServiceClient{cc}
 }
 
-func (c *querySplitsServiceClient) StreamSplits(ctx context.Context, in *StreamSplitsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamSplitsResponse], error) {
+func (c *splitQueryServiceClient) StreamSplits(ctx context.Context, in *StreamSplitsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamSplitsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &QuerySplitsService_ServiceDesc.Streams[0], QuerySplitsService_StreamSplits_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &SplitQueryService_ServiceDesc.Streams[0], SplitQueryService_StreamSplits_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -54,69 +54,69 @@ func (c *querySplitsServiceClient) StreamSplits(ctx context.Context, in *StreamS
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type QuerySplitsService_StreamSplitsClient = grpc.ServerStreamingClient[StreamSplitsResponse]
+type SplitQueryService_StreamSplitsClient = grpc.ServerStreamingClient[StreamSplitsResponse]
 
-// QuerySplitsServiceServer is the server API for QuerySplitsService service.
-// All implementations must embed UnimplementedQuerySplitsServiceServer
+// SplitQueryServiceServer is the server API for SplitQueryService service.
+// All implementations must embed UnimplementedSplitQueryServiceServer
 // for forward compatibility.
-type QuerySplitsServiceServer interface {
+type SplitQueryServiceServer interface {
 	StreamSplits(*StreamSplitsRequest, grpc.ServerStreamingServer[StreamSplitsResponse]) error
-	mustEmbedUnimplementedQuerySplitsServiceServer()
+	mustEmbedUnimplementedSplitQueryServiceServer()
 }
 
-// UnimplementedQuerySplitsServiceServer must be embedded to have
+// UnimplementedSplitQueryServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedQuerySplitsServiceServer struct{}
+type UnimplementedSplitQueryServiceServer struct{}
 
-func (UnimplementedQuerySplitsServiceServer) StreamSplits(*StreamSplitsRequest, grpc.ServerStreamingServer[StreamSplitsResponse]) error {
+func (UnimplementedSplitQueryServiceServer) StreamSplits(*StreamSplitsRequest, grpc.ServerStreamingServer[StreamSplitsResponse]) error {
 	return status.Error(codes.Unimplemented, "method StreamSplits not implemented")
 }
-func (UnimplementedQuerySplitsServiceServer) mustEmbedUnimplementedQuerySplitsServiceServer() {}
-func (UnimplementedQuerySplitsServiceServer) testEmbeddedByValue()                            {}
+func (UnimplementedSplitQueryServiceServer) mustEmbedUnimplementedSplitQueryServiceServer() {}
+func (UnimplementedSplitQueryServiceServer) testEmbeddedByValue()                            {}
 
-// UnsafeQuerySplitsServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to QuerySplitsServiceServer will
+// UnsafeSplitQueryServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SplitQueryServiceServer will
 // result in compilation errors.
-type UnsafeQuerySplitsServiceServer interface {
-	mustEmbedUnimplementedQuerySplitsServiceServer()
+type UnsafeSplitQueryServiceServer interface {
+	mustEmbedUnimplementedSplitQueryServiceServer()
 }
 
-func RegisterQuerySplitsServiceServer(s grpc.ServiceRegistrar, srv QuerySplitsServiceServer) {
-	// If the following call panics, it indicates UnimplementedQuerySplitsServiceServer was
+func RegisterSplitQueryServiceServer(s grpc.ServiceRegistrar, srv SplitQueryServiceServer) {
+	// If the following call panics, it indicates UnimplementedSplitQueryServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&QuerySplitsService_ServiceDesc, srv)
+	s.RegisterService(&SplitQueryService_ServiceDesc, srv)
 }
 
-func _QuerySplitsService_StreamSplits_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _SplitQueryService_StreamSplits_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamSplitsRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(QuerySplitsServiceServer).StreamSplits(m, &grpc.GenericServerStream[StreamSplitsRequest, StreamSplitsResponse]{ServerStream: stream})
+	return srv.(SplitQueryServiceServer).StreamSplits(m, &grpc.GenericServerStream[StreamSplitsRequest, StreamSplitsResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type QuerySplitsService_StreamSplitsServer = grpc.ServerStreamingServer[StreamSplitsResponse]
+type SplitQueryService_StreamSplitsServer = grpc.ServerStreamingServer[StreamSplitsResponse]
 
-// QuerySplitsService_ServiceDesc is the grpc.ServiceDesc for QuerySplitsService service.
+// SplitQueryService_ServiceDesc is the grpc.ServiceDesc for SplitQueryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var QuerySplitsService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "com.yscope.metalog.query.api.proto.grpc.QuerySplitsService",
-	HandlerType: (*QuerySplitsServiceServer)(nil),
+var SplitQueryService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "com.yscope.metalog.query.api.proto.grpc.SplitQueryService",
+	HandlerType: (*SplitQueryServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "StreamSplits",
-			Handler:       _QuerySplitsService_StreamSplits_Handler,
+			Handler:       _SplitQueryService_StreamSplits_Handler,
 			ServerStreams: true,
 		},
 	},

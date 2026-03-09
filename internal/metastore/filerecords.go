@@ -297,6 +297,46 @@ func (fr *FileRecords) getCurrentStatesInTx(ctx context.Context, tx *sql.Tx, irP
 	return scanStateMap(rows)
 }
 
+// TransitionExpiredToPurging moves expired files from their closed state to the
+// corresponding PURGING state (IR_CLOSED → IR_PURGING, ARCHIVE_CLOSED → ARCHIVE_PURGING).
+// Returns the number of rows transitioned. This is the first phase of the two-phase
+// retention delete: marking files for deletion is crash-safe — if the node crashes
+// after this step, recovery picks up the PURGING files and deletes them.
+func (fr *FileRecords) TransitionExpiredToPurging(ctx context.Context, currentNanos int64) (int64, error) {
+	// Transition IR_CLOSED → IR_PURGING for expired IR-only files.
+	irAffected, err := fr.transitionStateBatch(ctx, currentNanos, StateIRClosed, StateIRPurging)
+	if err != nil {
+		return 0, fmt.Errorf("transition expired IR files: %w", err)
+	}
+
+	// Transition ARCHIVE_CLOSED → ARCHIVE_PURGING for expired archive files.
+	archiveAffected, err := fr.transitionStateBatch(ctx, currentNanos, StateArchiveClosed, StateArchivePurging)
+	if err != nil {
+		return irAffected, fmt.Errorf("transition expired archive files: %w", err)
+	}
+
+	return irAffected + archiveAffected, nil
+}
+
+// transitionStateBatch updates up to MaxExpirationBatch rows from fromState to toState
+// where expires_at > 0 AND expires_at < currentNanos.
+func (fr *FileRecords) transitionStateBatch(ctx context.Context, currentNanos int64, fromState, toState FileState) (int64, error) {
+	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+		Set(ColState, string(toState)).
+		Where(sq.Gt{ColExpiresAt: 0}).
+		Where(sq.Lt{ColExpiresAt: currentNanos}).
+		Where(sq.Eq{ColState: string(fromState)}).
+		Limit(uint64(MaxExpirationBatch)).
+		ToSql()
+
+	res, err := fr.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // DeleteExpiredFiles removes files past their expiration and returns their storage paths.
 func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int64) (*DeletionResult, error) {
 	tx, err := fr.db.BeginTx(ctx, nil)

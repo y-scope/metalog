@@ -14,14 +14,24 @@ func FileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
 	}
 
 	f := record.File
+
+	expiresAt := f.ExpiresAt
+	retentionDays := f.RetentionDays
+	if retentionDays == 0 {
+		retentionDays = metastore.DefaultRetentionDays
+	}
+	if expiresAt == 0 && f.MinTimestamp > 0 {
+		expiresAt = f.MinTimestamp + int64(retentionDays)*86400*1e9
+	}
+
 	rec := &metastore.FileRecord{
 		State:         metastore.FileState(f.State),
 		MinTimestamp:  f.MinTimestamp,
 		MaxTimestamp:  f.MaxTimestamp,
 		RawSizeBytes:  sql.NullInt64{Int64: f.RawSizeBytes, Valid: f.RawSizeBytes > 0},
 		RecordCount:   uint32(f.RecordCount),
-		RetentionDays: uint16(f.RetentionDays),
-		ExpiresAt:     f.ExpiresAt,
+		RetentionDays: uint16(retentionDays),
+		ExpiresAt:     expiresAt,
 		Dims:          make(map[string]any),
 		Aggs:          make(map[string]any),
 	}

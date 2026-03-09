@@ -190,6 +190,65 @@ func TestFileRecordFromProto_DimsAndAggsInitialized(t *testing.T) {
 	}
 }
 
+func TestFileRecordFromProto_ExpiresAtComputed(t *testing.T) {
+	// When ExpiresAt is 0 and MinTimestamp is set, compute from retention_days.
+	record := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State:         "IR_BUFFERING",
+			MinTimestamp:  1704067200000000000, // 2024-01-01 00:00:00 UTC
+			RetentionDays: 30,
+			ExpiresAt:     0,
+		},
+	}
+
+	result := FileRecordFromProto(record)
+
+	want := int64(1704067200000000000) + 30*86400*1e9
+	if result.ExpiresAt != want {
+		t.Errorf("ExpiresAt = %d, want %d (computed from min_timestamp + 30 days)", result.ExpiresAt, want)
+	}
+}
+
+func TestFileRecordFromProto_ExpiresAtExplicit(t *testing.T) {
+	// When ExpiresAt is explicitly provided, use it as-is.
+	record := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State:         "IR_BUFFERING",
+			MinTimestamp:  1704067200000000000,
+			RetentionDays: 30,
+			ExpiresAt:     3000000000000000000,
+		},
+	}
+
+	result := FileRecordFromProto(record)
+
+	if result.ExpiresAt != 3000000000000000000 {
+		t.Errorf("ExpiresAt = %d, want 3000000000000000000 (explicit value preserved)", result.ExpiresAt)
+	}
+}
+
+func TestFileRecordFromProto_DefaultRetentionDays(t *testing.T) {
+	// When RetentionDays is 0, use the default (30 days).
+	record := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State:         "IR_BUFFERING",
+			MinTimestamp:  1704067200000000000,
+			RetentionDays: 0,
+			ExpiresAt:     0,
+		},
+	}
+
+	result := FileRecordFromProto(record)
+
+	if result.RetentionDays != metastore.DefaultRetentionDays {
+		t.Errorf("RetentionDays = %d, want %d", result.RetentionDays, metastore.DefaultRetentionDays)
+	}
+	want := int64(1704067200000000000) + int64(metastore.DefaultRetentionDays)*86400*1e9
+	if result.ExpiresAt != want {
+		t.Errorf("ExpiresAt = %d, want %d (computed from default retention)", result.ExpiresAt, want)
+	}
+}
+
 func TestFileRecordFromProto_IRSizeBytesZero(t *testing.T) {
 	record := &pb.MetadataRecord{
 		File: &pb.FileFields{

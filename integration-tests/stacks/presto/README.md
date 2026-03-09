@@ -5,21 +5,20 @@ Presto CLP connector against a live Metalog with realistic metadata.
 
 ## What it does
 
-Running `./start.sh` brings up three long-lived services:
+Running `./start.sh` brings up two long-lived services:
 
 | Service | Host port(s) | Description |
 |---|---|---|
 | `mariadb` | 3307 | MariaDB 10.6 — metastore database |
-| `coordinator` | 9091 (gRPC ingestion), 8081 (health) | CLP coordinator — accepts records via gRPC |
-| `api-server` | 50051 (gRPC query) | CLP query API — serves splits to Presto |
+| `coordinator` | 9091 (gRPC), 8081 (health) | CLP coordinator — ingestion, admin, query, and metadata all in one process |
 
 On startup a one-shot `data-loader` container sends 12 test records into the
 coordinator via gRPC. The coordinator auto-creates the `clp_cockroachdb` table
 (including dimension and aggregate columns) on the first insert. After loading,
-`data-loader` exits and the three services keep running until you press Ctrl-C.
+`data-loader` exits and the two services keep running until you press Ctrl-C.
 
 While the stack is running you can point a Presto instance at the query API on
-port **50051** and issue queries.
+port **9091** and issue queries.
 
 ## Prerequisites
 
@@ -46,17 +45,17 @@ data-loader exits cleanly. Press **Ctrl-C** to stop all services.
 
 ## Connecting Presto
 
-Point your Presto CLP connector at the query API server:
+Point your Presto CLP connector at the coordinator:
 
 | Setting | Value |
 |---|---|
 | Host | `localhost` |
-| Port | `50051` |
+| Port | `9091` |
 | Protocol | gRPC (plaintext) |
 | Table | `clp_cockroachdb` |
 
-The API server exposes the `QuerySplitsService` and `MetadataService` RPCs on
-port **50051**.
+The coordinator exposes `SplitQueryService` and `MetadataService` RPCs on
+port **9091** alongside ingestion and admin services.
 
 ## Smoke-testing with grpcurl
 
@@ -65,23 +64,23 @@ files.
 
 ```bash
 # List all registered services
-grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext localhost:9091 list
 
 # List available tables
-grpcurl -plaintext localhost:50051 \
+grpcurl -plaintext localhost:9091 \
   com.yscope.metalog.query.api.proto.grpc.MetadataService/ListTables
 
 # List dimensions for the test table
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb"}' \
-  localhost:50051 \
+  localhost:9091 \
   com.yscope.metalog.query.api.proto.grpc.MetadataService/ListDimensions
 
 # Stream all splits, newest first
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb", "order_by": [{"column": "max_timestamp", "order": "DESC"}]}' \
-  localhost:50051 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  localhost:9091 \
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 
 # Filter by zone dimension
 grpcurl -plaintext \
@@ -90,8 +89,8 @@ grpcurl -plaintext \
     "order_by": [{"column": "max_timestamp", "order": "DESC"}],
     "filter_expression": "__DIM.zone = '\''us-east-1a'\''"
   }' \
-  localhost:50051 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  localhost:9091 \
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 The final message in each stream has `done: true` and a `stats` field with
@@ -131,7 +130,7 @@ presto/
 ├── Dockerfile          # multi-stage Go build (coordinator + api-server)
 ├── Dockerfile.loader   # Python gRPC data loader
 ├── config/
-│   └── node.yaml       # coordinator config (tables auto-created on first insert)
+│   └── node.yaml       # all-in-one config (coordinator + ingestion + query + admin)
 └── scripts/
     └── load_test_data.py
 ```

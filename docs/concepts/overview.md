@@ -69,7 +69,7 @@ graph TD
 
 Files exist in two formats, both using schema-free semantic compression. **IR** (Intermediate Representation) is a lightweight, streamable, appendable format semantically compressed at the edge — directly queryable even before consolidation. **Archives** are the equivalent columnar format, optimized for analytical queries and semantic search, with higher compression, richer metadata, and semantic enrichment.
 
-The entry type determines the initial state. When retention expires, the coordinator removes the database row and deletes associated files from object storage asynchronously. The optional purging state adds crash safety: files are marked for deletion in the database before storage cleanup begins, so recovery can complete any interrupted deletions.
+The entry type determines the initial state. When retention expires, the coordinator's retention strategy transitions the file to a `PURGING` state (crash-safe marker), deletes the database row while collecting storage paths, and removes files from object storage at a rate-limited pace. The `PURGING` state is durable — if the coordinator crashes or fails over, the new owner picks up from where it left off.
 
 ```mermaid
 graph TD
@@ -83,13 +83,13 @@ graph TD
     B -->|"Archive-only"| AO1["ARCHIVE_CLOSED"]
 
     IR1 -->|"file closes"| IR2["IR_CLOSED"]
-    IR2 -.->|"optional"| IR3a["IR_PURGING"]
+    IR2 -->|"expires"| IR3a["IR_PURGING"]
 
     IRA1 -->|"file closes"| IRA2["IR_ARCHIVE_CONSOLIDATION_PENDING"]
     IRA2 -->|"worker consolidates"| IRA3["ARCHIVE_CLOSED"]
-    IRA3 -.->|"optional"| IRA4a["ARCHIVE_PURGING"]
+    IRA3 -->|"expires"| IRA4a["ARCHIVE_PURGING"]
 
-    AO1 -.->|"optional"| AO2a["ARCHIVE_PURGING"]
+    AO1 -->|"expires"| AO2a["ARCHIVE_PURGING"]
 ```
 
 ---
@@ -98,7 +98,7 @@ graph TD
 
 ### Coordinator
 
-Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (Kafka consumer, planner, retention, deletion); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
+Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally Kafka consumer and planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
 
 - **[Coordinator HA](../design/coordinator-ha.md)** — database-backed liveness, orphan detection, failover, edge cases
 - **[Ingestion Paths](ingestion.md)** — gRPC and Kafka protocols, BatchingWriter, choosing a path
@@ -129,20 +129,21 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 ## Goroutine Model
 
-Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Per-coordinator goroutines are individually enabled or disabled via `_table_config` columns.
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (retention, partition maintenance, alias refresh); two are conditional on `_table_config` columns (Kafka consumer, planner).
 
-Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)). Partition management runs at the node level (see [Metadata Schema: Partitioning](metadata-schema.md#partitioning)).
+Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
 
-### Per-Coordinator Goroutines (4 per table)
+### Per-Coordinator Goroutines (up to 5 per table)
 
-Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation).
+Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; two are conditional on feature flags.
 
-| Goroutine | Name | Reads From | Writes To | Purpose |
-|-----------|------|------------|-----------|---------|
-| 1 | **Kafka Consumer** | Kafka | BatchingWriter channel | Continuous metadata ingestion |
-| 2 | **Planner** | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation |
-| 3 | **Storage Deletion** | DeletionQueue | Object storage | Rate-limited storage cleanup |
-| 4 | **Retention Cleanup** | Database | Database | Periodic DELETE of expired rows |
+| Goroutine | Name | Always On | Reads From | Writes To | Purpose |
+|-----------|------|:---------:|------------|-----------|---------|
+| 1 | **Retention Strategy** | Yes | Database | Database, Object storage | Three-phase retention cleanup (transition → delete rows → delete storage) |
+| 2 | **Partition Maintenance** | Yes | Database | Database (DDL) | Lookahead partition creation, old partition merge/drop |
+| 3 | **Alias Refresh** | Yes | Database | In-memory ColumnRegistry | Periodic re-read of alias_column values from `_dim_registry`/`_agg_registry` |
+| 4 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka_poller_enabled`) |
+| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation_enabled`) |
 
 ### Node-Level Data Path Goroutines
 
@@ -244,14 +245,15 @@ In production, coordinators and workers run as separate processes on dedicated m
 
 **Per-coordinator (each claimed table):**
 
-1. Initialize schema and components
+1. Initialize schema and components (ColumnRegistry, PartitionManager, Retention Strategy)
 2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
 3. Recover from restart (Kafka consumer group resumes from last committed offset)
-4. Start Kafka Consumer goroutine (if enabled)
-5. Start Planner goroutine (if consolidation enabled)
-6. Start Storage Deletion goroutine (if deletion enabled and storage configured)
-7. Start Retention Cleanup goroutine (if enabled)
-8. Ready to process
+4. Start Retention Strategy goroutine (always-on)
+5. Start Partition Maintenance goroutine (always-on)
+6. Start Alias Refresh goroutine (always-on)
+7. Start Planner goroutine (if consolidation enabled)
+8. Start Kafka Consumer goroutine (if enabled)
+9. Ready to process
 
 ### Shutdown Sequence
 
@@ -270,9 +272,10 @@ In production, coordinators and workers run as separate processes on dedicated m
 1. Cancel coordinator context (propagates to all owned goroutines)
 2. Stop Kafka Consumer
 3. Stop Planner
-4. Stop Storage Deletion
-5. Stop Retention Cleanup
-6. Close unit resources (Kafka consumer client, config watchers)
+4. Stop Retention Strategy
+5. Stop Partition Maintenance
+6. Stop Alias Refresh
+7. Close unit resources (Kafka consumer client)
 
 ### Recovery from Restart
 

@@ -74,7 +74,7 @@ func Server() {
 			roDB := n.Shared().ReadOnlyDB()
 			queryEngine := query.NewSplitQueryEngine(roDB, log)
 			queryGrpc := grpcserver.NewQueryHandler(queryEngine, n.Shared().GetColumnRegistry, log)
-			splitspb.RegisterQuerySplitsServiceServer(grpcSrv.GRPCServer(), queryGrpc)
+			splitspb.RegisterSplitQueryServiceServer(grpcSrv.GRPCServer(), queryGrpc)
 			log.Info("gRPC service registered", zap.String("service", "query"))
 		}
 

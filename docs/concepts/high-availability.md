@@ -21,7 +21,7 @@ How nodes coordinate, detect failures, and recover automatically — without Zoo
 
 ## Coordination Model
 
-Each metadata table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (Kafka consumer, planner, retention, storage deletion). Ownership is tracked in `_table_assignment` — a database table where `node_id` indicates the current owner.
+Each metadata table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally Kafka consumer and planner). Ownership is tracked in `_table_assignment` — a database table where `node_id` indicates the current owner.
 
 ### Two HA Strategies
 
@@ -118,7 +118,7 @@ When a node receives SIGTERM:
 2. Cancel node-level context (stops HA, Reconciliation, Partition Maintenance, Watchdog goroutines)
 3. Stop gRPC server
 4. Stop all coordinator units:
-   - Cancel coordinator context → stop Kafka Consumer → stop Planner → stop Storage Deletion → stop Retention Cleanup
+   - Cancel coordinator context → stop Kafka Consumer → stop Planner → stop Retention Strategy → stop Partition Maintenance → stop Alias Refresh
 5. Signal BatchingWriter to stop, wait for per-table goroutines to drain
 6. Stop worker units (two-phase: stop Prefetcher → drain workers with 30s timeout → force-cancel)
 7. Close shared resources (database pool, StorageRegistry)

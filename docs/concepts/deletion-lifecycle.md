@@ -34,13 +34,13 @@ graph TD
     B -->|"Archive-only"| AO1["ARCHIVE_CLOSED"]
 
     IR1 -->|"file closes"| IR2["IR_CLOSED"]
-    IR2 -.->|"optional"| IR3a["IR_PURGING"]
+    IR2 -->|"expires"| IR3a["IR_PURGING"]
 
     IRA1 -->|"file closes"| IRA2["IR_ARCHIVE_CONSOLIDATION_PENDING"]
     IRA2 -->|"worker consolidates"| IRA3["ARCHIVE_CLOSED"]
-    IRA3 -.->|"optional"| IRA4a["ARCHIVE_PURGING"]
+    IRA3 -->|"expires"| IRA4a["ARCHIVE_PURGING"]
 
-    AO1 -.->|"optional"| AO2a["ARCHIVE_PURGING"]
+    AO1 -->|"expires"| AO2a["ARCHIVE_PURGING"]
 ```
 
 All transitions are forward-only. The UPSERT guard (`state NOT IN (...)` + timestamp guard) prevents late re-deliveries from regressing state. See [Metadata Schema: UPSERT Strategy](metadata-schema.md#upsert-strategy).
@@ -85,7 +85,7 @@ After consolidation completes, the source IR file in object storage is scheduled
 
 ### How `expires_at` is Set
 
-`expires_at` is computed at ingest as approximately `min_timestamp + (retention_days * 86400)`. Because `min_timestamp` is the partition key, this creates a strong temporal correlation: files in old partitions expire sooner; files in new partitions expire later.
+`expires_at` is a required field in the database (no default). If the producer provides `expires_at`, that value is used as-is. If the producer sends `expires_at = 0` (or omits it), the coordinator computes it server-side as `min_timestamp + (retention_days × 86400 × 1e9)` (epoch nanoseconds). If `retention_days` is also zero, it defaults to 30 days. Because `min_timestamp` is the partition key, this creates a strong temporal correlation: files in old partitions expire sooner; files in new partitions expire later.
 
 ### Per-File Retention Updates
 
@@ -123,41 +123,51 @@ Deletions are row-level, driven by `idx_expiration` (scan `expires_at ASC`, batc
 
 ---
 
-## Storage Deletion
+## Retention Strategy
 
-Each coordinator runs a **Storage Deletion** goroutine per table — one of the four per-coordinator goroutines (see [Architecture Overview: Goroutine Model](overview.md#goroutine-model)).
+Each coordinator runs a **Retention Strategy** goroutine per table — always enabled, one of the per-coordinator goroutines (see [Architecture Overview: Goroutine Model](overview.md#goroutine-model)). The strategy is configured per-table via the `retention_type` column in `_table_config` (default: `"default"`).
 
 ### How It Works
 
-1. **Retention Cleanup** goroutine scans for expired rows (`expires_at` past current time) and transitions them to a `PURGING` state (`IR_PURGING` or `ARCHIVE_PURGING`).
-2. **Storage Deletion** goroutine reads from a deletion queue and removes files from object storage at a controlled rate.
-3. After successful storage deletion, the database row is deleted.
+The default retention strategy runs a three-phase cleanup cycle every 60 seconds:
+
+1. **Phase 1 — Transition**: Scan for expired rows (`expires_at < now`, state = `IR_CLOSED` or `ARCHIVE_CLOSED`) and mark them `PURGING` (`IR_PURGING` or `ARCHIVE_PURGING`). This is a crash-safe marker — the transition is durable in the database.
+2. **Phase 2 — Delete metadata**: Delete `PURGING` rows from the database, collecting storage paths (IR and archive) for cleanup.
+3. **Phase 3 — Delete storage**: Remove files from object storage at a rate-limited pace (best-effort, idempotent).
 
 ### Crash Safety via PURGING States
 
-The two-step process (mark `PURGING` in database, then delete from storage, then delete row) provides crash safety:
+The three-phase process provides crash safety:
 
-- If the coordinator crashes after marking `PURGING` but before storage deletion, recovery finds all `PURGING` rows and retries the storage deletion.
+- If the coordinator crashes after marking `PURGING` but before storage deletion, the next owner's retention strategy finds all `PURGING` rows and retries from Phase 2.
 - If the coordinator crashes after storage deletion but before row deletion, recovery deletes the orphan row (the storage file is already gone).
-- The `PURGING` state is durable in the database, so no deletion is lost across restarts.
+- The `PURGING` state is durable in the database, so no deletion is lost across restarts or HA failover.
 
 ### Rate Limiting
 
-Storage deletion is rate-limited to avoid overwhelming object storage during bulk expiration events. The goroutine processes deletions from its queue at a bounded rate, ensuring that retention cleanup of large batches does not cause storage API throttling or latency spikes for other operations.
+Storage deletion is rate-limited to 500 operations per second to avoid overwhelming object storage during bulk expiration events. This is an internal parameter — not exposed to users.
+
+### Extensibility
+
+Retention strategies use a two-level registry pattern (same as storage backends):
+
+1. **Compile-time registration** — each strategy implementation registers itself via `init()` with a type name and factory function.
+2. **Runtime instantiation** — when a coordinator starts, it reads `retention_type` from `_table_config` and creates the corresponding strategy instance.
+
+Custom strategies can implement throttling, grace periods, or alternative cleanup policies by registering a new type and setting `retention_type` on the table.
 
 ---
 
 ## Partition Cleanup
 
-After the Retention Cleanup goroutine deletes expired rows, old partitions become empty or sparse. The `PartitionManager` — a node-level background goroutine running hourly — drops empty partitions and merges sparse ones into the historical catch-all partition.
+After the retention strategy deletes expired rows, old partitions become empty or sparse. The `PartitionManager` — running as a per-coordinator goroutine hourly — drops empty partitions and merges consecutive old partitions into the historical catch-all partition.
 
 | Condition | Action |
 |-----------|--------|
 | Empty (0 rows) | Drop partition |
-| Sparse (< 1,000 rows) | Merge into first partition |
-| Above threshold | Leave alone |
+| Consecutive old partitions | Merge via `REORGANIZE PARTITION` into historical catch-all |
 
-Only partitions older than the cleanup age (default: 90 days) are candidates. Recent partitions are never touched. For full details on partition layout, advisory lock coordination, and maintenance operations, see [Metadata Schema: Partitioning](metadata-schema.md#partitioning).
+Only partitions older than the cleanup age (default: 90 days) are candidates. Recent partitions are never touched. Partitions with data are never dropped — they are merged via `REORGANIZE PARTITION`, which preserves all rows. For full details on partition layout, advisory lock coordination, and maintenance operations, see [Metadata Schema: Partitioning](metadata-schema.md#partitioning).
 
 ---
 

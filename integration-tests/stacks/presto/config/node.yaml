@@ -29,6 +29,7 @@ health:
 coordinator:
   enabled: true
   nodeIdEnvVar: HOSTNAME
+  reconciliationIntervalSeconds: 5
 
 worker:
   concurrency: 0

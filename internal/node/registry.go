@@ -449,6 +449,25 @@ func (r *CoordinatorRegistry) GetTableFeatureFlags(ctx context.Context, tableNam
 	return flags, nil
 }
 
+// GetRetentionConfig reads the retention strategy type for a table from _table_config.
+// Returns "default" if no row exists or the column is empty.
+func (r *CoordinatorRegistry) GetRetentionConfig(ctx context.Context, tableName string) (config.RetentionConfig, error) {
+	query, args, _ := sq.Select("retention_type").
+		From(metastore.TableRegistryConfig).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
+
+	var retType string
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&retType)
+	if err == sql.ErrNoRows || retType == "" {
+		return config.RetentionConfig{Type: "default"}, nil
+	}
+	if err != nil {
+		return config.RetentionConfig{}, fmt.Errorf("get retention config for %s: %w", tableName, err)
+	}
+	return config.RetentionConfig{Type: retType}, nil
+}
+
 // DeregisterNode removes this node from the _node_registry.
 func (r *CoordinatorRegistry) DeregisterNode(ctx context.Context) error {
 	query, args, _ := sq.Delete(metastore.NodeRegistryTable).

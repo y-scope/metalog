@@ -29,7 +29,7 @@ services:
     volumes:
       - ./config/node.yaml:/etc/clp/node.yaml:ro
     ports:
-      - "9091:9091"   # gRPC ingestion
+      - "9091:9091"   # gRPC (ingestion, admin, query, metadata)
       - "8081:8081"   # health check
     depends_on:
       mariadb:
@@ -75,24 +75,6 @@ services:
     depends_on:
       table-register:
         condition: service_completed_successfully
-    restart: on-failure
-    networks:
-      - metalog-network
-
-  # API server — gRPC query endpoint
-  api-server:
-    build:
-      context: ../../..
-      dockerfile: integration-tests/stacks/presto/Dockerfile
-    # Uses Dockerfile ENTRYPOINT ["/app/metalog", "serve"], just override CMD
-    command: ["--config", "/etc/clp/node.yaml"]
-    ports:
-      - "50051:9091"
-    volumes:
-      - ./config/node.yaml:/etc/clp/node.yaml:ro
-    depends_on:
-      coordinator:
-        condition: service_healthy
     restart: on-failure
     networks:
       - metalog-network

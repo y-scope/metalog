@@ -16,23 +16,21 @@ import (
 // PartitionManager manages MySQL RANGE partitions on the metadata table.
 // Partitions are daily, keyed on min_timestamp (epoch nanoseconds).
 type PartitionManager struct {
-	db                 *sql.DB
-	tableName          string
-	lookaheadDays      int
-	cleanupAgeDays     int
-	sparseRowThreshold int64
-	log                *zap.Logger
+	db             *sql.DB
+	tableName      string
+	lookaheadDays  int
+	cleanupAgeDays int
+	log            *zap.Logger
 }
 
 // NewPartitionManager creates a PartitionManager.
-func NewPartitionManager(db *sql.DB, tableName string, lookaheadDays, cleanupAgeDays int, sparseRowThreshold int64, log *zap.Logger) *PartitionManager {
+func NewPartitionManager(db *sql.DB, tableName string, lookaheadDays, cleanupAgeDays int, log *zap.Logger) *PartitionManager {
 	return &PartitionManager{
-		db:                 db,
-		tableName:          tableName,
-		lookaheadDays:      lookaheadDays,
-		cleanupAgeDays:     cleanupAgeDays,
-		sparseRowThreshold: sparseRowThreshold,
-		log:                log,
+		db:             db,
+		tableName:      tableName,
+		lookaheadDays:  lookaheadDays,
+		cleanupAgeDays: cleanupAgeDays,
+		log:            log,
 	}
 }
 
@@ -91,7 +89,12 @@ type PartitionInfo struct {
 	DataLength  int64
 }
 
-// cleanupOldPartitions drops partitions older than cleanupAgeDays that contain few rows.
+// cleanupOldPartitions merges or drops old partitions to reduce partition count.
+//
+// Empty partitions (0 rows) are dropped outright — no data loss.
+// Consecutive sparse partitions older than cleanupAgeDays are merged into
+// a single partition covering the combined range. This preserves all rows
+// while reducing the number of partitions the query planner must evaluate.
 func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 	partitions, err := getExistingPartitions(ctx, pm.db, pm.tableName)
 	if err != nil {
@@ -101,29 +104,68 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -pm.cleanupAgeDays).Truncate(24 * time.Hour)
 	cutoffName := timeutil.DayPartitionName(cutoff.UnixNano())
 
+	// Collect old partitions eligible for merge/drop.
+	var candidates []PartitionInfo
 	for _, p := range partitions {
-		// Never drop p_future or partitions that are too recent.
-		// String comparison works because partition names use p_YYYYMMDD format,
-		// which sorts lexicographically in chronological order.
 		if p.Name == "p_future" || p.Name >= cutoffName {
 			continue
 		}
-		// Only drop partitions that are sparse (few rows)
-		if pm.sparseRowThreshold > 0 && p.Rows > pm.sparseRowThreshold {
-			pm.log.Debug("skipping non-sparse partition",
-				zap.String("partition", p.Name), zap.Int64("rows", p.Rows))
-			continue
-		}
-
-		alterSQL := fmt.Sprintf("ALTER TABLE %s DROP PARTITION %s",
-			db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(p.Name))
-		_, err := pm.db.ExecContext(ctx, alterSQL)
-		if err != nil {
-			pm.log.Warn("failed to drop partition", zap.String("partition", p.Name), zap.Error(err))
-			continue
-		}
-		pm.log.Info("dropped old partition", zap.String("partition", p.Name), zap.Int64("rows", p.Rows))
+		candidates = append(candidates, p)
 	}
+
+	// Drop empty partitions (safe — no data loss).
+	var mergeGroup []PartitionInfo
+	for _, p := range candidates {
+		if p.Rows == 0 {
+			alterSQL := fmt.Sprintf("ALTER TABLE %s DROP PARTITION %s",
+				db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(p.Name))
+			if _, err := pm.db.ExecContext(ctx, alterSQL); err != nil {
+				pm.log.Warn("failed to drop empty partition",
+					zap.String("partition", p.Name), zap.Error(err))
+			} else {
+				pm.log.Info("dropped empty partition", zap.String("partition", p.Name))
+			}
+			continue
+		}
+		mergeGroup = append(mergeGroup, p)
+	}
+
+	// Merge consecutive sparse partitions into one.
+	// Need at least 2 to merge; the merged partition keeps the last one's boundary.
+	if len(mergeGroup) < 2 {
+		return nil
+	}
+
+	// Build REORGANIZE PARTITION p1, p2, ... INTO (p_merged VALUES LESS THAN (boundary))
+	// The merged partition name is the first partition's name (preserves the oldest date
+	// for readability) and its boundary is the last partition's boundary.
+	mergedName := mergeGroup[0].Name
+	lastBoundary := mergeGroup[len(mergeGroup)-1].Description // LESS THAN value
+
+	var partNames string
+	var totalRows int64
+	for i, p := range mergeGroup {
+		if i > 0 {
+			partNames += ", "
+		}
+		partNames += db.QuoteIdentifier(p.Name)
+		totalRows += p.Rows
+	}
+
+	alterSQL := fmt.Sprintf("ALTER TABLE %s REORGANIZE PARTITION %s INTO (PARTITION %s VALUES LESS THAN (%s))",
+		db.QuoteIdentifier(pm.tableName), partNames, db.QuoteIdentifier(mergedName), lastBoundary)
+
+	if _, err := pm.db.ExecContext(ctx, alterSQL); err != nil {
+		pm.log.Warn("failed to merge partitions",
+			zap.String("into", mergedName), zap.Int("count", len(mergeGroup)), zap.Error(err))
+		return nil
+	}
+
+	pm.log.Info("merged old partitions",
+		zap.String("into", mergedName),
+		zap.Int("merged", len(mergeGroup)),
+		zap.Int64("totalRows", totalRows),
+	)
 	return nil
 }
 

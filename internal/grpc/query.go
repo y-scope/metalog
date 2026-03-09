@@ -35,9 +35,9 @@ const (
 // RegistryLookup returns the ColumnRegistry for a table, or nil.
 type RegistryLookup func(tableName string) *schema.ColumnRegistry
 
-// QueryHandler implements the QuerySplitsService gRPC interface.
+// QueryHandler implements the SplitQueryService gRPC interface.
 type QueryHandler struct {
-	pb.UnimplementedQuerySplitsServiceServer
+	pb.UnimplementedSplitQueryServiceServer
 	engine         *query.SplitQueryEngine
 	registryLookup RegistryLookup
 	log            *zap.Logger

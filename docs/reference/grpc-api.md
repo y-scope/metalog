@@ -47,7 +47,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 
 | Service | Proto File | Go Package | Default Port | Purpose |
 |---------|-----------|---------|:---:|---------|
-| `QuerySplitsService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
+| `SplitQueryService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
 | `MetadataService` | `metadata.proto` | `metadatapb` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
 | `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
 | `AdminService` | `coordinator.proto` | `coordinatorpb` | 9090 | Runtime table registration (no restart required) |
@@ -57,7 +57,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 **`splits.proto` — split streaming with keyset pagination:**
 
 ```protobuf
-service QuerySplitsService {
+service SplitQueryService {
   // Stream split metadata from DB. Client can cancel early for early termination.
   rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse);
 }
@@ -99,7 +99,7 @@ service AdminService {
 
 ---
 
-## QuerySplitsService
+## SplitQueryService
 
 ### `StreamSplits`
 
@@ -371,7 +371,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.*"]
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 
 # Only timestamps
 grpcurl -plaintext -d '{
@@ -379,7 +379,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.min_timestamp", "__FILE.max_timestamp"]
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 
 # All dims plus timestamps
 grpcurl -plaintext -d '{
@@ -387,7 +387,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__FILE.min_timestamp", "__FILE.max_timestamp", "__DIM.*"]
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 
 # Only MAX aggregates
 grpcurl -plaintext -d '{
@@ -395,7 +395,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "projection": ["__AGG_MAX.*"]
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ---
@@ -455,7 +455,7 @@ grpcurl -plaintext -d '{
   "state_filter": ["ARCHIVE_CLOSED"],
   "order_by": [{"column": "max_timestamp", "order": "DESC"}]
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ### Resume from a cursor (next page)
@@ -468,7 +468,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "cursor": {"values": [{"int_val": 1704067200}], "id": 42}
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ### Filter by time range and dimension
@@ -479,7 +479,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "filter_expression": "min_timestamp <= 1679976000 AND max_timestamp >= 1679711330 AND __DIM.zone = '\''us-east-1a'\''"
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ### Filter by aggregate threshold
@@ -490,7 +490,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "filter_expression": "__AGG_GTE.level.warn > 1000"
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ### Stream from oldest to newest with cursor enabled
@@ -502,7 +502,7 @@ grpcurl -plaintext -d '{
   "order_by": [{"column": "min_timestamp", "order": "ASC"}],
   "include_cursor": true
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ### Multi-column unindexed sort (allow_unindexed_sort required)
@@ -517,7 +517,7 @@ grpcurl -plaintext -d '{
   ],
   "allow_unindexed_sort": true
 }' localhost:9090 \
-  com.yscope.metalog.query.api.proto.grpc.QuerySplitsService/StreamSplits
+  com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
 ---
@@ -550,7 +550,7 @@ grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
 
 ## Future API Categories
 
-> **Note:** The query APIs (`QuerySplitsService`, `MetadataService`), the ingestion API (`MetadataIngestionService`), and the coordinator management API (`AdminService`) are all implemented. The categories below describe higher-level planned APIs built on top of these primitives.
+> **Note:** The query APIs (`SplitQueryService`, `MetadataService`), the ingestion API (`MetadataIngestionService`), and the coordinator management API (`AdminService`) are all implemented. The categories below describe higher-level planned APIs built on top of these primitives.
 
 | Category | Primary Use Case |
 |----------|------------------|
@@ -746,7 +746,7 @@ internal/
 ├── grpc/
 │   ├── server.go           — unified gRPC server (all services on one port)
 │   ├── ingestion.go        — implements MetadataIngestionService
-│   ├── query.go            — implements QuerySplitsService
+│   ├── query.go            — implements SplitQueryService
 │   ├── metadata.go         — implements MetadataService
 │   └── admin.go            — implements AdminService
 ├── query/
@@ -757,7 +757,7 @@ internal/
 │   ├── resolve.go          — column resolution and projection
 │   └── sketch.go           — bloom/cuckoo sketch evaluation
 proto/
-├── splits.proto            — QuerySplitsService + Split messages
+├── splits.proto            — SplitQueryService + Split messages
 ├── metadata.proto          — MetadataService messages
 ├── ingestion.proto         — MetadataIngestionService + record types
 └── coordinator.proto       — AdminService messages

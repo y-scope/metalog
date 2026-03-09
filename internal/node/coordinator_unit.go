@@ -12,6 +12,7 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator"
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
+	"github.com/y-scope/metalog/internal/coordinator/retention"
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	kafkaconsumer "github.com/y-scope/metalog/kafka"
@@ -29,12 +30,13 @@ type CoordinatorUnit struct {
 	tableName     string
 	shared        *SharedResources
 	writer        *ingestion.BatchingWriter
-	planner       *consolidation.Planner
-	partition     *schema.PartitionManager
-	registry      *schema.ColumnRegistry
-	progress      *coordinator.ProgressTracker
-	kafkaConsumer *kafkaconsumer.Consumer
-	log           *zap.Logger
+	planner           *consolidation.Planner
+	retentionStrategy retention.Strategy
+	partition         *schema.PartitionManager
+	registry          *schema.ColumnRegistry
+	progress          *coordinator.ProgressTracker
+	kafkaConsumer     *kafkaconsumer.Consumer
+	log               *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
 	ctxMu     sync.Mutex      // protects ctx and cancel
@@ -55,6 +57,7 @@ func NewCoordinatorUnit(
 	tableName string,
 	tableID string,
 	kafkaCfg config.TableKafkaConfig,
+	retentionCfg config.RetentionConfig,
 	flags TableFeatureFlags,
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
@@ -89,7 +92,23 @@ func NewCoordinatorUnit(
 		}
 	}
 
-	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, 1000, log)
+	// Retention strategy — always enabled; every table needs expiration cleanup.
+	retTypeName := retentionCfg.Type
+	if retTypeName == "" {
+		retTypeName = "default"
+	}
+	retStrategy, err := retention.CreateStrategy(retTypeName, retention.Deps{
+		DB:              shared.DB,
+		TableName:       tableName,
+		IsMariaDB:       shared.IsMariaDB,
+		StorageRegistry: shared.StorageRegistry,
+		Log:             log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("new coordinator unit: retention strategy: %w", err)
+	}
+
+	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
 	// Create Kafka consumer if configured — routes through IngestionService
 	// for proper dim/agg column resolution. Kafka config is cleared by the
@@ -110,15 +129,16 @@ func NewCoordinatorUnit(
 	childCtx, cancel := context.WithCancel(ctx)
 
 	return &CoordinatorUnit{
-		tableName:     tableName,
-		shared:        shared,
-		writer:        writer,
-		planner:       planner,
-		partition:     partMgr,
-		registry:      reg,
-		progress:      progress,
-		kafkaConsumer: kc,
-		log:           log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
+		tableName:        tableName,
+		shared:           shared,
+		writer:           writer,
+		planner:           planner,
+		retentionStrategy: retStrategy,
+		partition:        partMgr,
+		registry:         reg,
+		progress:         progress,
+		kafkaConsumer:    kc,
+		log:              log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
 		parentCtx:     ctx,
 		ctx:           childCtx,
 		cancel:        cancel,
@@ -166,6 +186,13 @@ func (u *CoordinatorUnit) Start() {
 	go func() {
 		defer u.wg.Done()
 		u.runAliasRefresh()
+	}()
+
+	// Retention cleanup goroutine
+	u.wg.Add(1)
+	go func() {
+		defer u.wg.Done()
+		u.retentionStrategy.Run(u.ctx)
 	}()
 
 	// Kafka consumer goroutine

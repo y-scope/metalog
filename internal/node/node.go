@@ -348,13 +348,20 @@ func (n *Node) startCoordinator(tableName string) error {
 		return err
 	}
 
+	// Read retention strategy from DB (per-table config).
+	retentionCfg, err := n.registry.GetRetentionConfig(n.ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("start coordinator %s: %w", tableName, err)
+	}
+
 	n.log.Info("starting coordinator",
 		zap.String("table", tableName),
 		zap.Bool("kafkaPoller", flags.KafkaPollerEnabled),
 		zap.Bool("consolidation", flags.ConsolidationEnabled),
+		zap.String("retentionType", retentionCfg.Type),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, flags, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, retentionCfg, flags, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}

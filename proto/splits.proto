@@ -26,7 +26,7 @@ message CursorValue {
     }
 }
 
-service QuerySplitsService {
+service SplitQueryService {
     rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse);
 }
 

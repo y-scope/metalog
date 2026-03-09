@@ -24,7 +24,7 @@ DDL, column reference, index reference, and scalability projections for the `clp
 | `raw_size_bytes` | BIGINT | Original uncompressed source size (BIGINT to support files exceeding 4 GB) |
 | `clp_ir_size_bytes` | INT UNSIGNED | IR file size in bytes |
 | `clp_archive_size_bytes` | INT UNSIGNED | Archive size in bytes |
-| `retention_days`, `expires_at` | SMALLINT UNSIGNED, BIGINT | Retention policy and computed expiry (epoch nanoseconds) |
+| `retention_days`, `expires_at` | SMALLINT UNSIGNED, BIGINT | Retention policy and computed expiry (epoch nanoseconds). `expires_at` has no DB default — computed server-side from `min_timestamp + retention_days` when not provided by the producer |
 
 ### Query Optimization Columns
 
@@ -118,7 +118,7 @@ CREATE TABLE clp_spark (
 
     -- Retention
     retention_days              SMALLINT UNSIGNED NOT NULL DEFAULT 30,
-    expires_at                  BIGINT NOT NULL DEFAULT 0,
+    expires_at                  BIGINT NOT NULL,
 
     -- Dimensions, aggregations, and sketches (added dynamically; see Column Reference)
     sketches                    SET('s01','s02','s03','s04','s05','s06','s07','s08',

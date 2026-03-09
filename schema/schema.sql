@@ -273,7 +273,7 @@ CREATE TABLE IF NOT EXISTS _table_config (
     kafka_poller_enabled                BOOLEAN NOT NULL DEFAULT TRUE,
     metadata_writer_enabled             BOOLEAN NOT NULL DEFAULT TRUE,
     consolidation_enabled               BOOLEAN NOT NULL DEFAULT TRUE,
-    retention_cleanup_enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    retention_type                      VARCHAR(64) NOT NULL DEFAULT 'default',
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
@@ -400,12 +400,13 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- ========================================================================
 
     -- retention_days: default policy (how long to keep data).
-    -- expires_at: effective expiration, initially min_timestamp + retention_days.
+    -- expires_at: effective expiration (epoch nanos), set by the producer at ingestion.
+    --   Required — every file must have an explicit expiration.
     -- These are independent — expires_at may be extended manually (e.g., after a
     -- security incident) without changing the policy. Do not recompute expires_at
     -- from retention_days; treat it as the authoritative expiration.
     retention_days              SMALLINT UNSIGNED NOT NULL DEFAULT 30,
-    expires_at                  BIGINT NOT NULL DEFAULT 0,
+    expires_at                  BIGINT NOT NULL,
 
     -- ========================================================================
     -- DIMENSIONS (Dynamic)

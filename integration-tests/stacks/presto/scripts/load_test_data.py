@@ -31,6 +31,8 @@ TABLE_NAME = os.environ.get('TABLE_NAME', 'clp_cockroachdb')
 URL_PREFIX = 'https://r2.yscope.io/prod/logging/cockroachdb/'
 BASE_TS    = 1738368000_000_000_000   # 2025-02-01 00:00:00 UTC (nanoseconds)
 HOUR       = 3_600_000_000_000       # 1 hour in nanoseconds
+DAY_NS     = 86_400_000_000_000      # 1 day in nanoseconds
+RETENTION_DAYS = 3650                 # 10 years — keeps historical test data alive
 
 _RAW_RECORDS = [
     # node01, us-east-1a
@@ -58,11 +60,15 @@ def build_request(raw):
     max_ts    = min_ts + HOUR - 1
     ir_path   = URL_PREFIX + raw['filename']
 
+    expires_at = min_ts + RETENTION_DAYS * DAY_NS
+
     record = ingestion_pb2.MetadataRecord(
         file=ingestion_pb2.FileFields(
             state='IR_CLOSED',
             min_timestamp=min_ts,
             max_timestamp=max_ts,
+            retention_days=RETENTION_DAYS,
+            expires_at=expires_at,
             record_count=n,
             ir=ingestion_pb2.IrFileInfo(
                 clp_ir_storage_backend='http',

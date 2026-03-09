@@ -924,8 +924,8 @@ const file_splits_proto_rawDesc = "" +
 	"\x14AGGREGATION_TYPE_SUM\x10\x06\x12\x18\n" +
 	"\x14AGGREGATION_TYPE_AVG\x10\a\x12\x18\n" +
 	"\x14AGGREGATION_TYPE_MIN\x10\b\x12\x18\n" +
-	"\x14AGGREGATION_TYPE_MAX\x10\t2\xa4\x01\n" +
-	"\x12QuerySplitsService\x12\x8d\x01\n" +
+	"\x14AGGREGATION_TYPE_MAX\x10\t2\xa3\x01\n" +
+	"\x11SplitQueryService\x12\x8d\x01\n" +
 	"\fStreamSplits\x12<.com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest\x1a=.com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse0\x01Bl\n" +
 	"'com.yscope.metalog.query.api.proto.grpcB\x10ClpMetadataProtoP\x01Z-github.com/y-scope/metalog/gen/proto/splitspbb\x06proto3"
 
@@ -967,8 +967,8 @@ var file_splits_proto_depIdxs = []int32{
 	8,  // 7: com.yscope.metalog.query.api.proto.grpc.Split.aggs:type_name -> com.yscope.metalog.query.api.proto.grpc.AggEntry
 	3,  // 8: com.yscope.metalog.query.api.proto.grpc.KeysetCursor.values:type_name -> com.yscope.metalog.query.api.proto.grpc.CursorValue
 	1,  // 9: com.yscope.metalog.query.api.proto.grpc.AggEntry.aggregation_type:type_name -> com.yscope.metalog.query.api.proto.grpc.AggregationType
-	4,  // 10: com.yscope.metalog.query.api.proto.grpc.QuerySplitsService.StreamSplits:input_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest
-	5,  // 11: com.yscope.metalog.query.api.proto.grpc.QuerySplitsService.StreamSplits:output_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse
+	4,  // 10: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:input_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest
+	5,  // 11: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:output_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse
 	11, // [11:12] is the sub-list for method output_type
 	10, // [10:11] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name

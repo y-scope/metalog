@@ -119,7 +119,7 @@ Pages are stored **decompressed in the buffer pool** regardless of on-disk compr
 
 ### Retention and Deletion
 
-`expires_at` is set at ingest as approximately `min_timestamp + (retention_days × 86400)`. Because `min_timestamp` is the partition key, this creates a **strong temporal correlation**: files in old partitions expire sooner; files in new partitions expire later. Deletions therefore cluster in the oldest (coldest) partitions — never in the hot recent partition.
+`expires_at` is a required field with no database default. If the producer provides `expires_at`, that value is used as-is. If omitted (value = 0), the coordinator computes it server-side as `min_timestamp + (retention_days × 86400 × 1e9)` (epoch nanoseconds), defaulting to 30-day retention when `retention_days` is also zero. Because `min_timestamp` is the partition key, this creates a **strong temporal correlation**: files in old partitions expire sooner; files in new partitions expire later. Deletions therefore cluster in the oldest (coldest) partitions — never in the hot recent partition.
 
 Deletions are **row-level**, driven by `idx_expiration` (scan `expires_at ASC`, batch delete). Each file carries its own `expires_at` reflecting its individual retention policy; whole-partition drops are not used. `expires_at` can be selectively extended for groups of files matching specific dimensions — for example, extending retention for `service=auth` files spanning an incident window. This is a first-class operational capability (see [Query Catalog](../operations/performance-tuning.md)).
 
@@ -216,7 +216,7 @@ Time-range queries skip irrelevant partitions entirely — a query for the last 
 
 #### Partition Housekeeping
 
-After the retention goroutine deletes expired rows, old partitions become empty or sparse. The partition manager drops empty partitions and merges sparse ones — removing dead partition shells and reducing the number of partitions the optimizer must consider.
+After the retention strategy deletes expired rows, old partitions become empty or sparse. The partition manager drops empty partitions and merges consecutive old partitions — removing dead partition shells and reducing the number of partitions the optimizer must consider.
 
 #### The `p_future` Trap
 
@@ -244,10 +244,9 @@ For partitions older than the cleanup age (default: 90 days):
 | Condition | Action | SQL |
 |-----------|--------|-----|
 | Empty (0 rows) | Drop | `ALTER TABLE DROP PARTITION p_YYYYMMDD` |
-| Sparse (< 1,000 rows) | Merge into first partition | `ALTER TABLE REORGANIZE PARTITION p_20240101, p_YYYYMMDD INTO (p_20240101 ...)` |
-| Above threshold | Leave alone | — |
+| Consecutive old partitions | Merge into historical catch-all | `ALTER TABLE REORGANIZE PARTITION p_20240101, p_YYYYMMDD INTO (p_20240101 ...)` |
 
-Partitions with data are never dropped — sparse partitions are merged into the historical catch-all (`p_20240101`) via `REORGANIZE PARTITION`, which moves rows before removing the partition boundary. Recent partitions are never touched, regardless of row count — only partitions older than the cleanup age are candidates.
+Partitions with data are never dropped — old partitions are merged into the historical catch-all (`p_20240101`) via `REORGANIZE PARTITION`, which preserves all rows while reducing the partition count. Recent partitions are never touched, regardless of row count — only partitions older than the cleanup age are candidates.
 
 ### When Maintenance Runs
 
@@ -287,8 +286,7 @@ SELECT RELEASE_LOCK('pm_clp_spark');
 |---------|---------|-------------|
 | Lookahead days | 7 | Partitions created ahead of today |
 | Cleanup age | 90 days | Minimum age before a partition is eligible for drop/merge |
-| Sparse row threshold | 1,000 | Row count below which old partitions are merged |
-| Maintenance interval | 1 hour | How often the background goroutine runs |
+| Maintenance interval | 1 hour | How often the per-coordinator goroutine runs |
 
 ### Operational Notes
 

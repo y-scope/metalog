@@ -21,7 +21,7 @@ func setupPartitionManagerIT(t *testing.T) (*testutil.MariaDBContainer, *schema.
 	mc.CreateTestTable(t, pmTable)
 
 	log := zap.NewNop()
-	pm := schema.NewPartitionManager(mc.DB, pmTable, 3, 90, 1000, log)
+	pm := schema.NewPartitionManager(mc.DB, pmTable, 3, 90, log)
 	return mc, pm
 }
 

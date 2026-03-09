@@ -26,6 +26,9 @@ const (
 	ColExt                      = "ext"
 )
 
+// DefaultRetentionDays is the default retention period when the producer does not specify one.
+const DefaultRetentionDays = 30
+
 // baseCols returns the fixed columns used in standard INSERT/UPSERT operations.
 // Order matters — these correspond to the VALUES placeholders.
 // Returns a fresh slice each call to prevent accidental mutation.

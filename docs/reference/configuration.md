@@ -132,6 +132,8 @@ These are not configurable via YAML but are defined in `internal/config/timeouts
 | `DefaultWorkerPollInterval` | 2s | Worker task poll interval |
 | `DefaultWorkerBackoffMax` | 30s | Max backoff when no tasks available |
 | `DefaultPlannerInterval` | 60s | Consolidation planner run interval |
+| `defaultScanInterval` | 60s | Retention strategy scan interval |
+| `defaultDeleteRate` | 500/sec | Max storage object deletions per second during retention cleanup |
 | `DefaultQueryLimit` | 1000 | Default total result limit for split queries (0 = unlimited) |
 | `DefaultQueryPageSize` | 1000 | Internal SQL LIMIT per page for streaming queries |
 | `DefaultDeadlockMaxRetries` | 10 | Max retries on SQL deadlock |

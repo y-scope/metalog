@@ -43,7 +43,7 @@ grpcurl -plaintext -d '{
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
-> **Note:** `retention_cleanup_enabled` is not exposed by the `RegisterTable` RPC and must be set directly via SQL on `_table_config` if needed.
+> **Note:** Retention cleanup is always enabled and cannot be disabled. The `retention_type` column in `_table_config` controls which retention strategy is used (default: `"default"`).
 
 See [gRPC API — AdminService](../reference/grpc-api.md#coordinatorservice) for full field reference.
 
@@ -102,8 +102,9 @@ Each per-table coordinator goroutine can be individually enabled/disabled via `_
 |---------|--------------------------|---------|-------------|
 | Kafka Consumer | `kafka_poller_enabled` | true | Polls Kafka, submits to BatchingWriter |
 | Consolidation | `consolidation_enabled` | true | Creates IR→Archive consolidation tasks |
+| Retention Strategy | `retention_type` | `"default"` | Retention cleanup strategy type (always enabled) |
 
-> **Note:** The `_table_config` schema also defines `metadata_writer_enabled` and `retention_cleanup_enabled` columns, but these are reserved for future use and are not currently read by the coordinator.
+Retention cleanup is always enabled — every table needs expiration cleanup. The `retention_type` column selects which strategy implementation to use. Custom strategies can be registered at compile time for alternative deletion policies (throttling, grace periods, etc.).
 
 ---
 
