@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package com.yscope.metalog.query.api.proto.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.yscope.metalog.query.api.proto.grpc";
+option java_outer_classname = "ClpMetadataSchemaProto";
+option go_package = "github.com/y-scope/metalog/gen/proto/metadatapb";
+
+import "splits.proto";
+
+service MetadataService {
+    rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+    rpc ListDimensions(ListDimensionsRequest) returns (ListDimensionsResponse);
+    rpc ListAggs(ListAggsRequest) returns (ListAggsResponse);
+    rpc ListSketches(ListSketchesRequest) returns (ListSketchesResponse);
+}
+
+message ListTablesRequest {}
+
+message ListTablesResponse {
+    repeated string tables = 1;
+}
+
+message ListDimensionsRequest {
+    string table = 1;
+}
+
+message ListDimensionsResponse {
+    repeated DimensionInfo dimensions = 1;
+}
+
+message DimensionInfo {
+    string name = 1;
+    string type = 2;
+    int32 width = 3;
+    string alias_column = 4;
+}
+
+message ListAggsRequest {
+    string table = 1;
+}
+
+message ListAggsResponse {
+    repeated AggInfo aggs = 1;
+}
+
+enum AggValueType {
+    AGG_VALUE_TYPE_UNSPECIFIED = 0;
+    AGG_VALUE_TYPE_INT   = 1;
+    AGG_VALUE_TYPE_FLOAT = 2;
+}
+
+message AggInfo {
+    string name = 1;
+    string value = 2;
+    AggregationType aggregation_type = 3;
+    AggValueType value_type = 4;
+    string alias_column = 5;
+}
+
+message ListSketchesRequest {
+    string table = 1;
+}
+
+message ListSketchesResponse {
+    repeated SketchInfo sketches = 1;
+}
+
+message SketchInfo {
+    string name = 1;
+}

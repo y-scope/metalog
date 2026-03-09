@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package com.yscope.metalog.query.api.proto.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.yscope.metalog.query.api.proto.grpc";
+option java_outer_classname = "ClpMetadataProto";
+option go_package = "github.com/y-scope/metalog/gen/proto/splitspb";
+
+enum Order {
+    ORDER_UNSPECIFIED = 0;
+    ORDER_ASC  = 1;
+    ORDER_DESC = 2;
+}
+
+message OrderBy {
+    string column = 1;
+    Order  order  = 2;
+}
+
+message CursorValue {
+    oneof value {
+        int64  int_val   = 1;
+        double float_val = 2;
+        string str_val   = 3;
+    }
+}
+
+service QuerySplitsService {
+    rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse);
+}
+
+message StreamSplitsRequest {
+    string table = 1;
+    int32 limit = 2;
+    repeated string projection = 4;
+    repeated string state_filter = 11;
+    string filter_expression = 12;
+    KeysetCursor cursor = 13;
+    repeated OrderBy order_by = 14;
+    bool include_cursor = 15;
+    int64 stream_idle_timeout_ms = 16;
+    bool allow_unindexed_sort = 17;
+}
+
+message StreamSplitsResponse {
+    Split split = 1;
+    int32 sequence = 2;
+    QueryStats stats = 3;
+    bool done = 4;
+    KeysetCursor cursor = 5;
+}
+
+message Split {
+    int64 id = 1;
+    string clp_ir_path = 2;
+    string clp_archive_path = 3;
+    int64 min_timestamp = 4;
+    int64 max_timestamp = 5;
+    string state = 6;
+    map<string, string> dimensions = 7;
+    repeated AggEntry aggs = 8;
+    int64 record_count = 9;
+    int64 size_bytes = 10;
+    string clp_ir_storage_backend = 11;
+    string clp_ir_bucket = 12;
+    string clp_archive_storage_backend = 13;
+    string clp_archive_bucket = 14;
+}
+
+message KeysetCursor {
+    repeated CursorValue values = 1;
+    int64 id = 2;
+}
+
+enum AggregationType {
+    AGGREGATION_TYPE_UNSPECIFIED = 0;
+    AGGREGATION_TYPE_EQ  = 1;
+    AGGREGATION_TYPE_GTE = 2;
+    AGGREGATION_TYPE_GT  = 3;
+    AGGREGATION_TYPE_LTE = 4;
+    AGGREGATION_TYPE_LT  = 5;
+    AGGREGATION_TYPE_SUM = 6;
+    AGGREGATION_TYPE_AVG = 7;
+    AGGREGATION_TYPE_MIN = 8;
+    AGGREGATION_TYPE_MAX = 9;
+}
+
+message AggEntry {
+    string key = 1;
+    string value = 2;
+    AggregationType aggregation_type = 3;
+    oneof result {
+        int64  int_value   = 4;
+        double float_value = 5;
+    }
+}
+
+message QueryStats {
+    int64 splits_scanned = 1;
+    int64 splits_matched = 2;
+}
