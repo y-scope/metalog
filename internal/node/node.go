@@ -164,6 +164,9 @@ func (n *Node) Start() error {
 		if err := n.registry.EnsureSystemTables(ctx); err != nil {
 			return err
 		}
+		if err := schema.NewBaseSchemaValidator(n.shared.DB, n.log).Validate(ctx); err != nil {
+			return fmt.Errorf("base schema validation failed: %w", err)
+		}
 		if err := n.registry.ValidateSchemaReady(ctx); err != nil {
 			return err
 		}

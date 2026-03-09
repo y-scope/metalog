@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ type AggRegistryEntry struct {
 type ColumnRegistry struct {
 	db        *sql.DB
 	tableName string
+	isMariaDB bool
 	log       *zap.Logger
 
 	mu sync.RWMutex
@@ -73,10 +75,11 @@ type ColumnRegistry struct {
 }
 
 // NewColumnRegistry creates a ColumnRegistry and loads all ACTIVE entries from the DB.
-func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, log *zap.Logger) (*ColumnRegistry, error) {
+func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMariaDB bool, log *zap.Logger) (*ColumnRegistry, error) {
 	cr := &ColumnRegistry{
 		db:          db,
 		tableName:   tableName,
+		isMariaDB:   isMariaDB,
 		log:         log,
 		dimByKey:    make(map[string]*DimRegistryEntry),
 		dimByColumn: make(map[string]*DimRegistryEntry),
@@ -155,7 +158,7 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 		if aliasCol.Valid {
 			e.AliasCol = aliasCol.String
 		}
-		key := aggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
+		key := AggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
 		cr.aggByKey[key] = e
 		cr.aggByColumn[e.ColumnName] = e
 		slot := parseSlotNumber(e.ColumnName, metastore.AggColumnPrefix)
@@ -180,7 +183,7 @@ func (cr *ColumnRegistry) ResolveDim(dimKey string) string {
 func (cr *ColumnRegistry) ResolveAgg(aggKey, aggValue, aggType string) string {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
-	key := aggCacheKey(aggKey, aggValue, aggType)
+	key := AggCacheKey(aggKey, aggValue, aggType)
 	if e, ok := cr.aggByKey[key]; ok {
 		return e.ColumnName
 	}
@@ -244,8 +247,8 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 	sqlType := dimSQLType(entry.BaseType, newWidth)
 
 	_, err := cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=NONE",
-			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(entry.ColumnName), sqlType))
+		fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(entry.ColumnName), sqlType, lockMode(cr.isMariaDB)))
 	if err != nil {
 		return "", fmt.Errorf("expand dim width: %w", err)
 	}
@@ -307,8 +310,8 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL",
-			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType))
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB)))
 	if err != nil {
 		// Column may already exist from a previous crashed attempt — check.
 		if !isDuplicateColumn(err) {
@@ -344,7 +347,7 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 // ResolveOrAllocateAgg resolves an existing agg mapping or allocates a new slot.
 // Same fast-path/slow-path pattern as [ResolveOrAllocateDim].
 func (cr *ColumnRegistry) ResolveOrAllocateAgg(ctx context.Context, aggKey, aggValue, aggType, valueType string) (string, error) {
-	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
+	cacheKey := AggCacheKey(aggKey, aggValue, aggType)
 
 	// Fast path: read-only check.
 	cr.mu.RLock()
@@ -364,7 +367,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 
 	// Double-check: another goroutine may have allocated this agg while we
 	// were waiting for allocMu.
-	cacheKey := aggCacheKey(aggKey, aggValue, aggType)
+	cacheKey := AggCacheKey(aggKey, aggValue, aggType)
 	cr.mu.RLock()
 	if e, ok := cr.aggByKey[cacheKey]; ok {
 		cr.mu.RUnlock()
@@ -384,8 +387,8 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
 	_, err := cr.db.ExecContext(ctx,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT 0",
-			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType))
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB)))
 	if err != nil {
 		if !isDuplicateColumn(err) {
 			return "", fmt.Errorf("alter table add agg: %w", err)
@@ -417,6 +420,301 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	return colName, nil
 }
 
+// DimRequest describes a dimension column to resolve or allocate.
+type DimRequest struct {
+	DimKey   string
+	BaseType string
+	Width    int
+	AliasCol string // optional human-readable alias
+}
+
+// AggRequest describes an aggregation column to resolve or allocate.
+type AggRequest struct {
+	AggKey    string
+	AggValue  string
+	AggType   string
+	ValueType string
+	AliasCol  string // optional human-readable alias
+}
+
+// ResolveOrAllocateDims resolves existing dim mappings and batch-allocates new slots.
+// Returns a map from dimKey to column name. Width expansion for existing columns
+// is handled individually (MODIFY COLUMN), while new columns are added via a
+// single multi-column ALTER TABLE.
+func (cr *ColumnRegistry) ResolveOrAllocateDims(ctx context.Context, reqs []DimRequest) (map[string]string, error) {
+	result := make(map[string]string, len(reqs))
+
+	// Fast path: partition into resolved, needs-widening, and unresolved.
+	var unresolved []DimRequest
+	type wideningCase struct {
+		req   DimRequest
+		entry *DimRegistryEntry
+	}
+	var needsWidening []wideningCase
+
+	cr.mu.RLock()
+	for _, r := range reqs {
+		if e, ok := cr.dimByKey[r.DimKey]; ok {
+			result[r.DimKey] = e.ColumnName
+			if r.Width > e.Width && (r.BaseType == "str" || r.BaseType == "str_utf8") {
+				needsWidening = append(needsWidening, wideningCase{r, e})
+			}
+		} else {
+			unresolved = append(unresolved, r)
+		}
+	}
+	cr.mu.RUnlock()
+
+	// Handle width expansion individually (MODIFY COLUMN, not ADD COLUMN).
+	for _, w := range needsWidening {
+		col, err := cr.expandDimWidth(ctx, w.entry, w.req.Width)
+		if err != nil {
+			return nil, err
+		}
+		result[w.req.DimKey] = col
+	}
+
+	if len(unresolved) == 0 {
+		return result, nil
+	}
+
+	cols, err := cr.batchAllocateDimSlots(ctx, unresolved)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range cols {
+		result[k] = v
+	}
+	return result, nil
+}
+
+// batchAllocateDimSlots adds multiple dim columns in a single ALTER TABLE.
+// Falls back to individual ALTERs if the batch fails (e.g., duplicate column
+// from a previous crashed attempt).
+func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimRequest) (map[string]string, error) {
+	cr.allocMu.Lock()
+	defer cr.allocMu.Unlock()
+
+	// Double-check: filter out any allocated while we waited for allocMu.
+	var pending []DimRequest
+	result := make(map[string]string)
+
+	cr.mu.RLock()
+	for _, r := range reqs {
+		if e, ok := cr.dimByKey[r.DimKey]; ok {
+			result[r.DimKey] = e.ColumnName
+		} else {
+			pending = append(pending, r)
+		}
+	}
+	cr.mu.RUnlock()
+
+	if len(pending) == 0 {
+		return result, nil
+	}
+
+	if cr.nextDimSlot+len(pending)-1 > 99 {
+		return nil, fmt.Errorf("dim slot exhausted: need %d slots, have %d remaining",
+			len(pending), 100-cr.nextDimSlot)
+	}
+
+	// Assign slot names and SQL types.
+	type pendingSlot struct {
+		req     DimRequest
+		colName string
+		sqlType string
+	}
+	slots := make([]pendingSlot, len(pending))
+	alterParts := make([]string, len(pending))
+	for i, r := range pending {
+		colName := fmt.Sprintf("%s%02d", metastore.DimColumnPrefix, cr.nextDimSlot+i)
+		sqlType := dimSQLType(r.BaseType, r.Width)
+		slots[i] = pendingSlot{req: r, colName: colName, sqlType: sqlType}
+		alterParts[i] = fmt.Sprintf("ADD COLUMN %s %s NULL",
+			db.QuoteIdentifier(colName), sqlType)
+	}
+
+	// Single ALTER TABLE with all new columns.
+	ddl := fmt.Sprintf("ALTER TABLE %s %s, ALGORITHM=INPLACE, LOCK=%s",
+		db.QuoteIdentifier(cr.tableName), strings.Join(alterParts, ", "), lockMode(cr.isMariaDB))
+
+	if _, err := cr.db.ExecContext(ctx, ddl); err != nil {
+		if !isDuplicateColumn(err) {
+			return nil, fmt.Errorf("batch alter table add dims: %w", err)
+		}
+		// Fallback: a previous crash left some columns without registry rows.
+		// Add each individually so isDuplicateColumn is handled per-column.
+		for _, s := range slots {
+			_, fallbackErr := cr.db.ExecContext(ctx,
+				fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+					db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(s.colName),
+					s.sqlType, lockMode(cr.isMariaDB)))
+			if fallbackErr != nil && !isDuplicateColumn(fallbackErr) {
+				return nil, fmt.Errorf("alter table add dim %s: %w", s.colName, fallbackErr)
+			}
+		}
+	}
+
+	// Advance slot counter immediately after ALTER succeeds so that any
+	// retry (if a registry INSERT below fails) will generate fresh slot names
+	// rather than colliding with the physical columns we just added.
+	cr.nextDimSlot += len(slots)
+
+	// Insert registry rows and update cache individually.
+	now := time.Now().UnixNano()
+	for _, s := range slots {
+		insertQuery, insertArgs, _ := sq.Insert(metastore.DimRegistryTable).
+			Columns("table_name", "column_name", "base_type", "width", "dim_key", "alias_column", "state", "created_at").
+			Values(cr.tableName, s.colName, s.req.BaseType, s.req.Width, s.req.DimKey, nullIfEmpty(s.req.AliasCol), statusActive, now).
+			ToSql()
+		if _, err := cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
+			return nil, fmt.Errorf("insert dim registry for %s: %w", s.req.DimKey, err)
+		}
+
+		entry := &DimRegistryEntry{
+			TableName: cr.tableName, ColumnName: s.colName,
+			BaseType: s.req.BaseType, Width: s.req.Width, DimKey: s.req.DimKey,
+			AliasCol: s.req.AliasCol, Status: statusActive,
+		}
+		cr.mu.Lock()
+		cr.dimByKey[s.req.DimKey] = entry
+		cr.dimByColumn[s.colName] = entry
+		cr.mu.Unlock()
+
+		result[s.req.DimKey] = s.colName
+	}
+
+	cr.log.Info("batch allocated dim slots", zap.Int("count", len(slots)))
+	return result, nil
+}
+
+// ResolveOrAllocateAggs resolves existing agg mappings and batch-allocates new slots.
+// Returns a map from composite key (aggKey+aggValue+aggType) to column name.
+func (cr *ColumnRegistry) ResolveOrAllocateAggs(ctx context.Context, reqs []AggRequest) (map[string]string, error) {
+	result := make(map[string]string, len(reqs))
+	var unresolved []AggRequest
+
+	cr.mu.RLock()
+	for _, r := range reqs {
+		key := AggCacheKey(r.AggKey, r.AggValue, r.AggType)
+		if e, ok := cr.aggByKey[key]; ok {
+			result[key] = e.ColumnName
+		} else {
+			unresolved = append(unresolved, r)
+		}
+	}
+	cr.mu.RUnlock()
+
+	if len(unresolved) == 0 {
+		return result, nil
+	}
+
+	cols, err := cr.batchAllocateAggSlots(ctx, unresolved)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range cols {
+		result[k] = v
+	}
+	return result, nil
+}
+
+// batchAllocateAggSlots adds multiple agg columns in a single ALTER TABLE.
+func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggRequest) (map[string]string, error) {
+	cr.allocMu.Lock()
+	defer cr.allocMu.Unlock()
+
+	var pending []AggRequest
+	result := make(map[string]string)
+
+	cr.mu.RLock()
+	for _, r := range reqs {
+		key := AggCacheKey(r.AggKey, r.AggValue, r.AggType)
+		if e, ok := cr.aggByKey[key]; ok {
+			result[key] = e.ColumnName
+		} else {
+			pending = append(pending, r)
+		}
+	}
+	cr.mu.RUnlock()
+
+	if len(pending) == 0 {
+		return result, nil
+	}
+
+	if cr.nextAggSlot+len(pending)-1 > 99 {
+		return nil, fmt.Errorf("agg slot exhausted: need %d slots, have %d remaining",
+			len(pending), 100-cr.nextAggSlot)
+	}
+
+	type pendingSlot struct {
+		req     AggRequest
+		colName string
+		sqlType string
+	}
+	slots := make([]pendingSlot, len(pending))
+	alterParts := make([]string, len(pending))
+	for i, r := range pending {
+		colName := fmt.Sprintf("%s%02d", metastore.AggColumnPrefix, cr.nextAggSlot+i)
+		sqlType := "BIGINT"
+		if r.ValueType == "FLOAT" {
+			sqlType = "DOUBLE"
+		}
+		slots[i] = pendingSlot{req: r, colName: colName, sqlType: sqlType}
+		alterParts[i] = fmt.Sprintf("ADD COLUMN %s %s NULL",
+			db.QuoteIdentifier(colName), sqlType)
+	}
+
+	ddl := fmt.Sprintf("ALTER TABLE %s %s, ALGORITHM=INPLACE, LOCK=%s",
+		db.QuoteIdentifier(cr.tableName), strings.Join(alterParts, ", "), lockMode(cr.isMariaDB))
+
+	if _, err := cr.db.ExecContext(ctx, ddl); err != nil {
+		if !isDuplicateColumn(err) {
+			return nil, fmt.Errorf("batch alter table add aggs: %w", err)
+		}
+		for _, s := range slots {
+			_, fallbackErr := cr.db.ExecContext(ctx,
+				fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+					db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(s.colName),
+					s.sqlType, lockMode(cr.isMariaDB)))
+			if fallbackErr != nil && !isDuplicateColumn(fallbackErr) {
+				return nil, fmt.Errorf("alter table add agg %s: %w", s.colName, fallbackErr)
+			}
+		}
+	}
+
+	// Advance slot counter immediately after ALTER succeeds (same rationale as dims).
+	cr.nextAggSlot += len(slots)
+
+	now := time.Now().UnixNano()
+	for _, s := range slots {
+		insertQuery, insertArgs, _ := sq.Insert(metastore.AggRegistryTable).
+			Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column", "state", "created_at").
+			Values(cr.tableName, s.colName, s.req.AggKey, nullIfEmpty(s.req.AggValue), s.req.AggType, s.req.ValueType, nullIfEmpty(s.req.AliasCol), statusActive, now).
+			ToSql()
+		if _, err := cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
+			return nil, fmt.Errorf("insert agg registry for %s: %w", s.req.AggKey, err)
+		}
+
+		key := AggCacheKey(s.req.AggKey, s.req.AggValue, s.req.AggType)
+		entry := &AggRegistryEntry{
+			TableName: cr.tableName, ColumnName: s.colName,
+			AggKey: s.req.AggKey, AggValue: s.req.AggValue,
+			AggregationType: s.req.AggType, ValueType: s.req.ValueType,
+			AliasCol: s.req.AliasCol, Status: statusActive,
+		}
+		cr.mu.Lock()
+		cr.aggByKey[key] = entry
+		cr.aggByColumn[s.colName] = entry
+		cr.mu.Unlock()
+
+		result[key] = s.colName
+	}
+
+	cr.log.Info("batch allocated agg slots", zap.Int("count", len(slots)))
+	return result, nil
+}
+
 // ActiveDimColumns returns the column names of all active dimension entries.
 // The result is sorted for deterministic SQL generation.
 func (cr *ColumnRegistry) ActiveDimColumns() []string {
@@ -428,6 +726,95 @@ func (cr *ColumnRegistry) ActiveDimColumns() []string {
 	}
 	sort.Strings(cols)
 	return cols
+}
+
+// RefreshAliases re-reads alias_column values from the database for all active
+// entries and updates the in-memory cache. Call periodically so that alias
+// changes made via the admin API (possibly on a different node) propagate.
+func (cr *ColumnRegistry) RefreshAliases(ctx context.Context) error {
+	// Refresh dim aliases.
+	dimQuery, dimArgs, _ := sq.Select("column_name", "COALESCE(alias_column, '')").
+		From(metastore.DimRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
+		ToSql()
+	dimRows, err := cr.db.QueryContext(ctx, dimQuery, dimArgs...)
+	if err != nil {
+		return fmt.Errorf("refresh dim aliases: %w", err)
+	}
+	defer dimRows.Close()
+
+	dimAliases := make(map[string]string) // column_name -> alias
+	for dimRows.Next() {
+		var colName, alias string
+		if err := dimRows.Scan(&colName, &alias); err != nil {
+			return err
+		}
+		dimAliases[colName] = alias
+	}
+	if err := dimRows.Err(); err != nil {
+		return err
+	}
+
+	// Refresh agg aliases.
+	aggQuery, aggArgs, _ := sq.Select("column_name", "COALESCE(alias_column, '')").
+		From(metastore.AggRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
+		ToSql()
+	aggRows, err := cr.db.QueryContext(ctx, aggQuery, aggArgs...)
+	if err != nil {
+		return fmt.Errorf("refresh agg aliases: %w", err)
+	}
+	defer aggRows.Close()
+
+	aggAliases := make(map[string]string)
+	for aggRows.Next() {
+		var colName, alias string
+		if err := aggRows.Scan(&colName, &alias); err != nil {
+			return err
+		}
+		aggAliases[colName] = alias
+	}
+	if err := aggRows.Err(); err != nil {
+		return err
+	}
+
+	// Apply changes under write lock. Replace entries whose alias changed
+	// with new immutable copies to avoid data races with concurrent readers.
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+
+	for colName, newAlias := range dimAliases {
+		if e, ok := cr.dimByColumn[colName]; ok && e.AliasCol != newAlias {
+			updated := &DimRegistryEntry{
+				TableName: e.TableName, ColumnName: e.ColumnName,
+				BaseType: e.BaseType, Width: e.Width, DimKey: e.DimKey,
+				AliasCol: newAlias, Status: e.Status,
+			}
+			cr.dimByKey[e.DimKey] = updated
+			cr.dimByColumn[colName] = updated
+		}
+	}
+	for colName, newAlias := range aggAliases {
+		if e, ok := cr.aggByColumn[colName]; ok && e.AliasCol != newAlias {
+			key := AggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
+			updated := &AggRegistryEntry{
+				TableName: e.TableName, ColumnName: e.ColumnName,
+				AggKey: e.AggKey, AggValue: e.AggValue,
+				AggregationType: e.AggregationType, ValueType: e.ValueType,
+				AliasCol: newAlias, Status: e.Status,
+			}
+			cr.aggByKey[key] = updated
+			cr.aggByColumn[colName] = updated
+		}
+	}
+	return nil
+}
+
+// LookupDimByColumn returns the DimRegistryEntry for a physical column name, or nil.
+func (cr *ColumnRegistry) LookupDimByColumn(colName string) *DimRegistryEntry {
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	return cr.dimByColumn[colName]
 }
 
 // LookupAggByColumn returns the AggRegistryEntry for a physical column name, or nil.
@@ -535,7 +922,7 @@ func (r *RegistrySnapshot) ResolveDim(dimKey string) string {
 
 // ResolveAgg returns the column name for an aggregation, or empty string if not found.
 func (r *RegistrySnapshot) ResolveAgg(aggKey, aggValue, aggType string) string {
-	key := aggCacheKey(aggKey, aggValue, aggType)
+	key := AggCacheKey(aggKey, aggValue, aggType)
 	if e, ok := r.aggByKey[key]; ok {
 		return e.ColumnName
 	}
@@ -560,8 +947,8 @@ func (r *RegistrySnapshot) AllAggEntries() []*AggRegistryEntry {
 	return entries
 }
 
-// aggCacheKey builds the composite key for agg cache lookups.
-func aggCacheKey(aggKey, aggValue, aggType string) string {
+// AggCacheKey builds the composite key for agg cache lookups.
+func AggCacheKey(aggKey, aggValue, aggType string) string {
 	return aggType + "\x00" + aggKey + "\x00" + aggValue
 }
 

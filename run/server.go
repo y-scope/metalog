@@ -65,7 +65,7 @@ func Server() {
 
 		if cfg.GRPC.Admin {
 			regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Coordinator.TableCompression, log)
-			adminGrpc := grpcserver.NewAdminHandler(regSvc, log)
+			adminGrpc := grpcserver.NewAdminHandler(regSvc, n.Shared().DB, log)
 			coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminGrpc)
 			log.Info("gRPC service registered", zap.String("service", "admin"))
 		}

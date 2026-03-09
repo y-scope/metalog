@@ -209,6 +209,121 @@ func (x *RegisterTableResponse) GetCreated() bool {
 	return false
 }
 
+// SetColumnAlias sets or clears the alias for a dimension or aggregation column.
+// The column must already be allocated (ACTIVE) in the registry.
+// Pass empty alias_column to clear an existing alias.
+type SetColumnAliasRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
+	ColumnName    string                 `protobuf:"bytes,2,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`    // required — physical name (dim_f01, agg_f02)
+	AliasColumn   string                 `protobuf:"bytes,3,opt,name=alias_column,json=aliasColumn,proto3" json:"alias_column,omitempty"` // new alias, or empty to clear
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetColumnAliasRequest) Reset() {
+	*x = SetColumnAliasRequest{}
+	mi := &file_coordinator_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetColumnAliasRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetColumnAliasRequest) ProtoMessage() {}
+
+func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetColumnAliasRequest.ProtoReflect.Descriptor instead.
+func (*SetColumnAliasRequest) Descriptor() ([]byte, []int) {
+	return file_coordinator_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SetColumnAliasRequest) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *SetColumnAliasRequest) GetColumnName() string {
+	if x != nil {
+		return x.ColumnName
+	}
+	return ""
+}
+
+func (x *SetColumnAliasRequest) GetAliasColumn() string {
+	if x != nil {
+		return x.AliasColumn
+	}
+	return ""
+}
+
+type SetColumnAliasResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ColumnName    string                 `protobuf:"bytes,1,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`
+	AliasColumn   string                 `protobuf:"bytes,2,opt,name=alias_column,json=aliasColumn,proto3" json:"alias_column,omitempty"` // the alias now stored (empty if cleared)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetColumnAliasResponse) Reset() {
+	*x = SetColumnAliasResponse{}
+	mi := &file_coordinator_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetColumnAliasResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetColumnAliasResponse) ProtoMessage() {}
+
+func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetColumnAliasResponse.ProtoReflect.Descriptor instead.
+func (*SetColumnAliasResponse) Descriptor() ([]byte, []int) {
+	return file_coordinator_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SetColumnAliasResponse) GetColumnName() string {
+	if x != nil {
+		return x.ColumnName
+	}
+	return ""
+}
+
+func (x *SetColumnAliasResponse) GetAliasColumn() string {
+	if x != nil {
+		return x.AliasColumn
+	}
+	return ""
+}
+
 var File_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_proto_rawDesc = "" +
@@ -230,9 +345,20 @@ const file_coordinator_proto_rawDesc = "" +
 	"\x15RegisterTableResponse\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x18\n" +
-	"\acreated\x18\x02 \x01(\bR\acreated2\x97\x01\n" +
+	"\acreated\x18\x02 \x01(\bR\acreated\"z\n" +
+	"\x15SetColumnAliasRequest\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
+	"\vcolumn_name\x18\x02 \x01(\tR\n" +
+	"columnName\x12!\n" +
+	"\falias_column\x18\x03 \x01(\tR\valiasColumn\"\\\n" +
+	"\x16SetColumnAliasResponse\x12\x1f\n" +
+	"\vcolumn_name\x18\x01 \x01(\tR\n" +
+	"columnName\x12!\n" +
+	"\falias_column\x18\x02 \x01(\tR\valiasColumn2\xa3\x02\n" +
 	"\fAdminService\x12\x86\x01\n" +
-	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponseBa\n" +
+	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponse\x12\x89\x01\n" +
+	"\x0eSetColumnAlias\x12:.com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest\x1a;.com.yscope.metalog.coordinator.grpc.SetColumnAliasResponseBa\n" +
 	")com.yscope.metalog.coordinator.grpc.protoP\x01Z2github.com/y-scope/metalog/gen/proto/coordinatorpbb\x06proto3"
 
 var (
@@ -247,18 +373,22 @@ func file_coordinator_proto_rawDescGZIP() []byte {
 	return file_coordinator_proto_rawDescData
 }
 
-var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_coordinator_proto_goTypes = []any{
-	(*KafkaConfig)(nil),           // 0: com.yscope.metalog.coordinator.grpc.KafkaConfig
-	(*RegisterTableRequest)(nil),  // 1: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	(*RegisterTableResponse)(nil), // 2: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	(*KafkaConfig)(nil),            // 0: com.yscope.metalog.coordinator.grpc.KafkaConfig
+	(*RegisterTableRequest)(nil),   // 1: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	(*RegisterTableResponse)(nil),  // 2: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	(*SetColumnAliasRequest)(nil),  // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	(*SetColumnAliasResponse)(nil), // 4: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
 }
 var file_coordinator_proto_depIdxs = []int32{
 	0, // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest.kafka:type_name -> com.yscope.metalog.coordinator.grpc.KafkaConfig
 	1, // 1: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	2, // 2: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
+	3, // 2: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	2, // 3: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	4, // 4: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -276,7 +406,7 @@ func file_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_proto_rawDesc), len(file_coordinator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -231,7 +231,7 @@ Dimension columns use 5 base types stored in `_dim_registry.base_type`. The widt
 
 The 255-byte boundary is the InnoDB threshold where MySQL changes internal encoding. Crossing it requires a new column slot; the old slot is marked `INVALIDATED` in `_dim_registry`.
 
-**Aggregation columns** use `BIGINT NOT NULL DEFAULT 0` (for `INT` value type) or `DOUBLE NOT NULL DEFAULT 0.0` (for `FLOAT` value type). The `aggregation_type` in `_agg_registry` controls how the aggregation relates to the underlying values. For example, if `aggregation_type=GTE` and `agg_value=error`:
+**Aggregation columns** use `BIGINT NULL` (for `INT` value type) or `DOUBLE NULL` (for `FLOAT` value type). `NULL` means the aggregation is absent for that record (distinguishable from zero). The `aggregation_type` in `_agg_registry` controls how the aggregation relates to the underlying values. For example, if `aggregation_type=GTE` and `agg_value=error`:
 - The count = ERROR + FATAL (everything at or above ERROR severity)
 - Individual `ERROR-only = error_GTE - fatal_GTE`
 

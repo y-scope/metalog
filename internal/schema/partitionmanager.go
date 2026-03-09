@@ -80,45 +80,7 @@ func (pm *PartitionManager) EnsureLookaheadPartitions(ctx context.Context) (int,
 }
 
 func (pm *PartitionManager) createLookaheadPartitions(ctx context.Context) (int, error) {
-	existing, err := pm.getExistingPartitions(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	existingNames := make(map[string]bool)
-	for _, p := range existing {
-		existingNames[p.Name] = true
-	}
-
-	today := time.Now().UTC().Truncate(24 * time.Hour)
-	created := 0
-
-	for i := 0; i <= pm.lookaheadDays; i++ {
-		partDate := today.AddDate(0, 0, i)
-		partName := timeutil.DayPartitionName(partDate.UnixNano())
-
-		if existingNames[partName] {
-			continue
-		}
-
-		// REORGANIZE p_future to create new partition
-		nextDay := partDate.AddDate(0, 0, 1)
-		boundary := nextDay.UnixNano()
-
-		alterSQL := fmt.Sprintf(
-			"ALTER TABLE %s REORGANIZE PARTITION p_future INTO (PARTITION %s VALUES LESS THAN (%d), PARTITION p_future VALUES LESS THAN MAXVALUE)",
-			db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(partName), boundary,
-		)
-
-		_, err := pm.db.ExecContext(ctx, alterSQL)
-		if err != nil {
-			return created, fmt.Errorf("create partition %s: %w", partName, err)
-		}
-		created++
-		pm.log.Info("created partition", zap.String("partition", partName))
-	}
-
-	return created, nil
+	return createLookaheadPartitions(ctx, pm.db, pm.tableName, pm.lookaheadDays, pm.log)
 }
 
 // PartitionInfo holds metadata about a single partition.
@@ -131,7 +93,7 @@ type PartitionInfo struct {
 
 // cleanupOldPartitions drops partitions older than cleanupAgeDays that contain few rows.
 func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
-	partitions, err := pm.getExistingPartitions(ctx)
+	partitions, err := getExistingPartitions(ctx, pm.db, pm.tableName)
 	if err != nil {
 		return err
 	}
@@ -166,12 +128,65 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 }
 
 func (pm *PartitionManager) getExistingPartitions(ctx context.Context) ([]PartitionInfo, error) {
-	rows, err := pm.db.QueryContext(ctx,
+	return getExistingPartitions(ctx, pm.db, pm.tableName)
+}
+
+// defaultProvisionLookaheadDays is the number of lookahead partitions created
+// during table provisioning. The PartitionManager's configured lookaheadDays
+// takes over for ongoing maintenance.
+const defaultProvisionLookaheadDays = 7
+
+// createLookaheadPartitions creates daily partitions from today through
+// today + lookaheadDays by reorganizing p_future.
+func createLookaheadPartitions(ctx context.Context, database *sql.DB, tableName string, lookaheadDays int, log *zap.Logger) (int, error) {
+	existing, err := getExistingPartitions(ctx, database, tableName)
+	if err != nil {
+		return 0, err
+	}
+
+	existingNames := make(map[string]bool)
+	for _, p := range existing {
+		existingNames[p.Name] = true
+	}
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	created := 0
+
+	for i := 0; i <= lookaheadDays; i++ {
+		partDate := today.AddDate(0, 0, i)
+		partName := timeutil.DayPartitionName(partDate.UnixNano())
+
+		if existingNames[partName] {
+			continue
+		}
+
+		nextDay := partDate.AddDate(0, 0, 1)
+		boundary := nextDay.UnixNano()
+
+		alterSQL := fmt.Sprintf(
+			"ALTER TABLE %s REORGANIZE PARTITION p_future INTO (PARTITION %s VALUES LESS THAN (%d), PARTITION p_future VALUES LESS THAN MAXVALUE)",
+			db.QuoteIdentifier(tableName), db.QuoteIdentifier(partName), boundary,
+		)
+
+		_, err := database.ExecContext(ctx, alterSQL)
+		if err != nil {
+			return created, fmt.Errorf("create partition %s: %w", partName, err)
+		}
+		created++
+		log.Info("created partition", zap.String("partition", partName))
+	}
+
+	return created, nil
+}
+
+// getExistingPartitions queries INFORMATION_SCHEMA for all partitions of a table.
+func getExistingPartitions(ctx context.Context, database *sql.DB, tableName string) ([]PartitionInfo, error) {
+	rows, err := database.QueryContext(ctx,
 		"SELECT PARTITION_NAME, PARTITION_DESCRIPTION, TABLE_ROWS, DATA_LENGTH "+
 			"FROM INFORMATION_SCHEMA.PARTITIONS "+
 			"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? "+
 			"ORDER BY PARTITION_ORDINAL_POSITION",
-		pm.tableName,
+		tableName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query partitions: %w", err)

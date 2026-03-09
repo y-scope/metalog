@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AdminService_RegisterTable_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
+	AdminService_RegisterTable_FullMethodName  = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
+	AdminService_SetColumnAlias_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias"
 )
 
 // AdminServiceClient is the client API for AdminService service.
@@ -32,6 +33,7 @@ const (
 // editing node.yaml or restarting the node. All RPCs are idempotent.
 type AdminServiceClient interface {
 	RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error)
+	SetColumnAlias(ctx context.Context, in *SetColumnAliasRequest, opts ...grpc.CallOption) (*SetColumnAliasResponse, error)
 }
 
 type adminServiceClient struct {
@@ -52,6 +54,16 @@ func (c *adminServiceClient) RegisterTable(ctx context.Context, in *RegisterTabl
 	return out, nil
 }
 
+func (c *adminServiceClient) SetColumnAlias(ctx context.Context, in *SetColumnAliasRequest, opts ...grpc.CallOption) (*SetColumnAliasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetColumnAliasResponse)
+	err := c.cc.Invoke(ctx, AdminService_SetColumnAlias_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AdminServiceServer is the server API for AdminService service.
 // All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
@@ -62,6 +74,7 @@ func (c *adminServiceClient) RegisterTable(ctx context.Context, in *RegisterTabl
 // editing node.yaml or restarting the node. All RPCs are idempotent.
 type AdminServiceServer interface {
 	RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error)
+	SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
 
@@ -74,6 +87,9 @@ type UnimplementedAdminServiceServer struct{}
 
 func (UnimplementedAdminServiceServer) RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterTable not implemented")
+}
+func (UnimplementedAdminServiceServer) SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetColumnAlias not implemented")
 }
 func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
 func (UnimplementedAdminServiceServer) testEmbeddedByValue()                      {}
@@ -114,6 +130,24 @@ func _AdminService_RegisterTable_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_SetColumnAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetColumnAliasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).SetColumnAlias(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_SetColumnAlias_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).SetColumnAlias(ctx, req.(*SetColumnAliasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -124,6 +158,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterTable",
 			Handler:    _AdminService_RegisterTable_Handler,
+		},
+		{
+			MethodName: "SetColumnAlias",
+			Handler:    _AdminService_SetColumnAlias_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

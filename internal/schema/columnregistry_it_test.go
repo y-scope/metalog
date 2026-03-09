@@ -21,7 +21,7 @@ func setupColumnRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *schema.Co
 	mc.CreateTestTable(t, itTable)
 
 	log := zap.NewNop()
-	cr, err := schema.NewColumnRegistry(context.Background(), mc.DB, itTable, log)
+	cr, err := schema.NewColumnRegistry(context.Background(), mc.DB, itTable, true, log)
 	if err != nil {
 		mc.Teardown(t)
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestColumnRegistry_PersistsAcrossReloads(t *testing.T) {
 	log := zap.NewNop()
 
 	// First instance: allocate columns
-	cr1, err := schema.NewColumnRegistry(ctx, mc.DB, itTable, log)
+	cr1, err := schema.NewColumnRegistry(ctx, mc.DB, itTable, true, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestColumnRegistry_PersistsAcrossReloads(t *testing.T) {
 	cr1.ResolveOrAllocateAgg(ctx, "errors", "", "SUM", "INT")
 
 	// Second instance: should load from DB
-	cr2, err := schema.NewColumnRegistry(ctx, mc.DB, itTable, log)
+	cr2, err := schema.NewColumnRegistry(ctx, mc.DB, itTable, true, log)
 	if err != nil {
 		t.Fatal(err)
 	}

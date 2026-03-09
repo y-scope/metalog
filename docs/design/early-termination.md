@@ -297,9 +297,9 @@ dim_port        SMALLINT UNSIGNED NULL,
 -- Per-field aggregations (for non-dimension filters)
 -- Physical names are opaque placeholders: agg_f01, agg_f02, ...
 -- Illustrative names used here for readability
-agg_gte_level_warn   INT UNSIGNED NOT NULL DEFAULT 0,
-agg_gte_level_error  INT UNSIGNED NOT NULL DEFAULT 0,
-agg_gte_level_fatal  INT UNSIGNED NOT NULL DEFAULT 0,
+agg_gte_level_warn   INT UNSIGNED NULL,
+agg_gte_level_error  INT UNSIGNED NULL,
+agg_gte_level_fatal  INT UNSIGNED NULL,
 ```
 
 **Semantic contracts:** The `dim_` and `agg_` column families signal invariants:

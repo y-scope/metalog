@@ -12,6 +12,7 @@ option go_package = "github.com/y-scope/metalog/gen/proto/coordinatorpb";
 // editing node.yaml or restarting the node. All RPCs are idempotent.
 service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+  rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse);
 }
 
 message KafkaConfig {
@@ -31,4 +32,18 @@ message RegisterTableRequest {
 message RegisterTableResponse {
   string table_name = 1;
   bool   created    = 2; // true = newly provisioned; false = already existed (idempotent)
+}
+
+// SetColumnAlias sets or clears the alias for a dimension or aggregation column.
+// The column must already be allocated (ACTIVE) in the registry.
+// Pass empty alias_column to clear an existing alias.
+message SetColumnAliasRequest {
+  string table_name   = 1; // required
+  string column_name  = 2; // required — physical name (dim_f01, agg_f02)
+  string alias_column = 3; // new alias, or empty to clear
+}
+
+message SetColumnAliasResponse {
+  string column_name  = 1;
+  string alias_column = 2; // the alias now stored (empty if cleared)
 }

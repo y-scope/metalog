@@ -20,6 +20,10 @@ import (
 // partitionMaintenanceInterval is how often partition lookahead/cleanup runs.
 const partitionMaintenanceInterval = time.Hour
 
+// aliasRefreshInterval is how often alias_column values are re-read from the DB.
+// Frequent enough that admin-set aliases propagate quickly; lightweight (SELECT only).
+const aliasRefreshInterval = time.Minute
+
 // CoordinatorUnit manages coordinator goroutines for a single table.
 type CoordinatorUnit struct {
 	tableName     string
@@ -57,7 +61,7 @@ func NewCoordinatorUnit(
 	ingestSvc *ingestion.Service,
 	log *zap.Logger,
 ) (*CoordinatorUnit, error) {
-	reg, err := schema.NewColumnRegistry(ctx, shared.DB, tableName, log)
+	reg, err := schema.NewColumnRegistry(ctx, shared.DB, tableName, shared.IsMariaDB, log)
 	if err != nil {
 		return nil, fmt.Errorf("new coordinator unit: column registry: %w", err)
 	}
@@ -157,6 +161,13 @@ func (u *CoordinatorUnit) Start() {
 		u.runPartitionMaintenance()
 	}()
 
+	// Alias refresh goroutine
+	u.wg.Add(1)
+	go func() {
+		defer u.wg.Done()
+		u.runAliasRefresh()
+	}()
+
 	// Kafka consumer goroutine
 	if u.kafkaConsumer != nil {
 		u.wg.Add(1)
@@ -175,6 +186,25 @@ func (u *CoordinatorUnit) Stop() {
 	u.cancel()
 	u.wg.Wait()
 	u.log.Info("coordinator unit stopped")
+}
+
+func (u *CoordinatorUnit) runAliasRefresh() {
+	ticker := time.NewTicker(aliasRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-u.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := u.registry.RefreshAliases(u.ctx); err != nil {
+				if u.ctx.Err() != nil {
+					return
+				}
+				u.log.Warn("alias refresh failed", zap.Error(err))
+			}
+		}
+	}
 }
 
 func (u *CoordinatorUnit) runPartitionMaintenance() {

@@ -144,7 +144,7 @@ All dimension columns are `NULL` (absent from records that don't have the field)
 
 ### Aggregation Column SQL Types
 
-Aggregation columns use `BIGINT NOT NULL DEFAULT 0` (for `value_type = INT`) or `DOUBLE NOT NULL DEFAULT 0.0` (for `value_type = FLOAT`). Aggregates are never `NULL`.
+Aggregation columns use `BIGINT NULL` (for `value_type = INT`) or `DOUBLE NULL` (for `value_type = FLOAT`). `NULL` means the aggregation is absent for that record (distinguishable from zero).
 
 ## String Width Expansion
 

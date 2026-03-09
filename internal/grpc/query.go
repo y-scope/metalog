@@ -212,8 +212,15 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.S
 					continue
 				}
 			}
-			// Dimension columns (including dim_fNN and any unrecognized agg columns)
-			split.Dimensions[col] = dbValToString(val)
+			// Dimension columns: reverse-map physical name to semantic dim_key.
+			// Falls back to physical column name if no registry entry exists.
+			dimKey := col
+			if strings.HasPrefix(col, metastore.DimColumnPrefix) && registry != nil {
+				if entry := registry.LookupDimByColumn(col); entry != nil {
+					dimKey = entry.DimKey
+				}
+			}
+			split.Dimensions[dimKey] = dbValToString(val)
 		}
 	}
 

@@ -19,13 +19,14 @@ type IndexConfig struct {
 
 // IndexManager reconciles dynamic indexes on dimension columns.
 type IndexManager struct {
-	db  *sql.DB
-	log *zap.Logger
+	db        *sql.DB
+	isMariaDB bool
+	log       *zap.Logger
 }
 
 // NewIndexManager creates an IndexManager.
-func NewIndexManager(db *sql.DB, log *zap.Logger) *IndexManager {
-	return &IndexManager{db: db, log: log}
+func NewIndexManager(db *sql.DB, isMariaDB bool, log *zap.Logger) *IndexManager {
+	return &IndexManager{db: db, isMariaDB: isMariaDB, log: log}
 }
 
 // EnsureIndex creates an index on a dimension column if it doesn't exist.
@@ -53,8 +54,8 @@ func (im *IndexManager) EnsureIndex(ctx context.Context, tableName, colName stri
 	}
 
 	// Create index (online DDL)
-	ddl := fmt.Sprintf("ALTER TABLE %s ADD INDEX %s (%s), ALGORITHM=INPLACE, LOCK=NONE",
-		db.QuoteIdentifier(tableName), db.QuoteIdentifier(indexName), db.QuoteIdentifier(colName))
+	ddl := fmt.Sprintf("ALTER TABLE %s ADD INDEX %s (%s), ALGORITHM=INPLACE, LOCK=%s",
+		db.QuoteIdentifier(tableName), db.QuoteIdentifier(indexName), db.QuoteIdentifier(colName), lockMode(im.isMariaDB))
 
 	_, err = im.db.ExecContext(ctx, ddl)
 	if err != nil {

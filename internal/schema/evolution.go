@@ -12,13 +12,14 @@ import (
 
 // Evolver handles online DDL for adding new columns to metadata tables.
 type Evolver struct {
-	db  *sql.DB
-	log *zap.Logger
+	db        *sql.DB
+	isMariaDB bool
+	log       *zap.Logger
 }
 
 // NewEvolver creates an Evolver.
-func NewEvolver(db *sql.DB, log *zap.Logger) *Evolver {
-	return &Evolver{db: db, log: log}
+func NewEvolver(db *sql.DB, isMariaDB bool, log *zap.Logger) *Evolver {
+	return &Evolver{db: db, isMariaDB: isMariaDB, log: log}
 }
 
 // AddColumn adds a new column to the table using online DDL (ALGORITHM=INPLACE, LOCK=NONE).
@@ -34,8 +35,8 @@ func (e *Evolver) AddColumn(ctx context.Context, tableName, colName, sqlType str
 		return err
 	}
 
-	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=NONE",
-		db.QuoteIdentifier(tableName), db.QuoteIdentifier(colName), sqlType)
+	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+		db.QuoteIdentifier(tableName), db.QuoteIdentifier(colName), sqlType, lockMode(e.isMariaDB))
 
 	_, err := e.db.ExecContext(ctx, ddl)
 	if err != nil {

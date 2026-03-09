@@ -89,6 +89,10 @@ func (s *Service) IngestWithCallback(ctx context.Context, tableName string, reco
 }
 
 func (s *Service) resolveDims(ctx context.Context, dims []*pb.DimEntry, rec *metastore.FileRecord, reg *schema.ColumnRegistry) error {
+	// Collect requests and values, then batch-resolve. This issues a single
+	// multi-column ALTER TABLE instead of N individual ALTERs on cold start.
+	var reqs []schema.DimRequest
+	vals := make(map[string]any, len(dims)) // dimKey -> value
 	for _, d := range dims {
 		if d.Key == "" || d.Value == nil {
 			continue
@@ -120,11 +124,20 @@ func (s *Service) resolveDims(ctx context.Context, dims []*pb.DimEntry, rec *met
 			continue
 		}
 
-		col, err := reg.ResolveOrAllocateDim(ctx, d.Key, baseType, width)
-		if err != nil {
-			return fmt.Errorf("dim %q: %w", d.Key, err)
-		}
-		rec.Dims[col] = val
+		reqs = append(reqs, schema.DimRequest{DimKey: d.Key, BaseType: baseType, Width: width})
+		vals[d.Key] = val
+	}
+
+	if len(reqs) == 0 {
+		return nil
+	}
+
+	resolved, err := reg.ResolveOrAllocateDims(ctx, reqs)
+	if err != nil {
+		return fmt.Errorf("resolve dims: %w", err)
+	}
+	for dimKey, colName := range resolved {
+		rec.Dims[colName] = vals[dimKey]
 	}
 	return nil
 }
@@ -168,6 +181,12 @@ func validateRecord(record *pb.MetadataRecord) error {
 }
 
 func (s *Service) resolveAggs(ctx context.Context, aggs []*pb.AggEntry, rec *metastore.FileRecord, reg *schema.ColumnRegistry) error {
+	type aggVal struct {
+		key string // composite cache key
+		val any
+	}
+	var reqs []schema.AggRequest
+	aggVals := make([]aggVal, 0, len(aggs))
 	for _, a := range aggs {
 		if a.Field == "" {
 			continue
@@ -189,11 +208,28 @@ func (s *Service) resolveAggs(ctx context.Context, aggs []*pb.AggEntry, rec *met
 			val = int64(0)
 		}
 
-		col, err := reg.ResolveOrAllocateAgg(ctx, a.Field, a.Qualifier, aggType, valueType)
-		if err != nil {
-			return fmt.Errorf("agg %q.%q: %w", a.Field, a.Qualifier, err)
+		reqs = append(reqs, schema.AggRequest{
+			AggKey: a.Field, AggValue: a.Qualifier, AggType: aggType, ValueType: valueType,
+			AliasCol: a.AliasColumn,
+		})
+		aggVals = append(aggVals, aggVal{
+			key: schema.AggCacheKey(a.Field, a.Qualifier, aggType),
+			val: val,
+		})
+	}
+
+	if len(reqs) == 0 {
+		return nil
+	}
+
+	resolved, err := reg.ResolveOrAllocateAggs(ctx, reqs)
+	if err != nil {
+		return fmt.Errorf("resolve aggs: %w", err)
+	}
+	for _, av := range aggVals {
+		if colName, ok := resolved[av.key]; ok {
+			rec.Aggs[colName] = av.val
 		}
-		rec.Aggs[col] = val
 	}
 	return nil
 }

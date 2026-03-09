@@ -66,7 +66,7 @@ The **`_agg_registry`** table maps each physical name to its logical metadata:
 | `value_type` | Physical column type | `INT`, `FLOAT` |
 | `alias_column` | If set, aliases an existing column | `record_count`, `NULL` |
 
-Aggregation columns use `BIGINT NOT NULL DEFAULT 0` (INT) or `DOUBLE NOT NULL DEFAULT 0.0` (FLOAT).
+Aggregation columns use `BIGINT NULL` (INT) or `DOUBLE NULL` (FLOAT). `NULL` means the aggregation is absent.
 
 **Wire format (transformer API):**
 

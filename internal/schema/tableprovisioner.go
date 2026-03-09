@@ -16,6 +16,9 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
+// sketchSlotCount is the number of sketch slots pre-allocated per table.
+// Must match the SET members in the template DDL (schema.sql). MySQL SET
+// supports at most 64 members; BaseSchemaValidator checks this at startup.
 const sketchSlotCount = 64
 
 // EnsureTable idempotently provisions a metadata table and all registry rows.
@@ -37,6 +40,9 @@ func EnsureTable(ctx context.Context, database *sql.DB, tableName string, isMari
 		return err
 	}
 	if err := prepopulateSketchSlots(ctx, database, tableName); err != nil {
+		return err
+	}
+	if _, err := createLookaheadPartitions(ctx, database, tableName, defaultProvisionLookaheadDays, log); err != nil {
 		return err
 	}
 
@@ -146,6 +152,11 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 	return nil
 }
 
+// prepopulateSketchSlots inserts all sketch slot rows into _sketch_registry
+// with state=AVAILABLE. Slots are pre-allocated because the sketches column is
+// a fixed SET('s01',...,'s64') — adding a new SET member requires ALTER TABLE
+// MODIFY which rebuilds the entire table. Pre-allocating all 64 slots (the
+// MySQL SET hard limit) avoids that cost entirely.
 func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
 	now := time.Now().UnixNano()
 	for i := 1; i <= sketchSlotCount; i++ {

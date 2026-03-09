@@ -30,7 +30,7 @@ func setupIndexManagerIT(t *testing.T) (*testutil.MariaDBContainer, *schema.Inde
 		t.Fatalf("add dim column: %v", err)
 	}
 
-	im := schema.NewIndexManager(mc.DB, log)
+	im := schema.NewIndexManager(mc.DB, true, log)
 	return mc, im
 }
 
