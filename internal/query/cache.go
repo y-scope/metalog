@@ -93,9 +93,10 @@ func (c *Cache) Clear() {
 	c.mu.Unlock()
 }
 
-// GetOrCompute retrieves a cached value, or calls compute to compute and cache it.
-// The mutex is held across the check-compute-store sequence to prevent concurrent
-// callers from running compute() in parallel for the same key.
+// GetOrCompute retrieves a cached value, or calls compute to produce and cache it.
+// The lock is released during compute() to avoid holding it during slow operations.
+// Concurrent callers with the same missing key may both call compute(); the last
+// writer wins (safe when compute is deterministic, as with filter rewriting).
 func (c *Cache) GetOrCompute(key string, compute func() (any, error)) (any, error) {
 	c.mu.Lock()
 

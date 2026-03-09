@@ -84,6 +84,11 @@ func TestValidateFilterExpression_RejectsUnsafeExprTypes(t *testing.T) {
 		"EXISTS (SELECT 1 FROM users)",
 		// CASE expression
 		"CASE WHEN state = 'x' THEN 1 ELSE 0 END = 1",
+		// CAST expression
+		"CAST(record_count AS CHAR) = '5'",
+		// Arithmetic expressions
+		"record_count + 1 > 5",
+		"record_count * 2 = 10",
 	}
 
 	for _, expr := range tests {
@@ -120,6 +125,21 @@ func TestValidateFilterExpression_SafeWordsInValues(t *testing.T) {
 	for _, expr := range safe {
 		if err := ValidateFilterExpression(expr); err != nil {
 			t.Errorf("ValidateFilterExpression(%q) = %v, want nil", expr, err)
+		}
+	}
+}
+
+func TestValidateFilterExpression_RejectsFunctionCalls(t *testing.T) {
+	// Java tests: SLEEP, MD5, NOW — Go should reject these too
+	tests := []string{
+		"MD5(state) = 'abc'",
+		"NOW() > min_timestamp",
+		"CONCAT(state, 'x') = 'test'",
+	}
+
+	for _, expr := range tests {
+		if err := ValidateFilterExpression(expr); err == nil {
+			t.Errorf("ValidateFilterExpression(%q) = nil, want error", expr)
 		}
 	}
 }

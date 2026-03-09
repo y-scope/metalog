@@ -321,8 +321,8 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 
 	// INSERT into registry (safe now — the physical column exists)
 	insertQuery, insertArgs, _ := sq.Insert(metastore.DimRegistryTable).
-		Columns("table_name", "column_name", "base_type", "width", "dim_key", "state", "created_at").
-		Values(cr.tableName, colName, baseType, width, dimKey, statusActive, time.Now().UnixNano()).
+		Columns("table_name", "column_name", "base_type", "width", "dim_key", "alias_column", "state", "created_at").
+		Values(cr.tableName, colName, baseType, width, dimKey, nil, statusActive, time.Now().UnixNano()).
 		ToSql()
 	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert dim registry: %w", err)
@@ -397,8 +397,8 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 
 	// INSERT into registry (safe now — the physical column exists)
 	insertQuery, insertArgs, _ := sq.Insert(metastore.AggRegistryTable).
-		Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "state", "created_at").
-		Values(cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType, statusActive, time.Now().UnixNano()).
+		Columns("table_name", "column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column", "state", "created_at").
+		Values(cr.tableName, colName, aggKey, nullIfEmpty(aggValue), aggType, valueType, nil, statusActive, time.Now().UnixNano()).
 		ToSql()
 	if _, err = cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 		return "", fmt.Errorf("insert agg registry: %w", err)
@@ -857,6 +857,15 @@ func (cr *ColumnRegistry) AllAggEntries() []*AggRegistryEntry {
 		entries = append(entries, e)
 	}
 	return entries
+}
+
+// EntryCount returns the total number of active dim + agg entries.
+// Used as a cache-busting version token: when new columns are provisioned,
+// the count changes and cached filter rewrites are invalidated.
+func (cr *ColumnRegistry) EntryCount() int {
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	return len(cr.dimByKey) + len(cr.aggByKey)
 }
 
 // FloatAggColumns returns a set of agg column names that hold DOUBLE values.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -65,8 +66,199 @@ type SplitRow struct {
 	Values map[string]any
 }
 
-// Query executes a paginated query and returns rows.
+// SplitWithCursor pairs a result row with the cursor position needed to
+// resume pagination from this row.
+type SplitWithCursor struct {
+	Row          *SplitRow
+	CursorValues []any
+	CursorID     int64
+}
+
+// StreamingResult reports final statistics from a streaming query.
+type StreamingResult struct {
+	SplitsScanned int64
+	SplitsMatched int64
+}
+
+// SplitConsumer is called for each split during streaming.
+// Return false to stop iteration early.
+type SplitConsumer func(split *SplitWithCursor) (keepGoing bool, err error)
+
+// preparedQuery holds validated and resolved query components that are
+// reusable across multiple page fetches within a single streaming RPC.
+type preparedQuery struct {
+	tableName    string
+	cols         []string
+	orderBy      []OrderBySpec
+	filterExpr   string
+	stateFilter  []string
+	orderClauses []string
+}
+
+// Query executes a single-page query and returns rows. This is the original
+// interface retained for backward compatibility with existing callers and tests.
 func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*SplitRow, error) {
+	prepared, err := e.prepareQuery(params)
+	if err != nil {
+		return nil, err
+	}
+
+	var cursorValues []any
+	var cursorID int64
+	if params.HasCursor {
+		cursorValues = params.CursorValues
+		cursorID = params.CursorID
+	}
+
+	swcs, err := e.executePage(ctx, prepared, params.Limit, cursorValues, cursorID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]*SplitRow, len(swcs))
+	for i, swc := range swcs {
+		rows[i] = swc.Row
+	}
+	return rows, nil
+}
+
+// StreamSplitsAsync fetches all matching splits across multiple internal pages,
+// calling consumer for each result. A background goroutine prefetches the next
+// page while the consumer processes the current one.
+//
+// totalLimit caps the total number of results (0 = unlimited). pageSize controls
+// the SQL LIMIT per internal page fetch. The method respects ctx cancellation.
+func (e *SplitQueryEngine) StreamSplitsAsync(
+	ctx context.Context,
+	params *QueryParams,
+	totalLimit int,
+	pageSize int,
+	consumer SplitConsumer,
+) (*StreamingResult, error) {
+	prepared, err := e.prepareQuery(params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initial cursor from the request (nil = start from beginning).
+	var cursorValues []any
+	var cursorID int64
+	if params.HasCursor {
+		cursorValues = params.CursorValues
+		cursorID = params.CursorID
+	}
+
+	// Prefetch channel: capacity 2*pageSize allows producer to stay one page
+	// ahead of the consumer without blocking.
+	ch := make(chan *SplitWithCursor, pageSize*2)
+	producerCtx, cancelProducer := context.WithCancel(ctx)
+	defer cancelProducer()
+
+	producerErr := make(chan error, 1)
+
+	// splitsScanned is tracked by the producer (DB rows fetched). When sketch
+	// filtering is added, scanned will exceed matched for pruned rows.
+	var splitsScanned atomic.Int64
+
+	// Background producer: fetches pages and pushes to channel.
+	go func() {
+		defer close(ch)
+		cv := cursorValues
+		cid := cursorID
+		totalSent := 0
+
+		for {
+			effectivePageSize := pageSize
+			if totalLimit > 0 {
+				remaining := totalLimit - totalSent
+				if remaining <= 0 {
+					return
+				}
+				if remaining < effectivePageSize {
+					effectivePageSize = remaining
+				}
+			}
+
+			page, err := e.executePage(producerCtx, prepared, effectivePageSize, cv, cid)
+			if err != nil {
+				if producerCtx.Err() != nil {
+					return // cancelled, not an error
+				}
+				producerErr <- err
+				return
+			}
+
+			splitsScanned.Add(int64(len(page)))
+
+			for _, swc := range page {
+				select {
+				case ch <- swc:
+					totalSent++
+				case <-producerCtx.Done():
+					return
+				}
+			}
+
+			// Exhausted: DB returned fewer rows than requested.
+			if len(page) < effectivePageSize {
+				return
+			}
+
+			// Advance cursor to last row of this page.
+			last := page[len(page)-1]
+			cv = last.CursorValues
+			cid = last.CursorID
+
+			// Check limit.
+			if totalLimit > 0 && totalSent >= totalLimit {
+				return
+			}
+		}
+	}()
+
+	// Foreground consumer: drain channel and call consumer callback.
+	// splitsMatched counts rows delivered to the consumer.
+	var splitsMatched int64
+	for swc := range ch {
+		splitsMatched++
+
+		keepGoing, err := consumer(swc)
+		if err != nil {
+			cancelProducer()
+			// Drain remaining items so the producer goroutine can exit.
+			for range ch {
+			}
+			return nil, err
+		}
+		if !keepGoing {
+			cancelProducer()
+			for range ch {
+			}
+			break
+		}
+	}
+
+	// Check for producer error — but only if the consumer didn't initiate
+	// the stop. When the consumer cancels (keepGoing=false or send error),
+	// a concurrent DB error in the producer is expected collateral and
+	// should not override the successful partial result.
+	if ctx.Err() == nil {
+		select {
+		case err := <-producerErr:
+			return nil, err
+		default:
+		}
+	}
+
+	return &StreamingResult{
+		SplitsScanned: splitsScanned.Load(),
+		SplitsMatched: splitsMatched,
+	}, nil
+}
+
+// prepareQuery validates and resolves all query components once. The result
+// is reusable across multiple executePage calls within a streaming RPC.
+func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, error) {
 	if err := db.ValidateSQLIdentifier(params.TableName); err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -81,6 +273,7 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 	}
 
 	// Resolve ORDER BY columns and validate they are safe identifiers
+	resolvedOrderBy := make([]OrderBySpec, len(params.OrderBy))
 	for i, ob := range params.OrderBy {
 		resolved, err := ResolveColumnRef(ob.Column, params.Registry)
 		if err != nil {
@@ -93,21 +286,28 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 			return nil, fmt.Errorf("sort column %q is not indexed; use an indexed column (%s) or set allow_unindexed_sort=true",
 				ob.Column, "min_timestamp, max_timestamp")
 		}
-		params.OrderBy[i].Column = resolved
+		resolvedOrderBy[i] = OrderBySpec{Column: resolved, Desc: ob.Desc}
 	}
 
 	// Validate filter expression (defense-in-depth — gRPC handler also validates)
-	if params.FilterExpr != "" {
-		if err := ValidateFilterExpression(params.FilterExpr); err != nil {
+	filterExpr := params.FilterExpr
+	if filterExpr != "" {
+		if err := ValidateFilterExpression(filterExpr); err != nil {
 			return nil, fmt.Errorf("filter validation: %w", err)
 		}
 	}
 
-	// Rewrite filter expression columns (cached to avoid repeated parsing)
-	if params.FilterExpr != "" {
-		cacheKey := "filter:" + params.TableName + ":" + params.FilterExpr
+	// Rewrite filter expression columns (cached to avoid repeated parsing).
+	// The cache key includes the registry entry count so that a schema change
+	// (new dim/agg columns) invalidates stale rewrites.
+	if filterExpr != "" {
+		regVersion := 0
+		if params.Registry != nil {
+			regVersion = params.Registry.EntryCount()
+		}
+		cacheKey := fmt.Sprintf("filter:%s:%d:%s", params.TableName, regVersion, filterExpr)
 		cached, cacheErr := e.cache.GetOrCompute(cacheKey, func() (any, error) {
-			return RewriteFilterColumns(params.FilterExpr, params.Registry)
+			return RewriteFilterColumns(filterExpr, params.Registry)
 		})
 		if cacheErr != nil {
 			return nil, fmt.Errorf("rewrite filter: %w", cacheErr)
@@ -116,64 +316,88 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		if !ok {
 			return nil, fmt.Errorf("rewrite filter: unexpected cache type %T", cached)
 		}
-		params.FilterExpr = rewritten
+		filterExpr = rewritten
 	}
 
-	builder := sq.Select(cols...).From(db.QuoteIdentifier(params.TableName))
-
-	// User filter expression (validated + rewritten upstream)
-	if params.FilterExpr != "" {
-		builder = builder.Where(params.FilterExpr)
-	}
-
-	// State filter
-	if len(params.StateFilter) > 0 {
-		builder = builder.Where(sq.Eq{metastore.ColState: params.StateFilter})
-	}
-
-	// Validate keyset cursor compatibility: row comparison (col1,col2) > (v1,v2)
-	// only works when all sort directions are the same.
-	if params.HasCursor && len(params.OrderBy) > 1 {
-		firstDesc := params.OrderBy[0].Desc
-		for _, ob := range params.OrderBy[1:] {
-			if ob.Desc != firstDesc {
-				return nil, fmt.Errorf("keyset pagination does not support mixed ASC/DESC order by")
+	// Ensure sort columns and the id tiebreaker are in the projection.
+	// Without these, cursor extraction would produce nil values.
+	if len(cols) > 0 && cols[0] != "*" {
+		colSet := make(map[string]bool, len(cols))
+		for _, c := range cols {
+			colSet[c] = true
+		}
+		if !colSet[metastore.ColID] {
+			cols = append(cols, metastore.ColID)
+		}
+		for _, ob := range resolvedOrderBy {
+			if !colSet[ob.Column] {
+				cols = append(cols, ob.Column)
+				colSet[ob.Column] = true
 			}
 		}
 	}
 
-	// Keyset cursor
-	if params.HasCursor && len(params.OrderBy) > 0 {
-		if len(params.CursorValues) != len(params.OrderBy) {
-			return nil, fmt.Errorf("keyset cursor: got %d values but %d order-by columns",
-				len(params.CursorValues), len(params.OrderBy))
-		}
-		cursorWhere := buildKeysetWhere(params.OrderBy, params.CursorValues, params.CursorID)
-		builder = builder.Where(cursorWhere)
-	}
-
-	// Order by
-	orderClauses := make([]string, 0, len(params.OrderBy)+1)
-	for _, ob := range params.OrderBy {
+	// Pre-build ORDER BY clauses (reused per page).
+	orderClauses := make([]string, 0, len(resolvedOrderBy)+1)
+	for _, ob := range resolvedOrderBy {
 		dir := "ASC"
 		if ob.Desc {
 			dir = "DESC"
 		}
 		orderClauses = append(orderClauses, db.QuoteIdentifier(ob.Column)+" "+dir)
 	}
-	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" ASC") // implicit tiebreaker
-	builder = builder.OrderBy(orderClauses...)
+	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" ASC")
 
-	if params.Limit > 0 {
-		builder = builder.Limit(uint64(params.Limit))
+	return &preparedQuery{
+		tableName:    params.TableName,
+		cols:         cols,
+		orderBy:      resolvedOrderBy,
+		filterExpr:   filterExpr,
+		stateFilter:  params.StateFilter,
+		orderClauses: orderClauses,
+	}, nil
+}
+
+// executePage fetches a single page of results from the database.
+// cursorValues/cursorID are nil/0 for the first page.
+func (e *SplitQueryEngine) executePage(
+	ctx context.Context,
+	pq *preparedQuery,
+	limit int,
+	cursorValues []any,
+	cursorID int64,
+) ([]*SplitWithCursor, error) {
+	builder := sq.Select(pq.cols...).From(db.QuoteIdentifier(pq.tableName))
+
+	if pq.filterExpr != "" {
+		builder = builder.Where(pq.filterExpr)
 	}
 
-	query, args, err := builder.ToSql()
+	if len(pq.stateFilter) > 0 {
+		builder = builder.Where(sq.Eq{metastore.ColState: pq.stateFilter})
+	}
+
+	// Keyset cursor
+	if cursorValues != nil && len(pq.orderBy) > 0 {
+		if len(cursorValues) != len(pq.orderBy) {
+			return nil, fmt.Errorf("keyset cursor: got %d values but %d order-by columns",
+				len(cursorValues), len(pq.orderBy))
+		}
+		builder = builder.Where(buildKeysetWhere(pq.orderBy, cursorValues, cursorID))
+	}
+
+	builder = builder.OrderBy(pq.orderClauses...)
+
+	if limit > 0 {
+		builder = builder.Limit(uint64(limit))
+	}
+
+	sqlStr, args, err := builder.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("build query: %w", err)
 	}
 
-	rows, err := e.db.QueryContext(ctx, query, args...)
+	rows, err := e.db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("execute query: %w", err)
 	}
@@ -184,7 +408,7 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		return nil, fmt.Errorf("query: columns: %w", err)
 	}
 
-	var results []*SplitRow
+	var results []*SplitWithCursor
 	for rows.Next() {
 		values := make([]any, len(columns))
 		valuePtrs := make([]any, len(columns))
@@ -204,7 +428,25 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 				}
 			}
 		}
-		results = append(results, row)
+
+		// Extract cursor values from sort columns. Reject NULL values —
+		// SQL comparisons with NULL (col > NULL) evaluate to UNKNOWN, which
+		// would silently truncate pagination by returning zero subsequent rows.
+		cv := make([]any, len(pq.orderBy))
+		for i, ob := range pq.orderBy {
+			v := row.Values[ob.Column]
+			if v == nil {
+				return nil, fmt.Errorf("keyset cursor: sort column %q has NULL value in row id=%d; "+
+					"NULL sort columns are not supported for keyset pagination", ob.Column, row.ID)
+			}
+			cv[i] = v
+		}
+
+		results = append(results, &SplitWithCursor{
+			Row:          row,
+			CursorValues: cv,
+			CursorID:     row.ID,
+		})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -213,28 +455,54 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 	return results, nil
 }
 
+// buildKeysetWhere builds a keyset pagination WHERE clause using the
+// OR-of-prefix-equalities algorithm. For N sort fields plus the implicit id
+// tiebreaker (always ASC), it produces:
+//
+//	(f1 {op1} v1)
+//	OR (f1 = v1 AND f2 {op2} v2)
+//	OR (f1 = v1 AND f2 = v2 AND f3 {op3} v3)
+//	...
+//	OR (f1 = v1 AND ... AND fN = vN AND id > cursorID)
+//
+// Each {opI} is < for DESC fields and > for ASC fields. This correctly handles
+// mixed sort directions, unlike SQL row comparison which is always lexicographic.
 func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64) sq.Sqlizer {
-	// For keyset pagination: (col1, col2, ..., id) > (val1, val2, ..., cursorID)
-	// This creates a row comparison that MySQL can optimize.
-	// All columns must share the same direction (validated upstream).
-	colNames := make([]string, 0, len(orderBy)+1)
-	for _, ob := range orderBy {
-		colNames = append(colNames, db.QuoteIdentifier(ob.Column))
+	n := len(orderBy)
+
+	// Collect all columns and values including the id tiebreaker.
+	cols := make([]string, n+1)
+	vals := make([]any, n+1)
+	descs := make([]bool, n+1)
+	for i, ob := range orderBy {
+		cols[i] = db.QuoteIdentifier(ob.Column)
+		vals[i] = cursorValues[i]
+		descs[i] = ob.Desc
 	}
-	colNames = append(colNames, db.QuoteIdentifier(metastore.ColID))
+	cols[n] = db.QuoteIdentifier(metastore.ColID)
+	vals[n] = cursorID
+	descs[n] = false // id is always ASC
 
-	vals := make([]any, 0, len(cursorValues)+1)
-	vals = append(vals, cursorValues...)
-	vals = append(vals, cursorID)
+	// Build OR branches: one for each position 0..n.
+	var branches []string
+	var allArgs []any
+	for i := 0; i <= n; i++ {
+		var parts []string
+		// Equality prefix: f0=v0 AND f1=v1 AND ... AND f_{i-1}=v_{i-1}
+		for j := 0; j < i; j++ {
+			parts = append(parts, cols[j]+" = ?")
+			allArgs = append(allArgs, vals[j])
+		}
+		// Strict comparison for field i
+		op := ">"
+		if descs[i] {
+			op = "<"
+		}
+		parts = append(parts, cols[i]+" "+op+" ?")
+		allArgs = append(allArgs, vals[i])
 
-	lhs := "(" + strings.Join(colNames, ",") + ")"
-	placeholders := "(" + strings.Repeat("?,", len(vals)-1) + "?)"
-
-	// Use < for DESC ordering, > for ASC.
-	op := ">"
-	if len(orderBy) > 0 && orderBy[0].Desc {
-		op = "<"
+		branches = append(branches, "("+strings.Join(parts, " AND ")+")")
 	}
 
-	return sq.Expr(lhs+" "+op+" "+placeholders, vals...)
+	return sq.Expr("("+strings.Join(branches, " OR ")+")", allArgs...)
 }

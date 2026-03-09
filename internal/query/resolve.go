@@ -25,48 +25,43 @@ const (
 	prefixAggTyped = "__AGG_" // __AGG_EQ., __AGG_GTE., etc.
 )
 
-// fileColumns are the physical columns exposed via __FILE.<col>.
-var fileColumns = map[string]bool{
-	metastore.ColID:                       true,
-	metastore.ColMinTimestamp:             true,
-	metastore.ColMaxTimestamp:             true,
-	metastore.ColClpArchiveCreatedAt:      true,
-	metastore.ColClpIRStorageBackend:      true,
-	metastore.ColClpIRBucket:              true,
-	metastore.ColClpIRPath:                true,
-	metastore.ColClpArchiveStorageBackend: true,
-	metastore.ColClpArchiveBucket:         true,
-	metastore.ColClpArchivePath:           true,
-	metastore.ColState:                    true,
-	metastore.ColRecordCount:              true,
-	metastore.ColRawSizeBytes:             true,
-	metastore.ColClpIRSizeBytes:           true,
-	metastore.ColClpArchiveSizeBytes:      true,
-	metastore.ColRetentionDays:            true,
-	metastore.ColExpiresAt:                true,
+// allFileColumnsList is the canonical list of physical columns exposed via __FILE.<col>.
+// allFileColumns() and fileColumns are both derived from this single source.
+var allFileColumnsList = []string{
+	metastore.ColID,
+	metastore.ColMinTimestamp,
+	metastore.ColMaxTimestamp,
+	metastore.ColClpArchiveCreatedAt,
+	metastore.ColClpIRStorageBackend,
+	metastore.ColClpIRBucket,
+	metastore.ColClpIRPath,
+	metastore.ColClpArchiveStorageBackend,
+	metastore.ColClpArchiveBucket,
+	metastore.ColClpArchivePath,
+	metastore.ColState,
+	metastore.ColRecordCount,
+	metastore.ColRawSizeBytes,
+	metastore.ColClpIRSizeBytes,
+	metastore.ColClpArchiveSizeBytes,
+	metastore.ColRetentionDays,
+	metastore.ColExpiresAt,
 }
+
+// fileColumns is the set of valid __FILE.<col> column names, derived from
+// allFileColumnsList to avoid maintaining two lists.
+var fileColumns = func() map[string]bool {
+	m := make(map[string]bool, len(allFileColumnsList))
+	for _, c := range allFileColumnsList {
+		m[c] = true
+	}
+	return m
+}()
 
 // allFileColumns returns all file-level column names in a stable order.
 func allFileColumns() []string {
-	return []string{
-		metastore.ColID,
-		metastore.ColMinTimestamp,
-		metastore.ColMaxTimestamp,
-		metastore.ColClpArchiveCreatedAt,
-		metastore.ColClpIRStorageBackend,
-		metastore.ColClpIRBucket,
-		metastore.ColClpIRPath,
-		metastore.ColClpArchiveStorageBackend,
-		metastore.ColClpArchiveBucket,
-		metastore.ColClpArchivePath,
-		metastore.ColState,
-		metastore.ColRecordCount,
-		metastore.ColRawSizeBytes,
-		metastore.ColClpIRSizeBytes,
-		metastore.ColClpArchiveSizeBytes,
-		metastore.ColRetentionDays,
-		metastore.ColExpiresAt,
-	}
+	cp := make([]string, len(allFileColumnsList))
+	copy(cp, allFileColumnsList)
+	return cp
 }
 
 // ResolveProjectionColumns expands prefixed column patterns into physical column names.
@@ -406,7 +401,8 @@ func colNameToString(col *sqlparser.ColName) string {
 
 // isPhysicalColumn checks if a column name matches dim_fNN or agg_fNN pattern.
 func isPhysicalColumn(name string) bool {
-	if len(name) < 6 {
+	// Minimum valid: "dim_f01" or "agg_f01" (7 chars).
+	if len(name) < 7 {
 		return false
 	}
 	prefix := name[:4]

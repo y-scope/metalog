@@ -40,6 +40,9 @@ const (
 	// DefaultPlannerInterval is how often the consolidation planner runs.
 	DefaultPlannerInterval = 60 * time.Second
 
-	// DefaultQueryLimit is the default page size for split queries.
+	// DefaultQueryLimit is the default total result limit for split queries (0 = unlimited).
 	DefaultQueryLimit = 1000
+
+	// DefaultQueryPageSize is the internal SQL LIMIT per page for streaming queries.
+	DefaultQueryPageSize = 1000
 )

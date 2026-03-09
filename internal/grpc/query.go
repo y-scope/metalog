@@ -1,8 +1,10 @@
 package grpc
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	gogrpc "google.golang.org/grpc"
@@ -14,6 +16,20 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/query"
 	"github.com/y-scope/metalog/internal/schema"
+)
+
+const (
+	// defaultStreamTimeout is the maximum duration for a StreamSplits RPC
+	// when the client does not set stream_idle_timeout_ms.
+	defaultStreamTimeout = 60 * time.Second
+
+	// minStreamTimeout prevents clients from setting an unreasonably short
+	// timeout that would cancel every query before results are returned.
+	minStreamTimeout = 1 * time.Second
+
+	// maxStreamTimeout prevents clients from requesting an effectively
+	// infinite server-side timeout.
+	maxStreamTimeout = 10 * time.Minute
 )
 
 // RegistryLookup returns the ColumnRegistry for a table, or nil.
@@ -32,7 +48,9 @@ func NewQueryHandler(engine *query.SplitQueryEngine, lookup RegistryLookup, log 
 	return &QueryHandler{engine: engine, registryLookup: lookup, log: log}
 }
 
-// StreamSplits handles server-streaming split queries.
+// StreamSplits handles server-streaming split queries. It fetches all matching
+// splits across multiple internal pages using a background prefetch goroutine,
+// streaming each result to the client as it becomes available.
 func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.ServerStreamingServer[pb.StreamSplitsResponse]) error {
 	if req.GetTable() == "" {
 		return status.Error(codes.InvalidArgument, "table is required")
@@ -62,7 +80,6 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		TableName:      req.GetTable(),
 		StateFilter:    req.GetStateFilter(),
 		FilterExpr:     req.GetFilterExpression(),
-		Limit:          int(req.GetLimit()),
 		AllowUnindexed: req.GetAllowUnindexedSort(),
 		Registry:       h.registryLookup(req.GetTable()),
 	}
@@ -80,7 +97,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		})
 	}
 
-	// Cursor
+	// Cursor (initial position for first page)
 	if c := req.GetCursor(); c != nil {
 		if len(c.GetValues()) != len(req.GetOrderBy()) {
 			return status.Errorf(codes.InvalidArgument,
@@ -103,41 +120,74 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		}
 	}
 
-	if params.Limit <= 0 {
-		params.Limit = config.DefaultQueryLimit
+	totalLimit := int(req.GetLimit())
+	if totalLimit <= 0 {
+		totalLimit = config.DefaultQueryLimit
 	}
 
-	// Execute query
-	rows, err := h.engine.Query(stream.Context(), params)
-	if err != nil {
-		h.log.Error("query failed", zap.String("table", req.GetTable()), zap.Error(err))
-		return status.Errorf(codes.Internal, "query: %v", err)
+	pageSize := config.DefaultQueryPageSize
+	if totalLimit > 0 && totalLimit < pageSize {
+		pageSize = totalLimit
 	}
 
-	// Stream results (sequence is 1-based per proto spec)
+	// Apply stream deadline. The client can set stream_idle_timeout_ms to
+	// control how long the server will spend streaming results, clamped to
+	// [minStreamTimeout, maxStreamTimeout].
+	streamTimeout := defaultStreamTimeout
+	if ms := req.GetStreamIdleTimeoutMs(); ms > 0 {
+		streamTimeout = time.Duration(ms) * time.Millisecond
+		if streamTimeout < minStreamTimeout {
+			streamTimeout = minStreamTimeout
+		} else if streamTimeout > maxStreamTimeout {
+			streamTimeout = maxStreamTimeout
+		}
+	}
+	streamCtx, streamCancel := context.WithTimeout(stream.Context(), streamTimeout)
+	defer streamCancel()
+
+	// Stream results via prefetch consumer.
 	var seq int32
-	for _, row := range rows {
+	registry := params.Registry
+	includeCursor := req.GetIncludeCursor()
+
+	consumer := func(swc *query.SplitWithCursor) (bool, error) {
 		seq++
-		split := rowToProtoSplit(row, params.Registry)
+		split := rowToProtoSplit(swc.Row, registry)
 
 		resp := &pb.StreamSplitsResponse{
 			Split:    split,
 			Sequence: seq,
 		}
-		if req.GetIncludeCursor() {
-			resp.Cursor = buildResponseCursor(row, params.OrderBy)
+		if includeCursor {
+			resp.Cursor = &pb.KeysetCursor{Id: swc.CursorID}
+			for _, v := range swc.CursorValues {
+				resp.Cursor.Values = append(resp.Cursor.Values, toCursorValue(v))
+			}
 		}
 		if err := stream.Send(resp); err != nil {
-			return err
+			return false, err
 		}
+		return true, nil
+	}
+
+	result, err := h.engine.StreamSplitsAsync(streamCtx, params, totalLimit, pageSize, consumer)
+	if err != nil {
+		// Distinguish client cancellation from real errors to avoid noisy logs.
+		if streamCtx.Err() != nil {
+			h.log.Debug("stream cancelled", zap.String("table", req.GetTable()), zap.Error(streamCtx.Err()))
+			return status.FromContextError(streamCtx.Err()).Err()
+		}
+		h.log.Error("query failed", zap.String("table", req.GetTable()), zap.Error(err))
+		return status.Errorf(codes.Internal, "query: %v", err)
 	}
 
 	// Send final response with stats
+	seq++
 	return stream.Send(&pb.StreamSplitsResponse{
 		Done: true,
 		Stats: &pb.QueryStats{
-			SplitsScanned: int64(len(rows)),
-			SplitsMatched: int64(len(rows)),
+			SplitsScanned: result.SplitsScanned,
+			SplitsMatched: result.SplitsMatched,
 		},
 		Sequence: seq,
 	})
@@ -153,40 +203,46 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.S
 
 	for col, val := range row.Values {
 		switch col {
-		case "clp_ir_path":
+		case metastore.ColClpIRPath:
 			split.ClpIrPath = dbValToString(val)
-		case "clp_archive_path":
+		case metastore.ColClpArchivePath:
 			split.ClpArchivePath = dbValToString(val)
-		case "min_timestamp":
+		case metastore.ColMinTimestamp:
 			if v, ok := val.(int64); ok {
 				split.MinTimestamp = v
 			}
-		case "max_timestamp":
+		case metastore.ColMaxTimestamp:
 			if v, ok := val.(int64); ok {
 				split.MaxTimestamp = v
 			}
-		case "state":
+		case metastore.ColState:
 			split.State = dbValToString(val)
-		case "record_count":
+		case metastore.ColRecordCount:
 			if v, ok := val.(int64); ok {
 				split.RecordCount = v
 			}
-		case "clp_ir_size_bytes":
+		case metastore.ColClpIRSizeBytes:
 			if v, ok := val.(int64); ok {
 				irSizeBytes = v
 			}
-		case "clp_archive_size_bytes":
+		case metastore.ColClpArchiveSizeBytes:
 			if v, ok := val.(int64); ok {
 				archiveSizeBytes = v
 			}
-		case "clp_ir_storage_backend":
+		case metastore.ColClpIRStorageBackend:
 			split.ClpIrStorageBackend = dbValToString(val)
-		case "clp_ir_bucket":
+		case metastore.ColClpIRBucket:
 			split.ClpIrBucket = dbValToString(val)
-		case "clp_archive_storage_backend":
+		case metastore.ColClpArchiveStorageBackend:
 			split.ClpArchiveStorageBackend = dbValToString(val)
-		case "clp_archive_bucket":
+		case metastore.ColClpArchiveBucket:
 			split.ClpArchiveBucket = dbValToString(val)
+		// File-level columns already handled above or not exposed in the proto.
+		case metastore.ColID, metastore.ColRawSizeBytes, metastore.ColClpArchiveCreatedAt,
+			metastore.ColRetentionDays, metastore.ColExpiresAt,
+			metastore.ColClpIRPathHash, metastore.ColClpArchivePathHash:
+			continue
+
 		default:
 			if val == nil {
 				continue
@@ -224,8 +280,8 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.S
 		}
 	}
 
-	// Archive size takes precedence over IR size when available.
-	if archiveSizeBytes > 0 {
+	// Use archive size when an archive exists, otherwise IR size.
+	if split.ClpArchivePath != "" {
 		split.SizeBytes = archiveSizeBytes
 	} else {
 		split.SizeBytes = irSizeBytes
@@ -234,23 +290,26 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.S
 	return split
 }
 
-// buildResponseCursor creates a KeysetCursor from a result row's sort column values.
-func buildResponseCursor(row *query.SplitRow, orderBy []query.OrderBySpec) *pb.KeysetCursor {
-	cursor := &pb.KeysetCursor{Id: row.ID}
-	for _, ob := range orderBy {
-		cursor.Values = append(cursor.Values, toCursorValue(row.Values[ob.Column]))
-	}
-	return cursor
-}
-
 func toCursorValue(val any) *pb.CursorValue {
+	if val == nil {
+		// NULL sort column values are represented as unset CursorValue (zero
+		// oneof). The handler rejects these on inbound cursors, preventing a
+		// NULL cursor from silently corrupting pagination.
+		return &pb.CursorValue{}
+	}
 	switch v := val.(type) {
 	case int64:
 		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: v}}
 	case int32:
 		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: int64(v)}}
+	case uint64:
+		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: int64(v)}}
+	case uint32:
+		return &pb.CursorValue{Value: &pb.CursorValue_IntVal{IntVal: int64(v)}}
 	case float64:
 		return &pb.CursorValue{Value: &pb.CursorValue_FloatVal{FloatVal: v}}
+	case float32:
+		return &pb.CursorValue{Value: &pb.CursorValue_FloatVal{FloatVal: float64(v)}}
 	case string:
 		return &pb.CursorValue{Value: &pb.CursorValue_StrVal{StrVal: v}}
 	case []byte:
