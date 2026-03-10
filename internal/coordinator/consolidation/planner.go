@@ -350,7 +350,7 @@ func (p *Planner) reclaimStaleTasks(ctx context.Context) error {
 	}
 
 	for _, task := range staleTasks {
-		if err := p.taskQueue.ReclaimTask(ctx, task.TaskID, task.RetryCount); err != nil {
+		if err := p.taskQueue.ReclaimTask(ctx, task.TaskID); err != nil {
 			p.log.Error("reclaim task failed", zap.Int64("taskId", task.TaskID), zap.Error(err))
 		}
 	}

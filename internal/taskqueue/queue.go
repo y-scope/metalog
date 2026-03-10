@@ -188,10 +188,12 @@ func (q *Queue) CompleteTask(ctx context.Context, taskID int64, output []byte) (
 // FailTask marks a task as failed. If the task has exceeded the maximum retry
 // count, it is moved to dead_letter instead.
 // Uses a single atomic UPDATE with conditional state selection to avoid TOCTOU races.
+// Note: In a single UPDATE, all SET expressions evaluate against the pre-update row,
+// so the IF must compare retry_count + 1 (the post-increment value) against maxRetries.
 func (q *Queue) FailTask(ctx context.Context, taskID int64) (int64, error) {
 	query, args, err := sq.Update(TableName).
 		Set("retry_count", sq.Expr("retry_count + 1")).
-		Set("state", sq.Expr("IF(retry_count >= ?, 'dead_letter', 'failed')", q.maxRetries)).
+		Set("state", sq.Expr("IF(retry_count + 1 >= ?, 'dead_letter', 'failed')", q.maxRetries)).
 		Set("completed_at", time.Now().UnixNano()).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
 		ToSql()
@@ -251,24 +253,22 @@ func (q *Queue) FindStaleTasks(ctx context.Context, tableName string, timeout ti
 	return tasks, nil
 }
 
-// ReclaimTask marks a stale processing task as timed_out and creates a new
-// pending task with incremented retry count. If max retries exceeded, moves
-// to dead_letter.
-func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8) error {
+// ReclaimTask marks a stale processing task as timed_out and re-enqueues it,
+// or moves it to dead_letter if max retries are exceeded.
+// Uses an atomic IF() expression to read retry_count from the row itself,
+// avoiding a TOCTOU race with concurrent FailTask calls.
+func (q *Queue) ReclaimTask(ctx context.Context, taskID int64) error {
 	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("reclaim task: begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	newState := "timed_out"
-	if int(retryCount) >= q.maxRetries {
-		newState = "dead_letter"
-	}
-
+	nowNano := time.Now().UnixNano()
 	updateQuery, updateArgs, err := sq.Update(TableName).
-		Set("state", newState).
-		Set("completed_at", time.Now().UnixNano()).
+		Set("retry_count", sq.Expr("retry_count + 1")).
+		Set("state", sq.Expr("IF(retry_count + 1 >= ?, 'dead_letter', 'timed_out')", q.maxRetries)).
+		Set("completed_at", nowNano).
 		Where(sq.Eq{"task_id": taskID, "state": string(TaskStateProcessing)}).
 		ToSql()
 	if err != nil {
@@ -283,20 +283,26 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 		return fmt.Errorf("reclaim task %d: no matching task in processing state", taskID)
 	}
 
-	if newState == "dead_letter" {
-		q.log.Warn("task moved to dead letter", zap.Int64("taskId", taskID), zap.Uint8("retries", retryCount))
+	// Check resulting state: if dead_letter, commit without re-enqueue.
+	var state string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT state FROM "+TableName+" WHERE task_id = ?", taskID).Scan(&state); err != nil {
+		return fmt.Errorf("reclaim task: check state: %w", err)
+	}
+	if state == "dead_letter" {
+		q.log.Warn("task moved to dead letter on reclaim", zap.Int64("taskId", taskID))
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("reclaim task: commit: %w", err)
 		}
 		return nil
 	}
 
-	// Re-enqueue: copy input from old task into new pending task
-	nowNano := time.Now().UnixNano()
+	// Re-enqueue: copy input from old task into new pending task.
+	// retry_count was already incremented on the timed_out row, so copy it as-is.
 	insertQuery, insertArgs, err := sq.Insert(TableName).
 		Columns("table_name", "created_at", "input", "retry_count").
 		Select(
-			sq.Select("table_name", fmt.Sprintf("%d", nowNano), "input", "retry_count + 1").
+			sq.Select("table_name", fmt.Sprintf("%d", nowNano), "input", "retry_count").
 				From(TableName).
 				Where(sq.Eq{"task_id": taskID}),
 		).
@@ -308,7 +314,7 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64, retryCount uint8)
 		return fmt.Errorf("reclaim re-enqueue: %w", err)
 	}
 
-	q.log.Info("reclaimed stale task", zap.Int64("taskId", taskID), zap.Uint8("retry", retryCount+1))
+	q.log.Info("reclaimed stale task", zap.Int64("taskId", taskID))
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("reclaim task: commit: %w", err)
 	}

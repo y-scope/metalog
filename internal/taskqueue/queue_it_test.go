@@ -210,8 +210,8 @@ func TestQueue_ReclaimTask(t *testing.T) {
 	taskID, _ := tq.CreateTask(ctx, testTable, input)
 	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 
-	// Reclaim the task (retry_count=0, below max retries)
-	err := tq.ReclaimTask(ctx, taskID, 0)
+	// Reclaim the task (retry_count=0 in DB, below max retries)
+	err := tq.ReclaimTask(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ReclaimTask() error = %v", err)
 	}
@@ -243,8 +243,10 @@ func TestQueue_ReclaimTask_DeadLetter(t *testing.T) {
 	taskID, _ := tq.CreateTask(ctx, testTable, input)
 	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 
-	// Reclaim with retry_count >= max retries (3)
-	err := tq.ReclaimTask(ctx, taskID, 3)
+	// Set retry_count >= max retries in DB so reclaim triggers dead_letter.
+	mc.DB.ExecContext(ctx, "UPDATE _task_queue SET retry_count = ? WHERE task_id = ?",
+		taskqueue.DefaultMaxRetries, taskID)
+	err := tq.ReclaimTask(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ReclaimTask() error = %v", err)
 	}
