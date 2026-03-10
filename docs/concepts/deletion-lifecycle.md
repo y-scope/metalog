@@ -160,14 +160,14 @@ Custom strategies can implement throttling, grace periods, or alternative cleanu
 
 ## Partition Cleanup
 
-After the retention strategy deletes expired rows, old partitions become empty or sparse. The `PartitionManager` — running as a per-coordinator goroutine hourly — drops empty partitions and merges consecutive old partitions into the historical catch-all partition.
+After the retention strategy deletes expired rows, old partitions become empty or sparse. The `PartitionManager` — running as a per-coordinator goroutine hourly — drops empty partitions and merges sparse partitions into `p_floor`.
 
 | Condition | Action |
 |-----------|--------|
 | Empty (0 rows) | Drop partition |
-| Consecutive old partitions | Merge via `REORGANIZE PARTITION` into historical catch-all |
+| Sparse (has rows) | Merge into `p_floor` via `REORGANIZE PARTITION` |
 
-Only partitions older than the cleanup age (default: 90 days) are candidates. Recent partitions are never touched. Partitions with data are never dropped — they are merged via `REORGANIZE PARTITION`, which preserves all rows. For full details on partition layout, advisory lock coordination, and maintenance operations, see [Metadata Schema: Partitioning](metadata-schema.md#partitioning).
+Only partitions older than the cleanup age (default: 90 days) are candidates. `p_floor` and `p_future` are structural bookends — never dropped or merged away. Empty old partitions are dropped; sparse ones are merged into `p_floor`, expanding its boundary while preserving all rows. For full details on partition layout, advisory lock coordination, and maintenance operations, see [Metadata Schema: Partitioning](metadata-schema.md#partitioning).
 
 ---
 

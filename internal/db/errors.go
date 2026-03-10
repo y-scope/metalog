@@ -13,6 +13,7 @@ const (
 	errDupColumn       = 1060
 	errLockWaitTimeout = 1205
 	errTableExists     = 1050
+	errSameNamePart    = 1517
 )
 
 // IsDeadlock returns true if the error is a MySQL deadlock (ER_LOCK_DEADLOCK).
@@ -38,6 +39,12 @@ func IsDuplicateColumn(err error) bool {
 // IsTableExists returns true if the error is "table already exists".
 func IsTableExists(err error) bool {
 	return isMySQLError(err, errTableExists)
+}
+
+// IsDuplicatePartition returns true if the error is a MySQL duplicate partition
+// name (ER_SAME_NAME_PARTITION, error 1517).
+func IsDuplicatePartition(err error) bool {
+	return isMySQLError(err, errSameNamePart)
 }
 
 func isMySQLError(err error, code uint16) bool {

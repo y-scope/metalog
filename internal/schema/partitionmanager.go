@@ -13,6 +13,13 @@ import (
 	"github.com/y-scope/metalog/internal/timeutil"
 )
 
+// Structural partition names — these bookend the daily partition range and
+// are never dropped or merged away by cleanup.
+const (
+	partFloor  = "p_floor"  // catch-all for timestamps before the daily range
+	partFuture = "p_future" // catch-all for timestamps beyond the last daily partition
+)
+
 // PartitionManager manages MySQL RANGE partitions on the metadata table.
 // Partitions are daily, keyed on min_timestamp (epoch nanoseconds).
 type PartitionManager struct {
@@ -91,10 +98,17 @@ type PartitionInfo struct {
 
 // cleanupOldPartitions merges or drops old partitions to reduce partition count.
 //
-// Empty partitions (0 rows) are dropped outright — no data loss.
-// Consecutive sparse partitions older than cleanupAgeDays are merged into
-// a single partition covering the combined range. This preserves all rows
-// while reducing the number of partitions the query planner must evaluate.
+// Empty partitions (verified via COUNT(*), not the INFORMATION_SCHEMA estimate)
+// are dropped outright — no data loss. Sparse partitions older than
+// cleanupAgeDays are merged into p_floor via REORGANIZE PARTITION, expanding
+// its boundary. This preserves all rows while reducing the partition count.
+//
+// REORGANIZE requires consecutive partitions, so the merge builds a contiguous
+// run from p_floor through the last old partition. Any partition that couldn't
+// be dropped (failed DROP or non-empty) is included in the merge instead.
+//
+// p_floor and p_future are never dropped or merged away — they are the
+// structural bookends of the partition scheme.
 func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 	partitions, err := getExistingPartitions(ctx, pm.db, pm.tableName)
 	if err != nil {
@@ -104,24 +118,37 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -pm.cleanupAgeDays).Truncate(24 * time.Hour)
 	cutoffName := timeutil.DayPartitionName(cutoff.UnixNano())
 
-	// Collect old partitions eligible for merge/drop.
+	// Check if p_floor exists. Without it, we can't merge.
+	hasFloor := false
+	for _, p := range partitions {
+		if p.Name == partFloor {
+			hasFloor = true
+			break
+		}
+	}
+
+	// Collect old daily partitions eligible for cleanup.
+	// Skip p_floor (structural) and p_future, plus anything newer than the cutoff.
 	var candidates []PartitionInfo
 	for _, p := range partitions {
-		if p.Name == "p_future" || p.Name >= cutoffName {
+		if p.Name == partFloor || p.Name == partFuture || p.Name >= cutoffName {
 			continue
 		}
 		candidates = append(candidates, p)
 	}
 
-	// Drop empty partitions (safe — no data loss).
+	// Process candidates: drop verified-empty partitions, collect the rest for merge.
+	// REORGANIZE requires consecutive partitions, so if a DROP fails we must
+	// include the partition in the merge group to avoid gaps.
 	var mergeGroup []PartitionInfo
 	for _, p := range candidates {
-		if p.Rows == 0 {
+		if p.Rows == 0 && pm.isPartitionEmpty(ctx, p.Name) {
 			alterSQL := fmt.Sprintf("ALTER TABLE %s DROP PARTITION %s",
 				db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(p.Name))
 			if _, err := pm.db.ExecContext(ctx, alterSQL); err != nil {
-				pm.log.Warn("failed to drop empty partition",
+				pm.log.Warn("failed to drop empty partition, will include in merge",
 					zap.String("partition", p.Name), zap.Error(err))
+				mergeGroup = append(mergeGroup, p)
 			} else {
 				pm.log.Info("dropped empty partition", zap.String("partition", p.Name))
 			}
@@ -130,43 +157,50 @@ func (pm *PartitionManager) cleanupOldPartitions(ctx context.Context) error {
 		mergeGroup = append(mergeGroup, p)
 	}
 
-	// Merge consecutive sparse partitions into one.
-	// Need at least 2 to merge; the merged partition keeps the last one's boundary.
-	if len(mergeGroup) < 2 {
+	if len(mergeGroup) == 0 || !hasFloor {
 		return nil
 	}
 
-	// Build REORGANIZE PARTITION p1, p2, ... INTO (p_merged VALUES LESS THAN (boundary))
-	// The merged partition name is the first partition's name (preserves the oldest date
-	// for readability) and its boundary is the last partition's boundary.
-	mergedName := mergeGroup[0].Name
-	lastBoundary := mergeGroup[len(mergeGroup)-1].Description // LESS THAN value
+	// Merge old partitions into p_floor via REORGANIZE PARTITION.
+	// This expands p_floor's boundary to cover the merged range.
+	lastBoundary := mergeGroup[len(mergeGroup)-1].Description
 
-	var partNames string
+	partNames := db.QuoteIdentifier(partFloor)
 	var totalRows int64
-	for i, p := range mergeGroup {
-		if i > 0 {
-			partNames += ", "
-		}
-		partNames += db.QuoteIdentifier(p.Name)
+	for _, p := range mergeGroup {
+		partNames += ", " + db.QuoteIdentifier(p.Name)
 		totalRows += p.Rows
 	}
 
 	alterSQL := fmt.Sprintf("ALTER TABLE %s REORGANIZE PARTITION %s INTO (PARTITION %s VALUES LESS THAN (%s))",
-		db.QuoteIdentifier(pm.tableName), partNames, db.QuoteIdentifier(mergedName), lastBoundary)
+		db.QuoteIdentifier(pm.tableName), partNames, db.QuoteIdentifier(partFloor), lastBoundary)
 
 	if _, err := pm.db.ExecContext(ctx, alterSQL); err != nil {
-		pm.log.Warn("failed to merge partitions",
-			zap.String("into", mergedName), zap.Int("count", len(mergeGroup)), zap.Error(err))
+		pm.log.Warn("failed to merge partitions into floor",
+			zap.Int("count", len(mergeGroup)), zap.Error(err))
 		return nil
 	}
 
-	pm.log.Info("merged old partitions",
-		zap.String("into", mergedName),
+	pm.log.Info("merged old partitions into floor",
 		zap.Int("merged", len(mergeGroup)),
 		zap.Int64("totalRows", totalRows),
 	)
 	return nil
+}
+
+// isPartitionEmpty verifies a partition has zero rows via COUNT(*).
+// INFORMATION_SCHEMA.TABLE_ROWS is an InnoDB estimate that can be inaccurate;
+// this provides an exact check before dropping.
+func (pm *PartitionManager) isPartitionEmpty(ctx context.Context, partName string) bool {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s PARTITION (%s)",
+		db.QuoteIdentifier(pm.tableName), db.QuoteIdentifier(partName))
+	var count int64
+	if err := pm.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+		pm.log.Warn("failed to count partition rows, assuming non-empty",
+			zap.String("partition", partName), zap.Error(err))
+		return false
+	}
+	return count == 0
 }
 
 func (pm *PartitionManager) getExistingPartitions(ctx context.Context) ([]PartitionInfo, error) {
@@ -206,12 +240,17 @@ func createLookaheadPartitions(ctx context.Context, database *sql.DB, tableName 
 		boundary := nextDay.UnixNano()
 
 		alterSQL := fmt.Sprintf(
-			"ALTER TABLE %s REORGANIZE PARTITION p_future INTO (PARTITION %s VALUES LESS THAN (%d), PARTITION p_future VALUES LESS THAN MAXVALUE)",
-			db.QuoteIdentifier(tableName), db.QuoteIdentifier(partName), boundary,
+			"ALTER TABLE %s REORGANIZE PARTITION %s INTO (PARTITION %s VALUES LESS THAN (%d), PARTITION %s VALUES LESS THAN MAXVALUE)",
+			db.QuoteIdentifier(tableName), partFuture, db.QuoteIdentifier(partName), boundary, partFuture,
 		)
 
 		_, err := database.ExecContext(ctx, alterSQL)
 		if err != nil {
+			if db.IsDuplicatePartition(err) {
+				log.Debug("partition already exists (concurrent creation)",
+					zap.String("partition", partName))
+				continue
+			}
 			return created, fmt.Errorf("create partition %s: %w", partName, err)
 		}
 		created++

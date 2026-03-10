@@ -499,13 +499,14 @@ CREATE TABLE IF NOT EXISTS _clp_template (
 -- Coordinator creates partitions one week ahead and merges old sparse ones.
 --
 PARTITION BY RANGE (min_timestamp) (
-    -- Historical catch-all (also merge target for old sparse partitions).
+    -- Floor partition: catch-all for all timestamps before the daily range.
+    -- Also the merge target for old sparse partitions — cleanup expands its
+    -- boundary by REORGANIZE-ing old daily partitions into it.
     -- In normal operation this partition stays near-empty: retention enforcement
-    -- deletes expired files before their partitions are merged. The catch-all
-    -- only accumulates data if retention is disabled, the deletion pipeline is
-    -- broken, or a producer sends min_timestamp far in the past. All three are
-    -- operational failures, not expected workload.
-    PARTITION p_20240101 VALUES LESS THAN (1704067200000000000),
+    -- deletes expired files before their partitions are merged. It only
+    -- accumulates data if retention is disabled, the deletion pipeline is
+    -- broken, or a producer sends min_timestamp far in the past.
+    PARTITION p_floor VALUES LESS THAN (1704067200000000000),
 
     -- Daily partitions created dynamically by PartitionManager
     -- Naming: p_YYYYMMDD (for example, p_20240115)
@@ -531,9 +532,9 @@ PARTITION BY RANGE (min_timestamp) (
 -- Drop empty partition:
 --   ALTER TABLE _clp_template DROP PARTITION p_20231201;
 --
--- Merge sparse partition into historical catch-all:
---   ALTER TABLE _clp_template REORGANIZE PARTITION p_20240101, p_20240102 INTO (
---       PARTITION p_20240101 VALUES LESS THAN (1704153600000000000)
+-- Merge sparse partitions into floor:
+--   ALTER TABLE _clp_template REORGANIZE PARTITION p_floor, p_20240102 INTO (
+--       PARTITION p_floor VALUES LESS THAN (1704153600000000000)
 --   );
 --
 -- Query partition info:

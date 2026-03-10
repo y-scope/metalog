@@ -176,7 +176,7 @@ Each metadata table uses daily RANGE partitions on `min_timestamp` (event time, 
 ### Partition Layout
 
 ```
-p_20240101          ← historical catch-all (also merge target for sparse partitions)
+p_floor             ← floor partition: catch-all for old timestamps, merge target for sparse partitions
 p_20260215          ← daily partition (one per day, named p_YYYYMMDD)
 p_20260216
 p_20260217
@@ -185,7 +185,7 @@ p_20260225          ← lookahead (7 days ahead by default)
 p_future            ← MAXVALUE safety net (should rarely contain data)
 ```
 
-Each daily partition covers one UTC day: `VALUES LESS THAN (start_of_next_day_epoch)`. Daily partitions are created dynamically by the `PartitionManager`; the schema DDL seeds only the historical catch-all and `p_future`.
+Each daily partition covers one UTC day: `VALUES LESS THAN (start_of_next_day_epoch)`. Daily partitions are created dynamically by the `PartitionManager`; the schema DDL seeds only the structural bookends `p_floor` and `p_future`.
 
 ### Composite Primary Key
 
@@ -216,7 +216,7 @@ Time-range queries skip irrelevant partitions entirely — a query for the last 
 
 #### Partition Housekeeping
 
-After the retention strategy deletes expired rows, old partitions become empty or sparse. The partition manager drops empty partitions and merges consecutive old partitions — removing dead partition shells and reducing the number of partitions the optimizer must consider.
+After the retention strategy deletes expired rows, old partitions become empty or sparse. The partition manager drops empty partitions and merges sparse partitions into `p_floor` — removing dead partition shells and reducing the number of partitions the optimizer must consider.
 
 #### The `p_future` Trap
 
@@ -230,10 +230,9 @@ The `PartitionManager` runs two operations per table:
 
 Creates daily partitions for today through today + N days (default: 7).
 
-- If `p_future` exists → `REORGANIZE PARTITION p_future INTO (p_YYYYMMDD ..., p_future MAXVALUE)` — splits the catch-all
-- If no `p_future` → `ADD PARTITION (p_YYYYMMDD ...)`
+- `REORGANIZE PARTITION p_future INTO (p_YYYYMMDD ..., p_future MAXVALUE)` — splits the catch-all
 - Already-existing partitions are skipped (idempotent)
-- Duplicate partition errors are caught and logged (safe for concurrent execution)
+- Duplicate partition errors from concurrent execution are tolerated (logged at debug level)
 
 Creating a lookahead partition is a **metadata-only DDL operation** (milliseconds) when `p_future` is empty, which is the normal case. Even creating all 7 default lookahead partitions completes well under a second. It only becomes expensive when `p_future` contains data that must be redistributed.
 
@@ -244,9 +243,9 @@ For partitions older than the cleanup age (default: 90 days):
 | Condition | Action | SQL |
 |-----------|--------|-----|
 | Empty (0 rows) | Drop | `ALTER TABLE DROP PARTITION p_YYYYMMDD` |
-| Consecutive old partitions | Merge into historical catch-all | `ALTER TABLE REORGANIZE PARTITION p_20240101, p_YYYYMMDD INTO (p_20240101 ...)` |
+| Sparse (has rows) | Merge into `p_floor` | `ALTER TABLE REORGANIZE PARTITION p_floor, p_YYYYMMDD INTO (p_floor ...)` |
 
-Partitions with data are never dropped — old partitions are merged into the historical catch-all (`p_20240101`) via `REORGANIZE PARTITION`, which preserves all rows while reducing the partition count. Recent partitions are never touched, regardless of row count — only partitions older than the cleanup age are candidates.
+`p_floor` and `p_future` are structural bookends — never dropped or merged away. `p_floor` catches data with timestamps before the daily range and serves as the merge target for old sparse partitions. Empty old partitions are dropped; sparse ones are merged into `p_floor` via `REORGANIZE PARTITION`, expanding its boundary while preserving all rows. Recent partitions are never touched, regardless of row count.
 
 ### When Maintenance Runs
 
