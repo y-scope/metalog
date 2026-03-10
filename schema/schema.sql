@@ -444,13 +444,16 @@ CREATE TABLE IF NOT EXISTS _clp_template (
                                     's57','s58','s59','s60','s61','s62','s63','s64') NULL,
 
     -- ========================================================================
-    -- EXTENSION DATA (Msgpack-encoded) - USE SPARINGLY
+    -- EXTENSION DATA (LZ4-compressed msgpack) - USE SPARINGLY
     -- ========================================================================
     --
     -- Escape hatch for opaque metadata. NULL for most rows.
-    -- Primary use case: sketch data for split pruning.
+    -- Primary use case: sketch data (bloom/cuckoo filters) for split pruning.
     -- Not indexed—MySQL can't filter on contents; requires application-layer decoding.
-    -- Msgpack for cross-database compatibility (MySQL and MariaDB).
+    --
+    -- Wire format: LZ4 frame (standard framing, self-describing) wrapping msgpack.
+    -- Same encoding as the task queue's input/output columns.
+    -- Msgpack chosen for cross-database compatibility (MySQL and MariaDB).
     --
     -- If data is needed for queries or present on most files, add an explicit column instead.
     --

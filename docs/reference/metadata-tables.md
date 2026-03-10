@@ -53,7 +53,7 @@ All three categories compose with `dim_*` filters: because dimension filters eli
 -- Physically: WHERE agg_f03 > agg_f04 (where f03=error GTE, f04=fatal GTE)
 ```
 
-**Sketches** (`sketches` + `ext`): For high-cardinality fields (user_id, trace_id) where dimension columns are impractical. The `sketches` SET column declares which sketch types are present (e.g., bloom filter, cuckoo filter); the `ext` MEDIUMBLOB stores the serialized filter data.
+**Sketches** (`sketches` + `ext`): For high-cardinality fields (user_id, trace_id) where dimension columns are impractical. The `sketches` SET column declares which sketch slots contain data; the `ext` MEDIUMBLOB stores the serialized filter data as LZ4-compressed msgpack (standard LZ4 frame format).
 
 The metastore's role with sketches is purely **"definitely not" elimination**: if the sketch says a value is absent, the file is skipped entirely; if the sketch says the value might be present, the file passes through. Sketches have false positives — a file that passes the sketch filter may not actually contain the value — so the query engine filters surviving files to produce exact results. This two-phase model (metastore prunes → query engine confirms) means sketches enable split pruning but not early termination: the metastore cannot guarantee a match count, only the absence of one.
 

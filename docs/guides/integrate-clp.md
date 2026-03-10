@@ -74,9 +74,7 @@ The `input` column in `_task_queue` is a **LZ4-compressed msgpack blob** (not JS
 
 **Wire format:**
 
-```
-[4 bytes big-endian: uncompressed length] [LZ4-compressed msgpack]
-```
+Standard LZ4 frame wrapping msgpack-encoded data. Decode with any LZ4 frame-compatible library (e.g., `lz4.NewReader` in Go, `lz4.frame` in Python).
 
 **Msgpack layout** — a 7-element array (positional, field names are not encoded):
 
