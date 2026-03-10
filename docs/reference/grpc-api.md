@@ -50,7 +50,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 | `SplitQueryService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
 | `MetadataService` | `metadata.proto` | `metadatapb` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
 | `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
-| `AdminService` | `coordinator.proto` | `coordinatorpb` | 9090 | Runtime table registration (no restart required) |
+| `AdminService` | `admin.proto` | `coordinatorpb` | 9090 | Runtime table and column management |
 
 ### Proto Definitions
 
@@ -88,12 +88,13 @@ Each `IngestRequest` carries a `MetadataRecord` with typed `DimEntry` and `AggEn
 `SelfDescribingEntry` escape hatch for producers that use the slash-delimited key format. See
 [Naming Conventions](naming-conventions.md) for the key format specification.
 
-**`coordinator.proto` — runtime table management:**
+**`admin.proto` — runtime table and column management:**
 
 ```protobuf
 service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
   rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse);
+  rpc InvalidateColumn(InvalidateColumnRequest) returns (InvalidateColumnResponse);
 }
 ```
 
@@ -691,6 +692,61 @@ grpcurl -plaintext -d '{
 | `NOT_FOUND` | No ACTIVE column with that name in the specified table |
 | `INTERNAL` | Database error |
 
+### `InvalidateColumn`
+
+```
+rpc InvalidateColumn(InvalidateColumnRequest) returns (InvalidateColumnResponse)
+```
+
+Marks a dimension or aggregation column as INVALIDATED. The column immediately stops receiving
+new data and is excluded from queries. A background recycler will eventually clear remaining
+data and make the physical slot available for reuse once records have aged past retention
+(default: 30 days).
+
+#### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `table_name` | string | Yes | Metadata table name |
+| `column_name` | string | Yes | Physical column name (must start with `dim_f` or `agg_f`) |
+
+#### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `column_name` | string | The column that was invalidated |
+| `previous_key` | string | The `dim_key` or `agg_key` that was mapped to this column |
+
+#### Column lifecycle
+
+1. **ACTIVE** — column is in use, receiving data, visible to queries.
+2. **INVALIDATED** — column is excluded from ingestion and queries. Data remains in the physical column.
+3. **AVAILABLE** — background recycler has cleared remaining data (after retention). Slot is available for reuse by a new dimension or aggregation key.
+
+The recycler runs hourly, waits at least 30 days after invalidation, and only clears columns
+with fewer than 10,000 remaining non-NULL rows. Retention naturally drops most partitions
+before the recycler acts, making the cleanup essentially free.
+
+#### Examples
+
+```bash
+# Invalidate a dimension column
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "column_name": "dim_f03"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/InvalidateColumn
+# → {"columnName":"dim_f03","previousKey":"k8s.pod.name"}
+```
+
+#### Error codes
+
+| gRPC Status | Cause |
+|-------------|-------|
+| `INVALID_ARGUMENT` | `table_name` blank, `column_name` blank, or invalid prefix |
+| `NOT_FOUND` | No ACTIVE column with that name (may have been invalidated concurrently) |
+| `INTERNAL` | Database error |
+
 ### CLI: `metalog admin register-table`
 
 A convenience wrapper that calls `AdminService.RegisterTable` via gRPC.
@@ -760,7 +816,7 @@ proto/
 ├── splits.proto            — SplitQueryService + Split messages
 ├── metadata.proto          — MetadataService messages
 ├── ingestion.proto         — MetadataIngestionService + record types
-└── coordinator.proto       — AdminService messages
+└── admin.proto             — AdminService messages
 ```
 
 ---

@@ -16,7 +16,7 @@ The legacy approach (e.g., `dim_str128_application_id`) had three problems:
 |---------|--------|
 | Special characters | Field names with `.`, `@`, `-`, `/` (e.g., `@timestamp`, `k8s.pod`) can't be encoded in SQL column names |
 | 64-char MySQL limit | The `dim_str128_` prefix alone eats 11+ characters, leaving little room |
-| No column recycling | `DROP COLUMN` triggers a full table rebuild on MariaDB — so stale columns accumulate forever |
+| No `DROP COLUMN` | `DROP COLUMN` triggers a full table rebuild on MariaDB — so columns are recycled in-place via the INVALIDATED → AVAILABLE lifecycle |
 
 ### The ColumnRegistry Solution
 
@@ -86,26 +86,33 @@ CREATE TABLE _agg_registry (
 ## Column Lifecycle
 
 ```
-                  ┌──────────────────────────────────────────────────────┐
-                  │                                                      │
-                  ▼                                                      │
-             [Slot allocated]                                            │
-                  │                                                      │
-                  ▼                                                      │
-              ACTIVE ──► [width expansion crosses 255-byte boundary] ──► INVALIDATED
-                  │
-                  ▼
-           [future: recycled]
-              AVAILABLE
+              ┌─────────────────────────────────────────────────────────┐
+              │                                                         │
+              ▼                                                         │
+         [Slot allocated or reclaimed]                                  │
+              │                                                         │
+              ▼                                                         │
+          ACTIVE ──► [admin InvalidateColumn / width crosses 255] ──► INVALIDATED
+              ▲                                                         │
+              │                                                         ▼
+              │                                              [recycler: wait for retention,
+              │                                               clear remaining rows]
+              │                                                         │
+              └──────────── [claimAvailableSlot] ◄── AVAILABLE ◄────────┘
 ```
 
 | Status | Description |
 |--------|-------------|
-| `ACTIVE` | Slot is in use; column contains live data |
-| `INVALIDATED` | Slot retired (e.g., type widened beyond in-place limit); column still exists but is ignored |
-| `AVAILABLE` | Slot available for reuse (reserved for future recycling support) |
+| `ACTIVE` | Slot is in use; column receives data and is visible to queries |
+| `INVALIDATED` | Slot retired via `InvalidateColumn` RPC or width-boundary crossing; excluded from ingestion and queries |
+| `AVAILABLE` | Background recycler has cleared remaining data; slot is ready for reuse by a new key |
 
-`ColumnRegistry` only loads `ACTIVE` entries at startup. `INVALIDATED` columns remain in the table physically (dropping them would require a full rebuild on MariaDB) but are excluded from all queries.
+`ColumnRegistry` only loads `ACTIVE` entries at startup. `INVALIDATED` columns remain in the
+table physically (dropping them would require a full rebuild on MariaDB) but are excluded from
+ingestion and queries. A background recycler scans hourly for `INVALIDATED` columns that have
+aged past 30 days and have fewer than 10,000 remaining non-NULL rows, clears the data, and
+transitions them to `AVAILABLE`. New allocations check for `AVAILABLE` slots before creating
+fresh columns, using `SELECT ... FOR UPDATE SKIP LOCKED` for deadlock-free concurrent claiming.
 
 ## Slot Allocation
 
