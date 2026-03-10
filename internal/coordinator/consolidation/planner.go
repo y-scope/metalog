@@ -278,7 +278,10 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		)
 		if err != nil {
 			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.taskID), zap.Error(err))
-			p.inFlight.Remove(payload.IRPaths)
+			// Keep paths in inFlight — removing them would allow
+			// FindConsolidationPending to re-queue the same files as a
+			// duplicate task. The next cycle will retry MarkArchiveClosed
+			// against the still-completed task.
 			continue
 		}
 
