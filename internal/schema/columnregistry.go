@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -1169,7 +1170,7 @@ func (cr *ColumnRegistry) claimAvailableDimSlotTx(ctx context.Context, dimKey, b
 			" WHERE table_name = ? AND state = ? ORDER BY column_name LIMIT 1 FOR UPDATE SKIP LOCKED",
 		cr.tableName, statusAvailable)
 	if err := row.Scan(&colName, &oldBaseType, &oldWidth); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", 0, nil
 		}
 		return "", "", 0, fmt.Errorf("scan available dim slot: %w", err)
@@ -1268,7 +1269,7 @@ func (cr *ColumnRegistry) claimAvailableAggSlotTx(ctx context.Context, aggKey, a
 			" WHERE table_name = ? AND state = ? ORDER BY column_name LIMIT 1 FOR UPDATE SKIP LOCKED",
 		cr.tableName, statusAvailable)
 	if err := row.Scan(&colName, &oldValueType); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", nil
 		}
 		return "", "", fmt.Errorf("scan available agg slot: %w", err)

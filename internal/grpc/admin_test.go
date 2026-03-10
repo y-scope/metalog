@@ -119,23 +119,20 @@ func TestSetColumnAlias_InvalidAliasPattern(t *testing.T) {
 		"has#hash",
 	}
 	for _, alias := range invalid {
-		h := &AdminHandler{}
-		req := &pb.SetColumnAliasRequest{
-			TableName:   "test_table",
-			ColumnName:  "dim_f01",
-			AliasColumn: alias,
-		}
-		_, err := h.SetColumnAlias(context.Background(), req)
-
-		assertGRPCCode(t, err, codes.InvalidArgument)
-		if err == nil {
-			t.Errorf("SetColumnAlias(alias=%q) = nil, want InvalidArgument", alias)
-		}
+		t.Run(alias, func(t *testing.T) {
+			h := &AdminHandler{}
+			req := &pb.SetColumnAliasRequest{
+				TableName:   "test_table",
+				ColumnName:  "dim_f01",
+				AliasColumn: alias,
+			}
+			_, err := h.SetColumnAlias(context.Background(), req)
+			assertGRPCCode(t, err, codes.InvalidArgument)
+		})
 	}
 }
 
 func TestSetColumnAlias_ValidAliasPatterns(t *testing.T) {
-	// These should pass validation. We use sqlmock so the DB call succeeds.
 	valid := []string{
 		"region",
 		"service_name",
@@ -146,21 +143,19 @@ func TestSetColumnAlias_ValidAliasPatterns(t *testing.T) {
 		"CamelCase",
 	}
 	for _, alias := range valid {
-		h, mock := newTestAdminHandler(t)
-		mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
-		req := &pb.SetColumnAliasRequest{
-			TableName:   "test_table",
-			ColumnName:  "dim_f01",
-			AliasColumn: alias,
-		}
-		_, err := h.SetColumnAlias(context.Background(), req)
-
-		if err != nil {
-			st, ok := status.FromError(err)
-			if ok && st.Code() == codes.InvalidArgument {
-				t.Errorf("SetColumnAlias(alias=%q) rejected as InvalidArgument: %s", alias, st.Message())
+		t.Run(alias, func(t *testing.T) {
+			h, mock := newTestAdminHandler(t)
+			mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
+			req := &pb.SetColumnAliasRequest{
+				TableName:   "test_table",
+				ColumnName:  "dim_f01",
+				AliasColumn: alias,
 			}
-		}
+			_, err := h.SetColumnAlias(context.Background(), req)
+			if err != nil {
+				t.Errorf("SetColumnAlias(alias=%q) unexpected error: %v", alias, err)
+			}
+		})
 	}
 }
 

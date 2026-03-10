@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -25,7 +26,7 @@ type AdminHandler struct {
 	log          *zap.Logger
 }
 
-// NewAdminHandler creates a AdminHandler.
+// NewAdminHandler creates an AdminHandler.
 func NewAdminHandler(reg *coordinator.TableRegistration, db *sql.DB, log *zap.Logger) *AdminHandler {
 	return &AdminHandler{registration: reg, db: db, log: log}
 }
@@ -179,7 +180,7 @@ func (h *AdminHandler) InvalidateColumn(ctx context.Context, req *pb.InvalidateC
 		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
 		ToSql()
 	if err := h.db.QueryRowContext(ctx, selectQuery, selectArgs...).Scan(&previousKey); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Errorf(codes.NotFound,
 				"no ACTIVE column %s in table %s", colName, tableName)
 		}
