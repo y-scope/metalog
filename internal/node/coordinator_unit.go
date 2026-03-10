@@ -165,12 +165,18 @@ func (u *CoordinatorUnit) Restart() {
 func (u *CoordinatorUnit) Start() {
 	u.log.Info("starting coordinator unit")
 
+	// Snapshot ctx under the mutex so goroutine closures capture a stable value.
+	// Without this, Restart() writing u.ctx races with goroutines reading it.
+	u.ctxMu.Lock()
+	ctx := u.ctx
+	u.ctxMu.Unlock()
+
 	// Planner goroutine (nil when consolidation_enabled=false)
 	if u.planner != nil {
 		u.wg.Add(1)
 		go func() {
 			defer u.wg.Done()
-			u.planner.Run(u.ctx)
+			u.planner.Run(ctx)
 		}()
 	}
 
@@ -178,21 +184,28 @@ func (u *CoordinatorUnit) Start() {
 	u.wg.Add(1)
 	go func() {
 		defer u.wg.Done()
-		u.runPartitionMaintenance()
+		u.runPartitionMaintenance(ctx)
 	}()
 
 	// Alias refresh goroutine
 	u.wg.Add(1)
 	go func() {
 		defer u.wg.Done()
-		u.runAliasRefresh()
+		u.runAliasRefresh(ctx)
 	}()
 
 	// Retention cleanup goroutine
 	u.wg.Add(1)
 	go func() {
 		defer u.wg.Done()
-		u.retentionStrategy.Run(u.ctx)
+		u.retentionStrategy.Run(ctx)
+	}()
+
+	// Column recycler goroutine
+	u.wg.Add(1)
+	go func() {
+		defer u.wg.Done()
+		u.registry.RunRecycler(ctx)
 	}()
 
 	// Kafka consumer goroutine
@@ -200,7 +213,7 @@ func (u *CoordinatorUnit) Start() {
 		u.wg.Add(1)
 		go func() {
 			defer u.wg.Done()
-			u.kafkaConsumer.Run(u.ctx)
+			u.kafkaConsumer.Run(ctx)
 		}()
 	}
 
@@ -210,22 +223,26 @@ func (u *CoordinatorUnit) Start() {
 // Stop signals all goroutines to stop and waits for completion.
 func (u *CoordinatorUnit) Stop() {
 	u.log.Info("stopping coordinator unit")
-	u.cancel()
+	u.ctxMu.Lock()
+	cancel := u.cancel
+	u.ctxMu.Unlock()
+	cancel()
 	u.wg.Wait()
 	u.log.Info("coordinator unit stopped")
 }
 
-func (u *CoordinatorUnit) runAliasRefresh() {
+func (u *CoordinatorUnit) runAliasRefresh(ctx context.Context) {
 	ticker := time.NewTicker(aliasRefreshInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-u.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := u.registry.RefreshAliases(u.ctx); err != nil {
-				if u.ctx.Err() != nil {
+			u.progress.RecordProgress()
+			if err := u.registry.RefreshAliases(ctx); err != nil {
+				if ctx.Err() != nil {
 					return
 				}
 				u.log.Warn("alias refresh failed", zap.Error(err))
@@ -234,22 +251,24 @@ func (u *CoordinatorUnit) runAliasRefresh() {
 	}
 }
 
-func (u *CoordinatorUnit) runPartitionMaintenance() {
+func (u *CoordinatorUnit) runPartitionMaintenance(ctx context.Context) {
 	// Run once on startup
-	if err := u.partition.RunMaintenance(u.ctx); err != nil {
+	if err := u.partition.RunMaintenance(ctx); err != nil {
 		u.log.Warn("initial partition maintenance failed", zap.Error(err))
 	}
+	u.progress.RecordProgress()
 
 	ticker := time.NewTicker(partitionMaintenanceInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-u.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := u.partition.RunMaintenance(u.ctx); err != nil {
-				if u.ctx.Err() != nil {
+			u.progress.RecordProgress()
+			if err := u.partition.RunMaintenance(ctx); err != nil {
+				if ctx.Err() != nil {
 					return
 				}
 				u.log.Warn("partition maintenance failed", zap.Error(err))

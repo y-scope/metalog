@@ -33,14 +33,22 @@ func newTestRegistry(t *testing.T) *schema.ColumnRegistry {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
-	// Mock dim registry query
+	// Mock high-water-mark queries (loadSlotHighWaterMarks scans ALL states)
+	dimHWM := sqlmock.NewRows([]string{"column_name"}).
+		AddRow("dim_f01").AddRow("dim_f02").AddRow("dim_f03")
+	mock.ExpectQuery("SELECT").WillReturnRows(dimHWM)
+	aggHWM := sqlmock.NewRows([]string{"column_name"}).
+		AddRow("agg_f01").AddRow("agg_f02").AddRow("agg_f03").AddRow("agg_f04")
+	mock.ExpectQuery("SELECT").WillReturnRows(aggHWM)
+
+	// Mock ACTIVE dim registry query
 	dimRows := sqlmock.NewRows([]string{"column_name", "base_type", "width", "dim_key", "alias_column"}).
 		AddRow("dim_f01", "str", 64, "region", nil).
 		AddRow("dim_f02", "str_utf8", 128, "service.name", nil).
 		AddRow("dim_f03", "str", 255, "k8s.pod.name", nil)
 	mock.ExpectQuery("SELECT").WillReturnRows(dimRows)
 
-	// Mock agg registry query
+	// Mock ACTIVE agg registry query
 	aggRows := sqlmock.NewRows([]string{"column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column"}).
 		AddRow("agg_f01", "status_code", nil, "EQ", "INT", nil).
 		AddRow("agg_f02", "response_time", "p99", "GTE", "FLOAT", nil).

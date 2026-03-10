@@ -16,8 +16,25 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
-// statusActive is the registry status for columns available for use.
-const statusActive = "ACTIVE"
+// Registry column states.
+const (
+	statusActive      = "ACTIVE"
+	statusInvalidated = "INVALIDATED"
+	statusAvailable   = "AVAILABLE"
+)
+
+// recyclerScanInterval is how often the background recycler checks for reclaimable slots.
+const recyclerScanInterval = time.Hour
+
+// recyclerMinAge is the minimum time a column must be INVALIDATED before recycling.
+// This should exceed the table's retention period so most data has been naturally purged.
+const recyclerMinAge = 30 * 24 * time.Hour
+
+// recyclerMaxNonNullRows is the maximum number of non-NULL rows allowed for a
+// column to be eligible for recycling. If the column has more rows than this,
+// the recycler skips it and retries on the next cycle — retention will continue
+// dropping partitions until the count falls below the threshold.
+const recyclerMaxNonNullRows = 10000
 
 // DimRegistryEntry represents an active dimension column mapping.
 type DimRegistryEntry struct {
@@ -100,7 +117,13 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 }
 
 func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
-	// Load dims
+	// Compute nextDimSlot from ALL registry entries (ACTIVE + INVALIDATED + AVAILABLE)
+	// since physical columns exist for all states.
+	if err := cr.loadSlotHighWaterMarks(ctx); err != nil {
+		return err
+	}
+
+	// Load ACTIVE dims into in-memory maps.
 	dimQuery, dimArgs, _ := sq.Select("column_name", "base_type", "width", "dim_key", "alias_column").
 		From(metastore.DimRegistryTable).
 		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
@@ -126,16 +149,12 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 		}
 		cr.dimByKey[e.DimKey] = e
 		cr.dimByColumn[e.ColumnName] = e
-		slot := parseSlotNumber(e.ColumnName, metastore.DimColumnPrefix)
-		if slot >= cr.nextDimSlot {
-			cr.nextDimSlot = slot + 1
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	// Load aggs
+	// Load ACTIVE aggs into in-memory maps.
 	aggQuery, aggArgs, _ := sq.Select("column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column").
 		From(metastore.AggRegistryTable).
 		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
@@ -161,12 +180,48 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 		key := AggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
 		cr.aggByKey[key] = e
 		cr.aggByColumn[e.ColumnName] = e
-		slot := parseSlotNumber(e.ColumnName, metastore.AggColumnPrefix)
-		if slot >= cr.nextAggSlot {
-			cr.nextAggSlot = slot + 1
-		}
 	}
 	return rows2.Err()
+}
+
+// loadSlotHighWaterMarks queries all registry entries (any state) to find the
+// highest allocated slot number. This prevents new allocations from colliding
+// with INVALIDATED or AVAILABLE slots that still have physical columns.
+func (cr *ColumnRegistry) loadSlotHighWaterMarks(ctx context.Context) error {
+	for _, cfg := range []struct {
+		table  string
+		prefix string
+		target *int
+	}{
+		{metastore.DimRegistryTable, metastore.DimColumnPrefix, &cr.nextDimSlot},
+		{metastore.AggRegistryTable, metastore.AggColumnPrefix, &cr.nextAggSlot},
+	} {
+		q, args, _ := sq.Select("column_name").
+			From(cfg.table).
+			Where(sq.Eq{"table_name": cr.tableName}).
+			ToSql()
+		rows, err := cr.db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("load slot high water marks (%s): %w", cfg.table, err)
+		}
+		for rows.Next() {
+			var colName string
+			if err := rows.Scan(&colName); err != nil {
+				rows.Close()
+				return err
+			}
+			slot := parseSlotNumber(colName, cfg.prefix)
+			if slot >= *cfg.target {
+				*cfg.target = slot + 1
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	return nil
 }
 
 // ResolveDim returns the column name for a dimension key, or empty string if not found.
@@ -222,12 +277,15 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
-	// Double-check under lock
+	// Double-check under lock: another goroutine may have widened concurrently.
 	cr.mu.RLock()
 	current := cr.dimByKey[entry.DimKey]
 	cr.mu.RUnlock()
-	if current != nil && newWidth <= current.Width {
-		return current.ColumnName, nil
+	if current != nil {
+		entry = current // use the latest snapshot for all subsequent checks
+	}
+	if newWidth <= entry.Width {
+		return entry.ColumnName, nil
 	}
 
 	// Prevent crossing the 255→256 boundary: InnoDB changes the VARCHAR
@@ -253,13 +311,31 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 		return "", fmt.Errorf("expand dim width: %w", err)
 	}
 
-	// Update registry
+	// Update registry (only if still ACTIVE — a concurrent invalidation should not be overwritten).
 	updateQuery, updateArgs, _ := sq.Update(metastore.DimRegistryTable).
 		Set("width", newWidth).
-		Where(sq.Eq{"table_name": cr.tableName, "column_name": entry.ColumnName}).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": entry.ColumnName, "state": statusActive}).
 		ToSql()
-	if _, err = cr.db.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
+	res, err := cr.db.ExecContext(ctx, updateQuery, updateArgs...)
+	if err != nil {
 		return "", fmt.Errorf("update dim width registry: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		// The column was concurrently invalidated. The ALTER TABLE already widened
+		// the physical column, so update the width on the INVALIDATED row to keep
+		// the registry consistent with the physical schema. Without this, a future
+		// reclaim would read the stale narrow width and might issue a narrowing ALTER.
+		cr.log.Warn("dim column was concurrently invalidated during width expansion",
+			zap.String("column", entry.ColumnName), zap.String("dimKey", entry.DimKey))
+		fixQ, fixArgs, _ := sq.Update(metastore.DimRegistryTable).
+			Set("width", newWidth).
+			Where(sq.Eq{"table_name": cr.tableName, "column_name": entry.ColumnName}).
+			ToSql()
+		if _, fixErr := cr.db.ExecContext(ctx, fixQ, fixArgs...); fixErr != nil {
+			cr.log.Error("failed to sync width on invalidated column",
+				zap.String("column", entry.ColumnName), zap.Error(fixErr))
+		}
+		return "", fmt.Errorf("expand dim width: column %s concurrently invalidated", entry.ColumnName)
 	}
 
 	// Replace entry with a new immutable copy to avoid data races with readers.
@@ -297,6 +373,13 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 		return e.ColumnName, nil
 	}
 	cr.mu.RUnlock()
+
+	// Try to claim an AVAILABLE (recycled) slot before allocating a fresh one.
+	if col, err := cr.claimAvailableDimSlot(ctx, dimKey, baseType, width); err != nil {
+		return "", err
+	} else if col != "" {
+		return col, nil
+	}
 
 	// Slot numbers above 99 would produce 3-digit names (dim_f100) breaking the
 	// %02d zero-padding convention.
@@ -374,6 +457,13 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 		return e.ColumnName, nil
 	}
 	cr.mu.RUnlock()
+
+	// Try to claim an AVAILABLE (recycled) slot before allocating a fresh one.
+	if col, err := cr.claimAvailableAggSlot(ctx, aggKey, aggValue, aggType, valueType); err != nil {
+		return "", err
+	} else if col != "" {
+		return col, nil
+	}
 
 	if cr.nextAggSlot > 99 {
 		return "", fmt.Errorf("agg slot exhausted: slot %d exceeds maximum 99", cr.nextAggSlot)
@@ -513,12 +603,30 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 		return result, nil
 	}
 
+	// Try to claim AVAILABLE (recycled) slots first, one at a time.
+	var stillPending []DimRequest
+	for _, r := range pending {
+		col, err := cr.claimAvailableDimSlot(ctx, r.DimKey, r.BaseType, r.Width)
+		if err != nil {
+			return nil, err
+		}
+		if col != "" {
+			result[r.DimKey] = col
+		} else {
+			stillPending = append(stillPending, r)
+		}
+	}
+	pending = stillPending
+	if len(pending) == 0 {
+		return result, nil
+	}
+
 	if cr.nextDimSlot+len(pending)-1 > 99 {
 		return nil, fmt.Errorf("dim slot exhausted: need %d slots, have %d remaining",
 			len(pending), 100-cr.nextDimSlot)
 	}
 
-	// Assign slot names and SQL types.
+	// Assign slot names and SQL types for fresh allocations.
 	type pendingSlot struct {
 		req     DimRequest
 		colName string
@@ -638,6 +746,25 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 	}
 	cr.mu.RUnlock()
 
+	if len(pending) == 0 {
+		return result, nil
+	}
+
+	// Try to claim AVAILABLE (recycled) slots first.
+	var stillPending []AggRequest
+	for _, r := range pending {
+		col, err := cr.claimAvailableAggSlot(ctx, r.AggKey, r.AggValue, r.AggType, r.ValueType)
+		if err != nil {
+			return nil, err
+		}
+		if col != "" {
+			key := AggCacheKey(r.AggKey, r.AggValue, r.AggType)
+			result[key] = col
+		} else {
+			stillPending = append(stillPending, r)
+		}
+	}
+	pending = stillPending
 	if len(pending) == 0 {
 		return result, nil
 	}
@@ -780,9 +907,31 @@ func (cr *ColumnRegistry) RefreshAliases(ctx context.Context) error {
 
 	// Apply changes under write lock. Replace entries whose alias changed
 	// with new immutable copies to avoid data races with concurrent readers.
+	// Also evict entries that are no longer ACTIVE (e.g., invalidated via admin API).
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 
+	// Evict dims no longer in ACTIVE set.
+	for colName, e := range cr.dimByColumn {
+		if _, stillActive := dimAliases[colName]; !stillActive {
+			delete(cr.dimByColumn, colName)
+			delete(cr.dimByKey, e.DimKey)
+			cr.log.Info("evicted invalidated dim from cache",
+				zap.String("column", colName), zap.String("dimKey", e.DimKey))
+		}
+	}
+	// Evict aggs no longer in ACTIVE set.
+	for colName, e := range cr.aggByColumn {
+		if _, stillActive := aggAliases[colName]; !stillActive {
+			delete(cr.aggByColumn, colName)
+			key := AggCacheKey(e.AggKey, e.AggValue, e.AggregationType)
+			delete(cr.aggByKey, key)
+			cr.log.Info("evicted invalidated agg from cache",
+				zap.String("column", colName), zap.String("aggKey", e.AggKey))
+		}
+	}
+
+	// Update aliases for remaining ACTIVE entries.
 	for colName, newAlias := range dimAliases {
 		if e, ok := cr.dimByColumn[colName]; ok && e.AliasCol != newAlias {
 			updated := &DimRegistryEntry{
@@ -954,6 +1103,397 @@ func (r *RegistrySnapshot) AllAggEntries() []*AggRegistryEntry {
 		entries = append(entries, e)
 	}
 	return entries
+}
+
+// claimAvailableDimSlot attempts to reuse an AVAILABLE slot for a new dimension.
+// Must be called with allocMu held. Returns ("", nil) if no AVAILABLE slot exists.
+//
+// DDL (ALTER TABLE) is issued outside the transaction because MariaDB/MySQL
+// implicitly commits any open transaction before executing DDL. The flow:
+//  1. Transaction: SELECT FOR UPDATE SKIP LOCKED → UPDATE state to ACTIVE → COMMIT
+//  2. ALTER TABLE MODIFY COLUMN (outside tx, if type changed)
+//  3. On ALTER failure: revert registry row back to AVAILABLE
+//
+// Deadlock-free by design: the SELECT uses SKIP LOCKED, so competing coordinators
+// never block on each other's row locks — they simply skip already-locked rows and
+// claim the next available slot. No gap locks are involved because the query targets
+// concrete, existing rows (WHERE state = 'AVAILABLE' ... LIMIT 1).
+func (cr *ColumnRegistry) claimAvailableDimSlot(ctx context.Context, dimKey, baseType string, width int) (string, error) {
+	colName, oldBaseType, oldWidth, err := cr.claimAvailableDimSlotTx(ctx, dimKey, baseType, width)
+	if err != nil || colName == "" {
+		return colName, err
+	}
+
+	// Phase 2: ALTER TABLE outside transaction if type changed.
+	newSQLType := dimSQLType(baseType, width)
+	oldSQLType := dimSQLType(oldBaseType, oldWidth)
+	if newSQLType != oldSQLType {
+		_, err := cr.db.ExecContext(ctx,
+			fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+				db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), newSQLType, lockMode(cr.isMariaDB)))
+		if err != nil {
+			// Revert: mark slot back to AVAILABLE so it's not permanently lost.
+			cr.revertClaimedSlot(ctx, metastore.DimRegistryTable, colName)
+			return "", fmt.Errorf("modify recycled dim column type: %w", err)
+		}
+	}
+
+	// Phase 3: update in-memory cache.
+	entry := &DimRegistryEntry{
+		TableName: cr.tableName, ColumnName: colName,
+		BaseType: baseType, Width: width, DimKey: dimKey, Status: statusActive,
+	}
+	cr.mu.Lock()
+	cr.dimByKey[dimKey] = entry
+	cr.dimByColumn[colName] = entry
+	cr.mu.Unlock()
+
+	cr.log.Info("claimed recycled dim slot",
+		zap.String("dimKey", dimKey), zap.String("column", colName))
+	return colName, nil
+}
+
+// claimAvailableDimSlotTx performs the transactional part of claiming an AVAILABLE dim slot.
+// Returns the claimed column name, old base type, old width, or ("", "", 0, nil) if none available.
+func (cr *ColumnRegistry) claimAvailableDimSlotTx(ctx context.Context, dimKey, baseType string, width int) (string, string, int, error) {
+	tx, err := cr.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("begin tx for available dim slot: %w", err)
+	}
+	defer tx.Rollback()
+
+	var colName, oldBaseType string
+	var oldWidth sql.NullInt32
+	row := tx.QueryRowContext(ctx,
+		"SELECT column_name, base_type, width FROM "+metastore.DimRegistryTable+
+			" WHERE table_name = ? AND state = ? ORDER BY column_name LIMIT 1 FOR UPDATE SKIP LOCKED",
+		cr.tableName, statusAvailable)
+	if err := row.Scan(&colName, &oldBaseType, &oldWidth); err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", 0, nil
+		}
+		return "", "", 0, fmt.Errorf("scan available dim slot: %w", err)
+	}
+
+	now := time.Now().UnixNano()
+	updateQ, updateArgs, _ := sq.Update(metastore.DimRegistryTable).
+		Set("state", statusActive).
+		Set("dim_key", dimKey).
+		Set("base_type", baseType).
+		Set("width", width).
+		Set("alias_column", nil).
+		Set("invalidated_at", nil).
+		Set("created_at", now).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": colName, "state": statusAvailable}).
+		ToSql()
+	res, err := tx.ExecContext(ctx, updateQ, updateArgs...)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("claim available dim slot: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return "", "", 0, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", 0, fmt.Errorf("commit available dim slot: %w", err)
+	}
+
+	var oldW int
+	if oldWidth.Valid {
+		oldW = int(oldWidth.Int32)
+	}
+	return colName, oldBaseType, oldW, nil
+}
+
+// claimAvailableAggSlot attempts to reuse an AVAILABLE slot for a new aggregation.
+// Must be called with allocMu held. Returns ("", nil) if no AVAILABLE slot exists.
+// Same DDL-outside-transaction and deadlock-free SKIP LOCKED pattern as
+// claimAvailableDimSlot — see that function's doc comment for details.
+func (cr *ColumnRegistry) claimAvailableAggSlot(ctx context.Context, aggKey, aggValue, aggType, valueType string) (string, error) {
+	colName, oldValueType, err := cr.claimAvailableAggSlotTx(ctx, aggKey, aggValue, aggType, valueType)
+	if err != nil || colName == "" {
+		return colName, err
+	}
+
+	// Phase 2: ALTER TABLE outside transaction (only if physical type changed).
+	// Agg columns are BIGINT (INT) or DOUBLE (FLOAT). Skipping when types match
+	// avoids an unnecessary DDL operation.
+	newSQLType := "BIGINT"
+	if valueType == "FLOAT" {
+		newSQLType = "DOUBLE"
+	}
+	oldSQLType := "BIGINT"
+	if oldValueType == "FLOAT" {
+		oldSQLType = "DOUBLE"
+	}
+	if newSQLType != oldSQLType {
+		_, err = cr.db.ExecContext(ctx,
+			fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
+				db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), newSQLType, lockMode(cr.isMariaDB)))
+		if err != nil {
+			cr.revertClaimedSlot(ctx, metastore.AggRegistryTable, colName)
+			return "", fmt.Errorf("modify recycled agg column type: %w", err)
+		}
+	}
+
+	// Phase 3: update in-memory cache.
+	cacheKey := AggCacheKey(aggKey, aggValue, aggType)
+	entry := &AggRegistryEntry{
+		TableName: cr.tableName, ColumnName: colName,
+		AggKey: aggKey, AggValue: aggValue,
+		AggregationType: aggType, ValueType: valueType, Status: statusActive,
+	}
+	cr.mu.Lock()
+	cr.aggByKey[cacheKey] = entry
+	cr.aggByColumn[colName] = entry
+	cr.mu.Unlock()
+
+	cr.log.Info("claimed recycled agg slot",
+		zap.String("aggKey", aggKey), zap.String("column", colName))
+	return colName, nil
+}
+
+// claimAvailableAggSlotTx performs the transactional part of claiming an AVAILABLE agg slot.
+// Returns the claimed column name and the old value_type (for ALTER TABLE comparison).
+func (cr *ColumnRegistry) claimAvailableAggSlotTx(ctx context.Context, aggKey, aggValue, aggType, valueType string) (string, string, error) {
+	tx, err := cr.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("begin tx for available agg slot: %w", err)
+	}
+	defer tx.Rollback()
+
+	var colName, oldValueType string
+	row := tx.QueryRowContext(ctx,
+		"SELECT column_name, value_type FROM "+metastore.AggRegistryTable+
+			" WHERE table_name = ? AND state = ? ORDER BY column_name LIMIT 1 FOR UPDATE SKIP LOCKED",
+		cr.tableName, statusAvailable)
+	if err := row.Scan(&colName, &oldValueType); err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("scan available agg slot: %w", err)
+	}
+
+	now := time.Now().UnixNano()
+	updateQ, updateArgs, _ := sq.Update(metastore.AggRegistryTable).
+		Set("state", statusActive).
+		Set("agg_key", aggKey).
+		Set("agg_value", nullIfEmpty(aggValue)).
+		Set("aggregation_type", aggType).
+		Set("value_type", valueType).
+		Set("alias_column", nil).
+		Set("invalidated_at", nil).
+		Set("created_at", now).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": colName, "state": statusAvailable}).
+		ToSql()
+	res, err := tx.ExecContext(ctx, updateQ, updateArgs...)
+	if err != nil {
+		return "", "", fmt.Errorf("claim available agg slot: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return "", "", nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("commit available agg slot: %w", err)
+	}
+	return colName, oldValueType, nil
+}
+
+// revertClaimedSlot reverts a claimed slot back to AVAILABLE after a failed ALTER TABLE.
+// Only reverts if the column is still ACTIVE — if a concurrent admin InvalidateColumn
+// already transitioned it to INVALIDATED, the revert is a no-op and the recycler will
+// handle it through the normal INVALIDATED → AVAILABLE path (with data nulling).
+func (cr *ColumnRegistry) revertClaimedSlot(ctx context.Context, registryTable, colName string) {
+	update := sq.Update(registryTable).
+		Set("state", statusAvailable).
+		Set("alias_column", nil).
+		Set("invalidated_at", nil).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": colName, "state": statusActive})
+
+	if registryTable == metastore.DimRegistryTable {
+		update = update.Set("dim_key", "")
+	} else {
+		update = update.Set("agg_key", "").Set("agg_value", nil)
+	}
+
+	revertQ, revertArgs, _ := update.ToSql()
+	if _, err := cr.db.ExecContext(ctx, revertQ, revertArgs...); err != nil {
+		cr.log.Error("failed to revert claimed slot after ALTER failure",
+			zap.String("column", colName), zap.Error(err))
+	}
+}
+
+// RunRecycler periodically scans for INVALIDATED columns that have aged past
+// retention and recycles them to AVAILABLE. The flow:
+//  1. Find INVALIDATED entries where invalidated_at + recyclerMinAge < now.
+//  2. Check if the physical column has any non-NULL rows remaining.
+//  3. If few remain, NULL them out in batches.
+//  4. Mark the registry entry as AVAILABLE for reuse.
+func (cr *ColumnRegistry) RunRecycler(ctx context.Context) {
+	// Run once on startup to reclaim any aged-out INVALIDATED slots immediately.
+	if err := cr.recycleOnce(ctx); err != nil && ctx.Err() == nil {
+		cr.log.Warn("initial column recycler scan failed", zap.Error(err))
+	}
+
+	ticker := time.NewTicker(recyclerScanInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := cr.recycleOnce(ctx); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				cr.log.Warn("column recycler cycle failed", zap.Error(err))
+			}
+		}
+	}
+}
+
+// recycleOnce runs one recycler scan cycle for both dim and agg registries.
+func (cr *ColumnRegistry) recycleOnce(ctx context.Context) error {
+	cutoff := time.Now().Add(-recyclerMinAge).UnixNano()
+
+	for _, cfg := range []struct {
+		table  string
+		prefix string
+		keyCol string
+	}{
+		{metastore.DimRegistryTable, metastore.DimColumnPrefix, "dim_key"},
+		{metastore.AggRegistryTable, metastore.AggColumnPrefix, "agg_key"},
+	} {
+		if err := cr.recycleRegistry(ctx, cfg.table, cfg.prefix, cfg.keyCol, cutoff); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recycleRegistry scans one registry table for recyclable INVALIDATED entries.
+func (cr *ColumnRegistry) recycleRegistry(ctx context.Context, registryTable, colPrefix, keyCol string, cutoff int64) error {
+	// Find INVALIDATED entries past the minimum age.
+	q, args, _ := sq.Select("column_name", keyCol).
+		From(registryTable).
+		Where(sq.And{
+			sq.Eq{"table_name": cr.tableName, "state": statusInvalidated},
+			sq.LtOrEq{"invalidated_at": cutoff},
+		}).
+		ToSql()
+	rows, err := cr.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("recycler scan %s: %w", registryTable, err)
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		colName string
+		key     string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.colName, &c.key); err != nil {
+			return err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, c := range candidates {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := cr.recycleColumn(ctx, registryTable, c.colName, c.key); err != nil {
+			cr.log.Warn("failed to recycle column",
+				zap.String("column", c.colName), zap.Error(err))
+			continue
+		}
+	}
+	return nil
+}
+
+// recycleColumn checks if a column has few enough non-NULL rows to recycle,
+// NULLs out remaining data, and marks it AVAILABLE.
+//
+// The slow work (COUNT + batch UPDATE) runs without allocMu to avoid starving
+// allocation requests. This is safe because the column is INVALIDATED — no new
+// data can be written to it. The final state transition to AVAILABLE is done
+// under allocMu with a WHERE state = INVALIDATED guard, ensuring atomicity
+// with concurrent claimAvailable*Slot calls.
+func (cr *ColumnRegistry) recycleColumn(ctx context.Context, registryTable, colName, key string) error {
+	quotedTable := db.QuoteIdentifier(cr.tableName)
+	quotedCol := db.QuoteIdentifier(colName)
+
+	// Count remaining non-NULL rows. If above threshold, skip — retention will
+	// continue dropping partitions until the count falls below.
+	var remaining int64
+	err := cr.db.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT COUNT(%s) FROM %s", quotedCol, quotedTable)).
+		Scan(&remaining)
+	if err != nil {
+		return fmt.Errorf("count non-null rows: %w", err)
+	}
+	if remaining > recyclerMaxNonNullRows {
+		cr.log.Info("recycler: column still has too many rows, skipping",
+			zap.String("column", colName), zap.Int64("remaining", remaining),
+			zap.Int("threshold", recyclerMaxNonNullRows))
+		return nil
+	}
+
+	// NULL out remaining rows in batches.
+	if remaining > 0 {
+		for {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			res, err := cr.db.ExecContext(ctx,
+				fmt.Sprintf("UPDATE %s SET %s = NULL WHERE %s IS NOT NULL LIMIT 10000",
+					quotedTable, quotedCol, quotedCol))
+			if err != nil {
+				return fmt.Errorf("null out column data: %w", err)
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				break
+			}
+			cr.log.Info("recycler: cleared column data batch",
+				zap.String("column", colName), zap.Int64("rows", affected))
+		}
+	}
+
+	// Hold allocMu for the state transition only, so claimAvailable*Slot cannot
+	// observe the slot as AVAILABLE until the data has been fully cleared.
+	cr.allocMu.Lock()
+	defer cr.allocMu.Unlock()
+
+	// Mark as AVAILABLE: clear metadata, reset key to empty string (NOT NULL constraint).
+	update := sq.Update(registryTable).
+		Set("state", statusAvailable).
+		Set("invalidated_at", nil).
+		Set("alias_column", nil).
+		Where(sq.Eq{"table_name": cr.tableName, "column_name": colName, "state": statusInvalidated})
+
+	// Clear the key column: dim_key or agg_key (NOT NULL, use empty string sentinel).
+	if registryTable == metastore.DimRegistryTable {
+		update = update.Set("dim_key", "")
+	} else {
+		update = update.Set("agg_key", "").Set("agg_value", nil)
+	}
+
+	updateQ, updateArgs, _ := update.ToSql()
+	if _, err := cr.db.ExecContext(ctx, updateQ, updateArgs...); err != nil {
+		return fmt.Errorf("mark column available: %w", err)
+	}
+
+	cr.log.Info("recycled column to AVAILABLE",
+		zap.String("column", colName), zap.String("previousKey", key))
+	return nil
 }
 
 // AggCacheKey builds the composite key for agg cache lookups.

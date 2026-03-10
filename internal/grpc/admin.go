@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"regexp"
 	"strings"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -140,5 +141,80 @@ func (h *AdminHandler) SetColumnAlias(ctx context.Context, req *pb.SetColumnAlia
 	return &pb.SetColumnAliasResponse{
 		ColumnName:  colName,
 		AliasColumn: alias,
+	}, nil
+}
+
+// InvalidateColumn marks a dimension or aggregation column as INVALIDATED.
+// The column immediately stops receiving new data and is excluded from queries.
+// A background recycler will eventually clear remaining data and make the slot
+// available for reuse once records have aged past retention.
+func (h *AdminHandler) InvalidateColumn(ctx context.Context, req *pb.InvalidateColumnRequest) (*pb.InvalidateColumnResponse, error) {
+	tableName := req.GetTableName()
+	colName := req.GetColumnName()
+
+	if tableName == "" {
+		return nil, status.Error(codes.InvalidArgument, "table_name is required")
+	}
+	if colName == "" {
+		return nil, status.Error(codes.InvalidArgument, "column_name is required")
+	}
+
+	// Determine registry table and key column from prefix.
+	var registryTable, keyColumn string
+	if strings.HasPrefix(colName, metastore.DimColumnPrefix) {
+		registryTable = metastore.DimRegistryTable
+		keyColumn = "dim_key"
+	} else if strings.HasPrefix(colName, metastore.AggColumnPrefix) {
+		registryTable = metastore.AggRegistryTable
+		keyColumn = "agg_key"
+	} else {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"column_name must start with %q or %q", metastore.DimColumnPrefix, metastore.AggColumnPrefix)
+	}
+
+	// Read the current key before invalidating (low-frequency admin op, no TOCTOU concern).
+	var previousKey string
+	selectQuery, selectArgs, _ := sq.Select(keyColumn).
+		From(registryTable).
+		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
+		ToSql()
+	if err := h.db.QueryRowContext(ctx, selectQuery, selectArgs...).Scan(&previousKey); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, status.Errorf(codes.NotFound,
+				"no ACTIVE column %s in table %s", colName, tableName)
+		}
+		return nil, status.Errorf(codes.Internal, "lookup column: %v", err)
+	}
+
+	// Transition ACTIVE → INVALIDATED.
+	now := time.Now().UnixNano()
+	updateQuery, updateArgs, _ := sq.Update(registryTable).
+		Set("state", "INVALIDATED").
+		Set("invalidated_at", now).
+		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
+		ToSql()
+	res, err := h.db.ExecContext(ctx, updateQuery, updateArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "invalidate column: %v", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
+	}
+	if affected == 0 {
+		// Race: another request invalidated it between our SELECT and UPDATE.
+		return nil, status.Errorf(codes.NotFound,
+			"no ACTIVE column %s in table %s (may have been invalidated concurrently)", colName, tableName)
+	}
+
+	h.log.Info("column invalidated",
+		zap.String("table", tableName),
+		zap.String("column", colName),
+		zap.String("previousKey", previousKey),
+	)
+
+	return &pb.InvalidateColumnResponse{
+		ColumnName:  colName,
+		PreviousKey: previousKey,
 	}, nil
 }

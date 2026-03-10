@@ -199,6 +199,97 @@ func TestSetColumnAlias_AggPrefix(t *testing.T) {
 	}
 }
 
+// --- InvalidateColumn validation tests ---
+
+func TestInvalidateColumn_EmptyTableName(t *testing.T) {
+	h := &AdminHandler{}
+	req := &pb.InvalidateColumnRequest{ColumnName: "dim_f01"}
+	_, err := h.InvalidateColumn(context.Background(), req)
+
+	assertGRPCCode(t, err, codes.InvalidArgument)
+	assertContains(t, status.Convert(err).Message(), "table_name is required")
+}
+
+func TestInvalidateColumn_EmptyColumnName(t *testing.T) {
+	h := &AdminHandler{}
+	req := &pb.InvalidateColumnRequest{TableName: "test_table"}
+	_, err := h.InvalidateColumn(context.Background(), req)
+
+	assertGRPCCode(t, err, codes.InvalidArgument)
+	assertContains(t, status.Convert(err).Message(), "column_name is required")
+}
+
+func TestInvalidateColumn_InvalidPrefix(t *testing.T) {
+	h := &AdminHandler{}
+	req := &pb.InvalidateColumnRequest{
+		TableName:  "test_table",
+		ColumnName: "some_random_col",
+	}
+	_, err := h.InvalidateColumn(context.Background(), req)
+
+	assertGRPCCode(t, err, codes.InvalidArgument)
+	assertContains(t, status.Convert(err).Message(), "must start with")
+}
+
+func TestInvalidateColumn_NotFound(t *testing.T) {
+	h, mock := newTestAdminHandler(t)
+	// SELECT returns no rows
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"dim_key"}))
+	req := &pb.InvalidateColumnRequest{
+		TableName:  "test_table",
+		ColumnName: "dim_f01",
+	}
+	_, err := h.InvalidateColumn(context.Background(), req)
+
+	assertGRPCCode(t, err, codes.NotFound)
+}
+
+func TestInvalidateColumn_Success_Dim(t *testing.T) {
+	h, mock := newTestAdminHandler(t)
+	// SELECT returns the current key
+	mock.ExpectQuery("SELECT").WillReturnRows(
+		sqlmock.NewRows([]string{"dim_key"}).AddRow("k8s.pod.name"))
+	// UPDATE sets state=INVALIDATED
+	mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req := &pb.InvalidateColumnRequest{
+		TableName:  "test_table",
+		ColumnName: "dim_f03",
+	}
+	resp, err := h.InvalidateColumn(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.ColumnName != "dim_f03" {
+		t.Errorf("expected column_name=dim_f03, got %s", resp.ColumnName)
+	}
+	if resp.PreviousKey != "k8s.pod.name" {
+		t.Errorf("expected previous_key=k8s.pod.name, got %s", resp.PreviousKey)
+	}
+}
+
+func TestInvalidateColumn_Success_Agg(t *testing.T) {
+	h, mock := newTestAdminHandler(t)
+	mock.ExpectQuery("SELECT").WillReturnRows(
+		sqlmock.NewRows([]string{"agg_key"}).AddRow("level"))
+	mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req := &pb.InvalidateColumnRequest{
+		TableName:  "test_table",
+		ColumnName: "agg_f02",
+	}
+	resp, err := h.InvalidateColumn(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.ColumnName != "agg_f02" {
+		t.Errorf("expected column_name=agg_f02, got %s", resp.ColumnName)
+	}
+	if resp.PreviousKey != "level" {
+		t.Errorf("expected previous_key=level, got %s", resp.PreviousKey)
+	}
+}
+
 // --- test helpers ---
 
 func assertGRPCCode(t *testing.T, err error, code codes.Code) {
