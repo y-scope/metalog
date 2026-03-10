@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
-// source: coordinator.proto
+// source: admin.proto
 
 package coordinatorpb
 
@@ -32,7 +32,7 @@ type KafkaConfig struct {
 
 func (x *KafkaConfig) Reset() {
 	*x = KafkaConfig{}
-	mi := &file_coordinator_proto_msgTypes[0]
+	mi := &file_admin_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -44,7 +44,7 @@ func (x *KafkaConfig) String() string {
 func (*KafkaConfig) ProtoMessage() {}
 
 func (x *KafkaConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[0]
+	mi := &file_admin_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -57,7 +57,7 @@ func (x *KafkaConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KafkaConfig.ProtoReflect.Descriptor instead.
 func (*KafkaConfig) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{0}
+	return file_admin_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *KafkaConfig) GetTopic() string {
@@ -94,7 +94,7 @@ type RegisterTableRequest struct {
 
 func (x *RegisterTableRequest) Reset() {
 	*x = RegisterTableRequest{}
-	mi := &file_coordinator_proto_msgTypes[1]
+	mi := &file_admin_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -106,7 +106,7 @@ func (x *RegisterTableRequest) String() string {
 func (*RegisterTableRequest) ProtoMessage() {}
 
 func (x *RegisterTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[1]
+	mi := &file_admin_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -119,7 +119,7 @@ func (x *RegisterTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterTableRequest.ProtoReflect.Descriptor instead.
 func (*RegisterTableRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{1}
+	return file_admin_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RegisterTableRequest) GetTableName() string {
@@ -167,7 +167,7 @@ type RegisterTableResponse struct {
 
 func (x *RegisterTableResponse) Reset() {
 	*x = RegisterTableResponse{}
-	mi := &file_coordinator_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -179,7 +179,7 @@ func (x *RegisterTableResponse) String() string {
 func (*RegisterTableResponse) ProtoMessage() {}
 
 func (x *RegisterTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -192,7 +192,7 @@ func (x *RegisterTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterTableResponse.ProtoReflect.Descriptor instead.
 func (*RegisterTableResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{2}
+	return file_admin_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RegisterTableResponse) GetTableName() string {
@@ -223,7 +223,7 @@ type SetColumnAliasRequest struct {
 
 func (x *SetColumnAliasRequest) Reset() {
 	*x = SetColumnAliasRequest{}
-	mi := &file_coordinator_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -235,7 +235,7 @@ func (x *SetColumnAliasRequest) String() string {
 func (*SetColumnAliasRequest) ProtoMessage() {}
 
 func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -248,7 +248,7 @@ func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasRequest.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{3}
+	return file_admin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SetColumnAliasRequest) GetTableName() string {
@@ -282,7 +282,7 @@ type SetColumnAliasResponse struct {
 
 func (x *SetColumnAliasResponse) Reset() {
 	*x = SetColumnAliasResponse{}
-	mi := &file_coordinator_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -294,7 +294,7 @@ func (x *SetColumnAliasResponse) String() string {
 func (*SetColumnAliasResponse) ProtoMessage() {}
 
 func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -307,7 +307,7 @@ func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasResponse.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{4}
+	return file_admin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SetColumnAliasResponse) GetColumnName() string {
@@ -324,11 +324,119 @@ func (x *SetColumnAliasResponse) GetAliasColumn() string {
 	return ""
 }
 
-var File_coordinator_proto protoreflect.FileDescriptor
+// InvalidateColumn marks a dimension or aggregation column as INVALIDATED.
+// The column immediately stops receiving new data and is excluded from queries.
+// A background recycler will eventually clear remaining data and make the slot
+// available for reuse once records have aged past retention.
+type InvalidateColumnRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`    // required
+	ColumnName    string                 `protobuf:"bytes,2,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"` // required — physical name (dim_f01, agg_f02)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_coordinator_proto_rawDesc = "" +
+func (x *InvalidateColumnRequest) Reset() {
+	*x = InvalidateColumnRequest{}
+	mi := &file_admin_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvalidateColumnRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvalidateColumnRequest) ProtoMessage() {}
+
+func (x *InvalidateColumnRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvalidateColumnRequest.ProtoReflect.Descriptor instead.
+func (*InvalidateColumnRequest) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InvalidateColumnRequest) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *InvalidateColumnRequest) GetColumnName() string {
+	if x != nil {
+		return x.ColumnName
+	}
+	return ""
+}
+
+type InvalidateColumnResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ColumnName    string                 `protobuf:"bytes,1,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`
+	PreviousKey   string                 `protobuf:"bytes,2,opt,name=previous_key,json=previousKey,proto3" json:"previous_key,omitempty"` // dim_key or agg_key that was invalidated
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InvalidateColumnResponse) Reset() {
+	*x = InvalidateColumnResponse{}
+	mi := &file_admin_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvalidateColumnResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvalidateColumnResponse) ProtoMessage() {}
+
+func (x *InvalidateColumnResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvalidateColumnResponse.ProtoReflect.Descriptor instead.
+func (*InvalidateColumnResponse) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *InvalidateColumnResponse) GetColumnName() string {
+	if x != nil {
+		return x.ColumnName
+	}
+	return ""
+}
+
+func (x *InvalidateColumnResponse) GetPreviousKey() string {
+	if x != nil {
+		return x.PreviousKey
+	}
+	return ""
+}
+
+var File_admin_proto protoreflect.FileDescriptor
+
+const file_admin_proto_rawDesc = "" +
 	"\n" +
-	"\x11coordinator.proto\x12#com.yscope.metalog.coordinator.grpc\"\x7f\n" +
+	"\vadmin.proto\x12#com.yscope.metalog.coordinator.grpc\"\x7f\n" +
 	"\vKafkaConfig\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12+\n" +
 	"\x11bootstrap_servers\x18\x02 \x01(\tR\x10bootstrapServers\x12-\n" +
@@ -355,66 +463,80 @@ const file_coordinator_proto_rawDesc = "" +
 	"\x16SetColumnAliasResponse\x12\x1f\n" +
 	"\vcolumn_name\x18\x01 \x01(\tR\n" +
 	"columnName\x12!\n" +
-	"\falias_column\x18\x02 \x01(\tR\valiasColumn2\xa3\x02\n" +
+	"\falias_column\x18\x02 \x01(\tR\valiasColumn\"Y\n" +
+	"\x17InvalidateColumnRequest\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
+	"\vcolumn_name\x18\x02 \x01(\tR\n" +
+	"columnName\"^\n" +
+	"\x18InvalidateColumnResponse\x12\x1f\n" +
+	"\vcolumn_name\x18\x01 \x01(\tR\n" +
+	"columnName\x12!\n" +
+	"\fprevious_key\x18\x02 \x01(\tR\vpreviousKey2\xb5\x03\n" +
 	"\fAdminService\x12\x86\x01\n" +
 	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponse\x12\x89\x01\n" +
-	"\x0eSetColumnAlias\x12:.com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest\x1a;.com.yscope.metalog.coordinator.grpc.SetColumnAliasResponseBa\n" +
+	"\x0eSetColumnAlias\x12:.com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest\x1a;.com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse\x12\x8f\x01\n" +
+	"\x10InvalidateColumn\x12<.com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest\x1a=.com.yscope.metalog.coordinator.grpc.InvalidateColumnResponseBa\n" +
 	")com.yscope.metalog.coordinator.grpc.protoP\x01Z2github.com/y-scope/metalog/gen/proto/coordinatorpbb\x06proto3"
 
 var (
-	file_coordinator_proto_rawDescOnce sync.Once
-	file_coordinator_proto_rawDescData []byte
+	file_admin_proto_rawDescOnce sync.Once
+	file_admin_proto_rawDescData []byte
 )
 
-func file_coordinator_proto_rawDescGZIP() []byte {
-	file_coordinator_proto_rawDescOnce.Do(func() {
-		file_coordinator_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_coordinator_proto_rawDesc), len(file_coordinator_proto_rawDesc)))
+func file_admin_proto_rawDescGZIP() []byte {
+	file_admin_proto_rawDescOnce.Do(func() {
+		file_admin_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)))
 	})
-	return file_coordinator_proto_rawDescData
+	return file_admin_proto_rawDescData
 }
 
-var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_coordinator_proto_goTypes = []any{
-	(*KafkaConfig)(nil),            // 0: com.yscope.metalog.coordinator.grpc.KafkaConfig
-	(*RegisterTableRequest)(nil),   // 1: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	(*RegisterTableResponse)(nil),  // 2: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	(*SetColumnAliasRequest)(nil),  // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	(*SetColumnAliasResponse)(nil), // 4: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_admin_proto_goTypes = []any{
+	(*KafkaConfig)(nil),              // 0: com.yscope.metalog.coordinator.grpc.KafkaConfig
+	(*RegisterTableRequest)(nil),     // 1: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	(*RegisterTableResponse)(nil),    // 2: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	(*SetColumnAliasRequest)(nil),    // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	(*SetColumnAliasResponse)(nil),   // 4: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	(*InvalidateColumnRequest)(nil),  // 5: com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	(*InvalidateColumnResponse)(nil), // 6: com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
 }
-var file_coordinator_proto_depIdxs = []int32{
+var file_admin_proto_depIdxs = []int32{
 	0, // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest.kafka:type_name -> com.yscope.metalog.coordinator.grpc.KafkaConfig
 	1, // 1: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
 	3, // 2: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	2, // 3: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	4, // 4: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
+	5, // 3: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:input_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	2, // 4: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	4, // 5: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	6, // 6: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:output_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_coordinator_proto_init() }
-func file_coordinator_proto_init() {
-	if File_coordinator_proto != nil {
+func init() { file_admin_proto_init() }
+func file_admin_proto_init() {
+	if File_admin_proto != nil {
 		return
 	}
-	file_coordinator_proto_msgTypes[1].OneofWrappers = []any{}
+	file_admin_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_proto_rawDesc), len(file_coordinator_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_coordinator_proto_goTypes,
-		DependencyIndexes: file_coordinator_proto_depIdxs,
-		MessageInfos:      file_coordinator_proto_msgTypes,
+		GoTypes:           file_admin_proto_goTypes,
+		DependencyIndexes: file_admin_proto_depIdxs,
+		MessageInfos:      file_admin_proto_msgTypes,
 	}.Build()
-	File_coordinator_proto = out.File
-	file_coordinator_proto_goTypes = nil
-	file_coordinator_proto_depIdxs = nil
+	File_admin_proto = out.File
+	file_admin_proto_goTypes = nil
+	file_admin_proto_depIdxs = nil
 }

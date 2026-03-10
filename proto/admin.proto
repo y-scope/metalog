@@ -13,6 +13,7 @@ option go_package = "github.com/y-scope/metalog/gen/proto/coordinatorpb";
 service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
   rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse);
+  rpc InvalidateColumn(InvalidateColumnRequest) returns (InvalidateColumnResponse);
 }
 
 message KafkaConfig {
@@ -46,4 +47,18 @@ message SetColumnAliasRequest {
 message SetColumnAliasResponse {
   string column_name  = 1;
   string alias_column = 2; // the alias now stored (empty if cleared)
+}
+
+// InvalidateColumn marks a dimension or aggregation column as INVALIDATED.
+// The column immediately stops receiving new data and is excluded from queries.
+// A background recycler will eventually clear remaining data and make the slot
+// available for reuse once records have aged past retention.
+message InvalidateColumnRequest {
+  string table_name  = 1; // required
+  string column_name = 2; // required — physical name (dim_f01, agg_f02)
+}
+
+message InvalidateColumnResponse {
+  string column_name    = 1;
+  string previous_key   = 2; // dim_key or agg_key that was invalidated
 }

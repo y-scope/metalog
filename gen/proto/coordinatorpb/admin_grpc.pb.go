@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
-// source: coordinator.proto
+// source: admin.proto
 
 package coordinatorpb
 
@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AdminService_RegisterTable_FullMethodName  = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
-	AdminService_SetColumnAlias_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias"
+	AdminService_RegisterTable_FullMethodName    = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
+	AdminService_SetColumnAlias_FullMethodName   = "/com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias"
+	AdminService_InvalidateColumn_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/InvalidateColumn"
 )
 
 // AdminServiceClient is the client API for AdminService service.
@@ -34,6 +35,7 @@ const (
 type AdminServiceClient interface {
 	RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error)
 	SetColumnAlias(ctx context.Context, in *SetColumnAliasRequest, opts ...grpc.CallOption) (*SetColumnAliasResponse, error)
+	InvalidateColumn(ctx context.Context, in *InvalidateColumnRequest, opts ...grpc.CallOption) (*InvalidateColumnResponse, error)
 }
 
 type adminServiceClient struct {
@@ -64,6 +66,16 @@ func (c *adminServiceClient) SetColumnAlias(ctx context.Context, in *SetColumnAl
 	return out, nil
 }
 
+func (c *adminServiceClient) InvalidateColumn(ctx context.Context, in *InvalidateColumnRequest, opts ...grpc.CallOption) (*InvalidateColumnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InvalidateColumnResponse)
+	err := c.cc.Invoke(ctx, AdminService_InvalidateColumn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AdminServiceServer is the server API for AdminService service.
 // All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
@@ -75,6 +87,7 @@ func (c *adminServiceClient) SetColumnAlias(ctx context.Context, in *SetColumnAl
 type AdminServiceServer interface {
 	RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error)
 	SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error)
+	InvalidateColumn(context.Context, *InvalidateColumnRequest) (*InvalidateColumnResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
 
@@ -90,6 +103,9 @@ func (UnimplementedAdminServiceServer) RegisterTable(context.Context, *RegisterT
 }
 func (UnimplementedAdminServiceServer) SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetColumnAlias not implemented")
+}
+func (UnimplementedAdminServiceServer) InvalidateColumn(context.Context, *InvalidateColumnRequest) (*InvalidateColumnResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InvalidateColumn not implemented")
 }
 func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
 func (UnimplementedAdminServiceServer) testEmbeddedByValue()                      {}
@@ -148,6 +164,24 @@ func _AdminService_SetColumnAlias_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_InvalidateColumn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InvalidateColumnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).InvalidateColumn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_InvalidateColumn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).InvalidateColumn(ctx, req.(*InvalidateColumnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -163,7 +197,11 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SetColumnAlias",
 			Handler:    _AdminService_SetColumnAlias_Handler,
 		},
+		{
+			MethodName: "InvalidateColumn",
+			Handler:    _AdminService_InvalidateColumn_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "coordinator.proto",
+	Metadata: "admin.proto",
 }

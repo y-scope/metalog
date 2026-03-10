@@ -39,7 +39,7 @@ proto:
 		--proto_path=$(PROTO_DIR) \
 		--go_out=$(GEN_DIR)/coordinatorpb --go_opt=paths=source_relative \
 		--go-grpc_out=$(GEN_DIR)/coordinatorpb --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/coordinator.proto
+		$(PROTO_DIR)/admin.proto
 
 # Run unit tests
 test:
