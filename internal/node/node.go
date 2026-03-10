@@ -325,8 +325,8 @@ func (n *Node) startCoordinator(tableName string) error {
 		return fmt.Errorf("start coordinator %s: ensure table: %w", tableName, err)
 	}
 
-	// Read feature flags from _table_config.
-	flags, err := n.registry.GetTableFeatureFlags(n.ctx, tableName)
+	// Read unified table config blob from _table_config.
+	tableCfg, err := n.registry.GetTableConfig(n.ctx, tableName)
 	if err != nil {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
@@ -336,7 +336,7 @@ func (n *Node) startCoordinator(tableName string) error {
 	if err != nil {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
-	if !flags.KafkaPollerEnabled {
+	if !tableCfg.KafkaPollerEnabled {
 		kafkaCfg = config.TableKafkaConfig{} // disable consumer creation
 	} else if kafkaCfg.Topic == "" {
 		n.log.Warn("no Kafka config in DB for table — coordinator will run without Kafka consumer",
@@ -348,20 +348,14 @@ func (n *Node) startCoordinator(tableName string) error {
 		return err
 	}
 
-	// Read retention strategy from DB (per-table config).
-	retentionCfg, err := n.registry.GetRetentionConfig(n.ctx, tableName)
-	if err != nil {
-		return fmt.Errorf("start coordinator %s: %w", tableName, err)
-	}
-
 	n.log.Info("starting coordinator",
 		zap.String("table", tableName),
-		zap.Bool("kafkaPoller", flags.KafkaPollerEnabled),
-		zap.Bool("consolidation", flags.ConsolidationEnabled),
-		zap.String("retentionType", retentionCfg.Type),
+		zap.Bool("kafkaPoller", tableCfg.KafkaPollerEnabled),
+		zap.Bool("consolidation", tableCfg.ConsolidationEnabled),
+		zap.String("retentionType", tableCfg.RetentionType),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, retentionCfg, flags, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}

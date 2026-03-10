@@ -131,10 +131,10 @@ func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string)
 		return fmt.Errorf("insert _table: %w", err)
 	}
 
-	// _table_config — default to poller enabled; admin API may override.
+	// _table_config — NULL config blob means all defaults apply.
 	q2, a2, _ := sq.Insert(metastore.TableRegistryConfig).Options("IGNORE").
-		Columns("table_name", "kafka_poller_enabled").
-		Values(tableName, true).
+		Columns("table_name").
+		Values(tableName).
 		ToSql()
 	if _, err := database.ExecContext(ctx, q2, a2...); err != nil {
 		return fmt.Errorf("insert _table_config: %w", err)

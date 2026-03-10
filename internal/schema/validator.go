@@ -91,8 +91,7 @@ var systemTableColumns = map[string][]columnSpec{
 	},
 	metastore.TableRegistryConfig: {
 		{"table_name", "varchar"},
-		{"kafka_poller_enabled", ""},
-		{"consolidation_enabled", ""},
+		{"config", "mediumtext"},
 	},
 	metastore.TableRegistryAssignment: {
 		{"table_name", "varchar"},

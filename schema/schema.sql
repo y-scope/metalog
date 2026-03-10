@@ -263,19 +263,24 @@ CREATE TABLE IF NOT EXISTS _table_kafka (
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
--- Feature config: typed columns instead of JSON blob.
--- Note: DDL DEFAULT values are used for columns not explicitly set by INSERT.
--- The TableProvisioner (tableprovisioner.go) inserts rows with explicit values
--- that match these DDL defaults. Check both DDL defaults and insertRegistryRows()
--- when changing defaults.
+-- Feature config: single LZ4+msgpack blob replacing individual typed columns.
+-- NULL blob → all defaults (kafka_poller=true, consolidation=true, retention="default").
+-- See internal/metastore/tableconfig.go for the TableConfig struct definition.
+-- Adding new settings is a Go struct change + msgpack tag — no schema migration needed.
 CREATE TABLE IF NOT EXISTS _table_config (
-    table_name                          VARCHAR(64) NOT NULL PRIMARY KEY,
-    kafka_poller_enabled                BOOLEAN NOT NULL DEFAULT TRUE,
-    metadata_writer_enabled             BOOLEAN NOT NULL DEFAULT TRUE,
-    consolidation_enabled               BOOLEAN NOT NULL DEFAULT TRUE,
-    retention_type                      VARCHAR(64) NOT NULL DEFAULT 'default',
+    table_name VARCHAR(64) NOT NULL PRIMARY KEY,
+    config     MEDIUMTEXT NULL,
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+-- Migration: drop old typed columns, add config blob.
+-- IF EXISTS / IF NOT EXISTS clauses are MariaDB-specific; MySQL 8 errors are
+-- caught and skipped by the Go schema loader (EnsureSystemTables).
+ALTER TABLE _table_config ADD COLUMN IF NOT EXISTS config MEDIUMTEXT NULL;
+ALTER TABLE _table_config DROP COLUMN IF EXISTS kafka_poller_enabled;
+ALTER TABLE _table_config DROP COLUMN IF EXISTS metadata_writer_enabled;
+ALTER TABLE _table_config DROP COLUMN IF EXISTS consolidation_enabled;
+ALTER TABLE _table_config DROP COLUMN IF EXISTS retention_type;
 
 -- Node assignment: which node owns this table
 -- NULL = unassigned. Claimed via UPDATE ... WHERE node_id = <old>.

@@ -422,50 +422,23 @@ func (r *CoordinatorRegistry) GetTableID(ctx context.Context, tableName string) 
 	return tableID, nil
 }
 
-// TableFeatureFlags holds per-table feature toggles from _table_config.
-type TableFeatureFlags struct {
-	KafkaPollerEnabled   bool
-	ConsolidationEnabled bool
-}
-
-// GetTableFeatureFlags reads per-table feature flags from _table_config.
-// Returns defaults (both enabled) if no row exists.
-func (r *CoordinatorRegistry) GetTableFeatureFlags(ctx context.Context, tableName string) (TableFeatureFlags, error) {
-	query, args, _ := sq.Select("kafka_poller_enabled", "consolidation_enabled").
+// GetTableConfig reads the per-table config blob from _table_config.
+// Returns DefaultTableConfig() if no row exists or the blob is NULL.
+func (r *CoordinatorRegistry) GetTableConfig(ctx context.Context, tableName string) (metastore.TableConfig, error) {
+	query, args, _ := sq.Select("config").
 		From(metastore.TableRegistryConfig).
 		Where(sq.Eq{"table_name": tableName}).
 		ToSql()
 
-	var flags TableFeatureFlags
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
-		&flags.KafkaPollerEnabled, &flags.ConsolidationEnabled,
-	)
+	var blob []byte
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&blob)
 	if err == sql.ErrNoRows {
-		return TableFeatureFlags{KafkaPollerEnabled: true, ConsolidationEnabled: true}, nil
+		return metastore.DefaultTableConfig(), nil
 	}
 	if err != nil {
-		return flags, fmt.Errorf("get feature flags for %s: %w", tableName, err)
+		return metastore.TableConfig{}, fmt.Errorf("get table config for %s: %w", tableName, err)
 	}
-	return flags, nil
-}
-
-// GetRetentionConfig reads the retention strategy type for a table from _table_config.
-// Returns "default" if no row exists or the column is empty.
-func (r *CoordinatorRegistry) GetRetentionConfig(ctx context.Context, tableName string) (config.RetentionConfig, error) {
-	query, args, _ := sq.Select("retention_type").
-		From(metastore.TableRegistryConfig).
-		Where(sq.Eq{"table_name": tableName}).
-		ToSql()
-
-	var retType string
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&retType)
-	if err == sql.ErrNoRows || retType == "" {
-		return config.RetentionConfig{Type: "default"}, nil
-	}
-	if err != nil {
-		return config.RetentionConfig{}, fmt.Errorf("get retention config for %s: %w", tableName, err)
-	}
-	return config.RetentionConfig{Type: retType}, nil
+	return metastore.DecodeTableConfig(blob)
 }
 
 // DeregisterNode removes this node from the _node_registry.

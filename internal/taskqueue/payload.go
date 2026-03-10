@@ -1,12 +1,9 @@
 package taskqueue
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 
-	"github.com/pierrec/lz4/v4"
-	"github.com/vmihailenco/msgpack/v5"
+	"github.com/y-scope/metalog/internal/encoding"
 )
 
 // TaskPayload is the input data for a consolidation task.
@@ -34,7 +31,7 @@ type TaskResult struct {
 
 // MarshalPayload serializes a TaskPayload to LZ4-compressed msgpack bytes.
 func MarshalPayload(p *TaskPayload) ([]byte, error) {
-	data, err := compressMsgpack(p)
+	data, err := encoding.Marshal(p)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
@@ -44,7 +41,7 @@ func MarshalPayload(p *TaskPayload) ([]byte, error) {
 // UnmarshalPayload deserializes LZ4-compressed msgpack bytes to a TaskPayload.
 func UnmarshalPayload(data []byte) (*TaskPayload, error) {
 	var p TaskPayload
-	if err := decompressMsgpack(data, &p); err != nil {
+	if err := encoding.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("unmarshal payload: %w", err)
 	}
 	return &p, nil
@@ -52,7 +49,7 @@ func UnmarshalPayload(data []byte) (*TaskPayload, error) {
 
 // MarshalResult serializes a TaskResult to LZ4-compressed msgpack bytes.
 func MarshalResult(r *TaskResult) ([]byte, error) {
-	data, err := compressMsgpack(r)
+	data, err := encoding.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("marshal result: %w", err)
 	}
@@ -62,40 +59,8 @@ func MarshalResult(r *TaskResult) ([]byte, error) {
 // UnmarshalResult deserializes LZ4-compressed msgpack bytes to a TaskResult.
 func UnmarshalResult(data []byte) (*TaskResult, error) {
 	var r TaskResult
-	if err := decompressMsgpack(data, &r); err != nil {
+	if err := encoding.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("unmarshal result: %w", err)
 	}
 	return &r, nil
-}
-
-func compressMsgpack(v any) ([]byte, error) {
-	raw, err := msgpack.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	w := lz4.NewWriter(&buf)
-	if _, err := w.Write(raw); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// maxDecompressedSize is the upper bound on decompressed payload size (16 MB).
-// This prevents a crafted LZ4 stream from causing unbounded memory allocation.
-const maxDecompressedSize = 16 << 20
-
-func decompressMsgpack(data []byte, v any) error {
-	r := lz4.NewReader(bytes.NewReader(data))
-	raw, err := io.ReadAll(io.LimitReader(r, maxDecompressedSize+1))
-	if err != nil {
-		return err
-	}
-	if len(raw) > maxDecompressedSize {
-		return fmt.Errorf("decompressed payload exceeds %d bytes", maxDecompressedSize)
-	}
-	return msgpack.Unmarshal(raw, v)
 }

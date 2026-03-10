@@ -46,8 +46,8 @@ func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafka
 	}
 
 	_, err = db.ExecContext(ctx,
-		"INSERT IGNORE INTO _table_config (table_name, kafka_poller_enabled) VALUES (?, ?)",
-		name, kafkaTopic != "")
+		"INSERT IGNORE INTO _table_config (table_name) VALUES (?)",
+		name)
 	if err != nil {
 		t.Fatalf("insert _table_config %s: %v", name, err)
 	}

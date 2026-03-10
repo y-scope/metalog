@@ -88,6 +88,7 @@ type RegisterTableRequest struct {
 	Kafka                *KafkaConfig           `protobuf:"bytes,3,opt,name=kafka,proto3" json:"kafka,omitempty"`                                // required
 	KafkaPollerEnabled   *bool                  `protobuf:"varint,4,opt,name=kafka_poller_enabled,json=kafkaPollerEnabled,proto3,oneof" json:"kafka_poller_enabled,omitempty"`
 	ConsolidationEnabled *bool                  `protobuf:"varint,5,opt,name=consolidation_enabled,json=consolidationEnabled,proto3,oneof" json:"consolidation_enabled,omitempty"`
+	ConfigJson           *string                `protobuf:"bytes,6,opt,name=config_json,json=configJson,proto3,oneof" json:"config_json,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -155,6 +156,13 @@ func (x *RegisterTableRequest) GetConsolidationEnabled() bool {
 		return *x.ConsolidationEnabled
 	}
 	return false
+}
+
+func (x *RegisterTableRequest) GetConfigJson() string {
+	if x != nil && x.ConfigJson != nil {
+		return *x.ConfigJson
+	}
+	return ""
 }
 
 type RegisterTableResponse struct {

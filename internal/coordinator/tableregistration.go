@@ -3,6 +3,8 @@ package coordinator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -30,6 +32,7 @@ func NewTableRegistration(db *sql.DB, isMariaDB bool, compressionOverride string
 type RegisterTableOpts struct {
 	KafkaPollerEnabled   *bool
 	ConsolidationEnabled *bool
+	ConfigJSON           *string // JSON blob to merge into the config
 }
 
 // RegisterTable provisions a table and upserts its Kafka config.
@@ -88,20 +91,9 @@ func (s *TableRegistration) RegisterTable(
 		}
 	}
 
-	// Update table config flags if explicitly set
-	if opts.KafkaPollerEnabled != nil || opts.ConsolidationEnabled != nil {
-		update := sq.Update(metastore.TableRegistryConfig).
-			Where(sq.Eq{"table_name": tableName})
-		if opts.KafkaPollerEnabled != nil {
-			update = update.Set("kafka_poller_enabled", *opts.KafkaPollerEnabled)
-		}
-		if opts.ConsolidationEnabled != nil {
-			update = update.Set("consolidation_enabled", *opts.ConsolidationEnabled)
-		}
-		configQuery, configArgs, _ := update.ToSql()
-		if _, err := s.db.ExecContext(ctx, configQuery, configArgs...); err != nil {
-			return false, err
-		}
+	// Update table config blob if any config fields are explicitly set.
+	if err := s.updateTableConfig(ctx, tableName, opts); err != nil {
+		return false, fmt.Errorf("update table config: %w", err)
 	}
 
 	created := !exists
@@ -110,4 +102,56 @@ func (s *TableRegistration) RegisterTable(
 		zap.Bool("created", created),
 	)
 	return created, nil
+}
+
+// updateTableConfig performs a read-modify-write on the config blob.
+// Only fields explicitly set in opts are overridden.
+func (s *TableRegistration) updateTableConfig(ctx context.Context, tableName string, opts RegisterTableOpts) error {
+	needsUpdate := opts.KafkaPollerEnabled != nil || opts.ConsolidationEnabled != nil || opts.ConfigJSON != nil
+	if !needsUpdate {
+		return nil
+	}
+
+	// Read existing config blob.
+	query, args, _ := sq.Select("config").
+		From(metastore.TableRegistryConfig).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
+	var blob []byte
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&blob); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	cfg, err := metastore.DecodeTableConfig(blob)
+	if err != nil {
+		return err
+	}
+
+	// Apply overrides from individual fields.
+	if opts.KafkaPollerEnabled != nil {
+		cfg.KafkaPollerEnabled = *opts.KafkaPollerEnabled
+	}
+	if opts.ConsolidationEnabled != nil {
+		cfg.ConsolidationEnabled = *opts.ConsolidationEnabled
+	}
+
+	// Apply overrides from JSON blob (contains full config including policies).
+	if opts.ConfigJSON != nil {
+		if err := json.Unmarshal([]byte(*opts.ConfigJSON), &cfg); err != nil {
+			return fmt.Errorf("parse config_json: %w", err)
+		}
+	}
+
+	// Encode and write back.
+	newBlob, err := metastore.EncodeTableConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	updateQuery, updateArgs, _ := sq.Update(metastore.TableRegistryConfig).
+		Set("config", newBlob).
+		Where(sq.Eq{"table_name": tableName}).
+		ToSql()
+	_, err = s.db.ExecContext(ctx, updateQuery, updateArgs...)
+	return err
 }

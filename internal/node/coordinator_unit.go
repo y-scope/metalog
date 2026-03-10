@@ -13,6 +13,7 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
 	"github.com/y-scope/metalog/internal/coordinator/retention"
+	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	kafkaconsumer "github.com/y-scope/metalog/kafka"
@@ -28,6 +29,7 @@ const aliasRefreshInterval = time.Minute
 // CoordinatorUnit manages coordinator goroutines for a single table.
 type CoordinatorUnit struct {
 	tableName     string
+	tableCfg      metastore.TableConfig
 	shared        *SharedResources
 	writer        *ingestion.BatchingWriter
 	planner           *consolidation.Planner
@@ -57,8 +59,7 @@ func NewCoordinatorUnit(
 	tableName string,
 	tableID string,
 	kafkaCfg config.TableKafkaConfig,
-	retentionCfg config.RetentionConfig,
-	flags TableFeatureFlags,
+	tableCfg metastore.TableConfig,
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
@@ -75,9 +76,14 @@ func NewCoordinatorUnit(
 
 	// Consolidation planner (conditional on feature flag).
 	var planner *consolidation.Planner
-	if flags.ConsolidationEnabled {
+	if tableCfg.ConsolidationEnabled {
 		inFlight := consolidation.NewInFlightSet()
-		policy := consolidation.NewTimeWindowPolicy(time.Hour, 2, 100)
+
+		policy, err := consolidation.CreatePolicyChain(tableCfg.ConsolidationPolicies)
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: create policy chain: %w", err)
+		}
+
 		taskQueue := taskqueue.NewQueue(shared.DB, log)
 
 		planner, err = consolidation.NewPlanner(
@@ -93,7 +99,7 @@ func NewCoordinatorUnit(
 	}
 
 	// Retention strategy — always enabled; every table needs expiration cleanup.
-	retTypeName := retentionCfg.Type
+	retTypeName := tableCfg.RetentionType
 	if retTypeName == "" {
 		retTypeName = "default"
 	}
@@ -130,6 +136,7 @@ func NewCoordinatorUnit(
 
 	return &CoordinatorUnit{
 		tableName:        tableName,
+		tableCfg:         tableCfg,
 		shared:           shared,
 		writer:           writer,
 		planner:           planner,
@@ -143,6 +150,11 @@ func NewCoordinatorUnit(
 		ctx:           childCtx,
 		cancel:        cancel,
 	}, nil
+}
+
+// TableConfig returns the per-table configuration loaded at startup.
+func (u *CoordinatorUnit) TableConfig() metastore.TableConfig {
+	return u.tableCfg
 }
 
 // IsStalled returns true if the coordinator has not made progress within the stall timeout.

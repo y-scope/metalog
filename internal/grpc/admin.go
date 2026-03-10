@@ -56,6 +56,7 @@ func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableR
 		coordinator.RegisterTableOpts{
 			KafkaPollerEnabled:   req.KafkaPollerEnabled,
 			ConsolidationEnabled: req.ConsolidationEnabled,
+			ConfigJSON:           req.ConfigJson,
 		},
 	)
 	if err != nil {
