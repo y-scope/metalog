@@ -49,6 +49,14 @@ func NewSparkJobPolicy(groupingKey string, minFiles, maxFiles int, timeout time.
 	}
 }
 
+func (p *SparkJobPolicy) RequiredDims() []string {
+	if p.GroupingDimKey == "" {
+		return nil
+	}
+	return []string{p.GroupingDimKey}
+}
+func (p *SparkJobPolicy) RequiredAggs() []AggRequirement { return nil }
+
 // SelectFiles groups candidates by the grouping dimension value.
 func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
 	if len(candidates) == 0 {

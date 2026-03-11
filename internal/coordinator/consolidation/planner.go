@@ -20,6 +20,13 @@ import (
 // before the planner skips creating new consolidation tasks.
 const maxBackpressureDepth = 100
 
+// ColumnResolver resolves logical dimension/aggregation keys to physical column names.
+// Satisfied by schema.ColumnRegistry.
+type ColumnResolver interface {
+	ResolveDim(dimKey string) string
+	ResolveAgg(aggKey, aggValue, aggType string) string
+}
+
 // Planner runs the consolidation planning loop for a single table.
 type Planner struct {
 	db              *sql.DB
@@ -32,10 +39,12 @@ type Planner struct {
 	archiveBackend  string
 	archiveBucket   string
 	interval        time.Duration
+	resolver        ColumnResolver
 	log             *zap.Logger
 }
 
-// NewPlanner creates a Planner.
+// NewPlanner creates a Planner. Column resolution happens per-cycle in planOnce
+// so that newly-registered columns are picked up without restarting the planner.
 func NewPlanner(
 	db *sql.DB,
 	tableName string,
@@ -43,6 +52,7 @@ func NewPlanner(
 	policy Policy,
 	inFlight *InFlightSet,
 	taskQueue *taskqueue.Queue,
+	resolver ColumnResolver,
 	storageRegistry *storage.Registry,
 	archiveBackend string,
 	archiveBucket string,
@@ -53,6 +63,7 @@ func NewPlanner(
 	if err != nil {
 		return nil, fmt.Errorf("new planner: %w", err)
 	}
+
 	return &Planner{
 		db:              db,
 		tableName:       tableName,
@@ -64,6 +75,7 @@ func NewPlanner(
 		archiveBackend:  archiveBackend,
 		archiveBucket:   archiveBucket,
 		interval:        interval,
+		resolver:        resolver,
 		log:             log.With(zap.String("table", tableName)),
 	}, nil
 }
@@ -121,8 +133,11 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// 5. Find consolidation-pending files
-	candidates, err := p.fileRecs.FindConsolidationPending(ctx)
+	// 5. Resolve policy's required columns (fresh each cycle for newly-registered columns).
+	dimMappings, aggMappings := p.resolveColumnMappings()
+
+	// 6. Find consolidation-pending files
+	candidates, err := p.fileRecs.FindConsolidationPending(ctx, dimMappings, aggMappings)
 	if err != nil {
 		return fmt.Errorf("find pending: %w", err)
 	}
@@ -131,10 +146,10 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// 6. Apply policy to group files
+	// 7. Apply policy to group files
 	groups := p.policy.SelectFiles(candidates)
 
-	// 7. Create tasks for each group
+	// 8. Create tasks for each group
 	for _, group := range groups {
 		irPaths := make([]string, 0, len(group))
 		for _, rec := range group {
@@ -196,6 +211,38 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// resolveColumnMappings resolves the policy's required dims and aggs to physical
+// column names using the current registry state. Unresolvable keys are skipped
+// (the column may not exist yet; it will be picked up on a future cycle).
+func (p *Planner) resolveColumnMappings() (dimMappings, aggMappings []metastore.ColumnMapping) {
+	for _, dimKey := range p.policy.RequiredDims() {
+		physCol := p.resolver.ResolveDim(dimKey)
+		if physCol == "" {
+			p.log.Debug("dim key not yet resolvable, skipping",
+				zap.String("dimKey", dimKey))
+			continue
+		}
+		dimMappings = append(dimMappings, metastore.ColumnMapping{
+			PhysicalCol: physCol,
+			LogicalKey:  dimKey,
+		})
+	}
+	for _, agg := range p.policy.RequiredAggs() {
+		physCol := p.resolver.ResolveAgg(agg.Key, agg.Value, agg.Type)
+		if physCol == "" {
+			p.log.Debug("agg key not yet resolvable, skipping",
+				zap.String("aggKey", agg.Key),
+				zap.String("aggType", agg.Type))
+			continue
+		}
+		aggMappings = append(aggMappings, metastore.ColumnMapping{
+			PhysicalCol: physCol,
+			LogicalKey:  agg.Key,
+		})
+	}
+	return
 }
 
 func (p *Planner) processCompletedTasks(ctx context.Context) error {

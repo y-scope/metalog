@@ -18,12 +18,14 @@ import (
 const shutdownFlushTimeout = 5 * time.Second
 
 // tableWriter is a goroutine that batches and flushes records for a single table.
+// It does not own a ColumnRegistry — it borrows one from the parent BatchingWriter
+// on each flush to avoid data races and duplicate registry instances.
 type tableWriter struct {
 	tableName string
 	isMariaDB bool
 	ch        chan *metastore.FileRecord
 	db        *sql.DB
-	registry  *schema.ColumnRegistry
+	parent    *BatchingWriter
 	fileRecs  *metastore.FileRecords
 	log       *zap.Logger
 }
@@ -60,11 +62,48 @@ func NewBatchingWriter(ctx context.Context, db *sql.DB, isMariaDB bool, log *zap
 	}
 }
 
-// SetRegistry associates a column registry with a table.
+// SetRegistry associates a column registry with a table. If a registry was
+// already created lazily by ensureRegistry, the caller's instance replaces it
+// (the coordinator's registry has alias refresh, recycler goroutine, etc.).
+//
+// This handoff is safe because the DB is the source of truth: any columns
+// allocated by the lazy registry are persisted in _dim_registry/_agg_registry,
+// so the coordinator's NewColumnRegistry loads them and its slot high-water
+// marks are correct.
 func (bw *BatchingWriter) SetRegistry(tableName string, reg *schema.ColumnRegistry) {
 	bw.regMu.Lock()
 	defer bw.regMu.Unlock()
 	bw.registries[tableName] = reg
+}
+
+// ensureRegistry returns the registry for a table, creating one on-demand if
+// it doesn't exist yet. This guarantees schema evolution (ALTER TABLE ADD
+// COLUMN) happens on the first batch flush even if the coordinator unit hasn't
+// started. When the coordinator later calls SetRegistry, its registry (with
+// alias refresh, recycler, etc.) replaces the lazy one.
+func (bw *BatchingWriter) ensureRegistry(ctx context.Context, tableName string) (*schema.ColumnRegistry, error) {
+	bw.regMu.RLock()
+	reg := bw.registries[tableName]
+	bw.regMu.RUnlock()
+	if reg != nil {
+		return reg, nil
+	}
+
+	bw.regMu.Lock()
+	defer bw.regMu.Unlock()
+
+	// Double-check after acquiring write lock.
+	if reg = bw.registries[tableName]; reg != nil {
+		return reg, nil
+	}
+
+	reg, err := schema.NewColumnRegistry(ctx, bw.db, tableName, bw.isMariaDB, bw.log)
+	if err != nil {
+		return nil, fmt.Errorf("create column registry: %w", err)
+	}
+	bw.registries[tableName] = reg
+	bw.log.Info("column registry created on-demand", zap.String("table", tableName))
+	return reg, nil
 }
 
 // Submit sends a record to the appropriate per-table writer goroutine.
@@ -101,10 +140,6 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 		return tw
 	}
 
-	bw.regMu.RLock()
-	reg := bw.registries[tableName]
-	bw.regMu.RUnlock()
-
 	fr, err := metastore.NewFileRecords(bw.db, tableName, bw.isMariaDB, bw.log)
 	if err != nil {
 		bw.log.Error("failed to create file records for table writer", zap.String("table", tableName), zap.Error(err))
@@ -117,7 +152,7 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 		isMariaDB: bw.isMariaDB,
 		ch:        make(chan *metastore.FileRecord, config.DefaultBatchSize),
 		db:        bw.db,
-		registry:  reg,
+		parent:    bw,
 		fileRecs:  fr,
 		log:       bw.log.With(zap.String("table", tableName)),
 	}
@@ -199,13 +234,24 @@ func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRe
 		}
 	}
 
-	var dimCols, aggCols []string
-	var floatAggCols map[string]bool
-	if tw.registry != nil {
-		dimCols = tw.registry.ActiveDimColumns()
-		aggCols = tw.registry.ActiveAggColumns()
-		floatAggCols = tw.registry.FloatAggColumns()
+	// Ensure column registry exists and resolve dims/aggs for the batch.
+	// This triggers schema evolution (ALTER TABLE ADD COLUMN) on first flush.
+	reg, err := tw.parent.ensureRegistry(ctx, tw.tableName)
+	if err != nil {
+		tw.log.Error("column registry unavailable", zap.Error(err))
+		tw.notifyBatch(batch, err)
+		return
 	}
+
+	if err := tw.resolveAndRemapBatch(ctx, reg, batch); err != nil {
+		tw.log.Error("resolve columns failed", zap.Error(err))
+		tw.notifyBatch(batch, err)
+		return
+	}
+
+	dimCols := reg.ActiveDimColumns()
+	aggCols := reg.ActiveAggColumns()
+	floatAggCols := reg.FloatAggColumns()
 
 	n, err := fr.UpsertBatch(ctx, batch, dimCols, aggCols, floatAggCols)
 	if err != nil {
@@ -223,6 +269,96 @@ func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRe
 	)
 
 	tw.notifyBatch(batch, nil)
+}
+
+// resolveAndRemapBatch batch-resolves all dim/agg logical keys in the batch to
+// physical column names (allocating new columns if needed), then remaps each
+// record's Dims/Aggs from logical keys to physical keys for UpsertBatch.
+//
+// Invariant: records produced by extractDims/extractAggs have matching
+// Dims/DimMeta and Aggs/AggMeta entries. If a record has Dims but no DimMeta,
+// the values will be dropped during remap (dimMap will be empty).
+func (tw *tableWriter) resolveAndRemapBatch(ctx context.Context, reg *schema.ColumnRegistry, batch []*metastore.FileRecord) error {
+	// Collect unique dim requests across the batch.
+	dimSeen := make(map[string]struct{})
+	var dimReqs []schema.DimRequest
+	for _, rec := range batch {
+		for _, dm := range rec.DimMeta {
+			if _, ok := dimSeen[dm.Key]; ok {
+				continue
+			}
+			dimSeen[dm.Key] = struct{}{}
+			dimReqs = append(dimReqs, schema.DimRequest{
+				DimKey:   dm.Key,
+				BaseType: dm.BaseType,
+				Width:    dm.Width,
+			})
+		}
+	}
+
+	// Collect unique agg requests across the batch.
+	aggSeen := make(map[string]struct{})
+	var aggReqs []schema.AggRequest
+	for _, rec := range batch {
+		for _, am := range rec.AggMeta {
+			cacheKey := schema.AggCacheKey(am.Key, am.Value, am.Type)
+			if _, ok := aggSeen[cacheKey]; ok {
+				continue
+			}
+			aggSeen[cacheKey] = struct{}{}
+			aggReqs = append(aggReqs, schema.AggRequest{
+				AggKey:    am.Key,
+				AggValue:  am.Value,
+				AggType:   am.Type,
+				ValueType: am.ValueType,
+				AliasCol:  am.AliasCol,
+			})
+		}
+	}
+
+	// Batch-resolve dims (single ALTER TABLE for new columns).
+	var dimMap map[string]string // logical key → physical col
+	if len(dimReqs) > 0 {
+		var err error
+		dimMap, err = reg.ResolveOrAllocateDims(ctx, dimReqs)
+		if err != nil {
+			return fmt.Errorf("resolve dims: %w", err)
+		}
+	}
+
+	// Batch-resolve aggs.
+	var aggMap map[string]string // cache key → physical col
+	if len(aggReqs) > 0 {
+		var err error
+		aggMap, err = reg.ResolveOrAllocateAggs(ctx, aggReqs)
+		if err != nil {
+			return fmt.Errorf("resolve aggs: %w", err)
+		}
+	}
+
+	// Remap each record from logical keys to physical column names.
+	for _, rec := range batch {
+		if len(rec.Dims) > 0 {
+			phys := make(map[string]any, len(rec.Dims))
+			for logicalKey, val := range rec.Dims {
+				if col, ok := dimMap[logicalKey]; ok {
+					phys[col] = val
+				}
+			}
+			rec.Dims = phys
+		}
+		if len(rec.Aggs) > 0 {
+			phys := make(map[string]any, len(rec.Aggs))
+			for logicalKey, val := range rec.Aggs {
+				if col, ok := aggMap[logicalKey]; ok {
+					phys[col] = val
+				}
+			}
+			rec.Aggs = phys
+		}
+	}
+
+	return nil
 }
 
 // notifyBatch sends the flush result to each record's Flushed channel.

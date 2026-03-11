@@ -3,7 +3,6 @@ package ingestion
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"go.uber.org/zap"
 
@@ -13,33 +12,20 @@ import (
 )
 
 // Service validates and submits metadata records for ingestion.
+// Dim/agg values are extracted using logical keys and stored on the FileRecord
+// with type metadata. Physical column resolution and schema evolution happen
+// at batch flush time in the BatchingWriter.
 type Service struct {
-	writer     *BatchingWriter
-	log        *zap.Logger
-	registries map[string]*schema.ColumnRegistry
-	regMu      sync.RWMutex
+	writer *BatchingWriter
+	log    *zap.Logger
 }
 
 // NewService creates a Service.
 func NewService(writer *BatchingWriter, log *zap.Logger) *Service {
 	return &Service{
-		writer:     writer,
-		log:        log,
-		registries: make(map[string]*schema.ColumnRegistry),
+		writer: writer,
+		log:    log,
 	}
-}
-
-// SetRegistry associates a column registry with a table for dim/agg resolution.
-func (s *Service) SetRegistry(tableName string, reg *schema.ColumnRegistry) {
-	s.regMu.Lock()
-	defer s.regMu.Unlock()
-	s.registries[tableName] = reg
-}
-
-func (s *Service) getRegistry(tableName string) *schema.ColumnRegistry {
-	s.regMu.RLock()
-	defer s.regMu.RUnlock()
-	return s.registries[tableName]
 }
 
 // IngestionResult provides details about the outcome of an ingestion request.
@@ -74,25 +60,17 @@ func (s *Service) IngestWithCallback(ctx context.Context, tableName string, reco
 	}
 	rec.Flushed = flushed
 
-	// Resolve dims and aggs to physical columns via registry.
-	reg := s.getRegistry(tableName)
-	if reg != nil {
-		if err := s.resolveDims(ctx, record.Dim, rec, reg); err != nil {
-			return fmt.Errorf("resolve dims: %w", err)
-		}
-		if err := s.resolveAggs(ctx, record.Agg, rec, reg); err != nil {
-			return fmt.Errorf("resolve aggs: %w", err)
-		}
-	}
+	// Extract dim/agg values and type metadata from proto. Physical column
+	// resolution happens at batch flush time (BatchingWriter.flushBatch).
+	extractDims(record.Dim, rec)
+	extractAggs(record.Agg, rec)
 
 	return s.writer.Submit(ctx, tableName, rec)
 }
 
-func (s *Service) resolveDims(ctx context.Context, dims []*pb.DimEntry, rec *metastore.FileRecord, reg *schema.ColumnRegistry) error {
-	// Collect requests and values, then batch-resolve. This issues a single
-	// multi-column ALTER TABLE instead of N individual ALTERs on cold start.
-	var reqs []schema.DimRequest
-	vals := make(map[string]any, len(dims)) // dimKey -> value
+// extractDims populates FileRecord.Dims with logical keys and FileRecord.DimMeta
+// with type metadata for schema evolution.
+func extractDims(dims []*pb.DimEntry, rec *metastore.FileRecord) {
 	for _, d := range dims {
 		if d.Key == "" || d.Value == nil {
 			continue
@@ -124,22 +102,50 @@ func (s *Service) resolveDims(ctx context.Context, dims []*pb.DimEntry, rec *met
 			continue
 		}
 
-		reqs = append(reqs, schema.DimRequest{DimKey: d.Key, BaseType: baseType, Width: width})
-		vals[d.Key] = val
+		rec.Dims[d.Key] = val
+		rec.DimMeta = append(rec.DimMeta, metastore.DimMeta{
+			Key:      d.Key,
+			BaseType: baseType,
+			Width:    width,
+		})
 	}
+}
 
-	if len(reqs) == 0 {
-		return nil
-	}
+// extractAggs populates FileRecord.Aggs with logical keys and FileRecord.AggMeta
+// with type metadata for schema evolution.
+func extractAggs(aggs []*pb.AggEntry, rec *metastore.FileRecord) {
+	for _, a := range aggs {
+		if a.Field == "" {
+			continue
+		}
 
-	resolved, err := reg.ResolveOrAllocateDims(ctx, reqs)
-	if err != nil {
-		return fmt.Errorf("resolve dims: %w", err)
+		aggType := a.AggType.String()
+		var valueType string
+		var val any
+
+		switch v := a.Value.(type) {
+		case *pb.AggEntry_IntVal:
+			valueType = "INT"
+			val = v.IntVal
+		case *pb.AggEntry_FloatVal:
+			valueType = "FLOAT"
+			val = v.FloatVal
+		default:
+			valueType = "INT"
+			val = int64(0)
+		}
+
+		// Key by logical composite key so batch flush can resolve to physical.
+		logicalKey := schema.AggCacheKey(a.Field, a.Qualifier, aggType)
+		rec.Aggs[logicalKey] = val
+		rec.AggMeta = append(rec.AggMeta, metastore.AggMeta{
+			Key:       a.Field,
+			Value:     a.Qualifier,
+			Type:      aggType,
+			ValueType: valueType,
+			AliasCol:  a.AliasColumn,
+		})
 	}
-	for dimKey, colName := range resolved {
-		rec.Dims[colName] = vals[dimKey]
-	}
-	return nil
 }
 
 // validateRecord checks that a MetadataRecord has all required fields and valid values.
@@ -176,60 +182,6 @@ func validateRecord(record *pb.MetadataRecord) error {
 		state == metastore.StateIRArchiveBuffering || state == metastore.StateIRArchiveConsolidationPending
 	if needsIR && (f.Ir == nil || f.Ir.ClpIrPath == "") {
 		return fmt.Errorf("clp_ir_path is required for state %s", f.State)
-	}
-	return nil
-}
-
-func (s *Service) resolveAggs(ctx context.Context, aggs []*pb.AggEntry, rec *metastore.FileRecord, reg *schema.ColumnRegistry) error {
-	type aggVal struct {
-		key string // composite cache key
-		val any
-	}
-	var reqs []schema.AggRequest
-	aggVals := make([]aggVal, 0, len(aggs))
-	for _, a := range aggs {
-		if a.Field == "" {
-			continue
-		}
-
-		aggType := a.AggType.String()
-		var valueType string
-		var val any
-
-		switch v := a.Value.(type) {
-		case *pb.AggEntry_IntVal:
-			valueType = "INT"
-			val = v.IntVal
-		case *pb.AggEntry_FloatVal:
-			valueType = "FLOAT"
-			val = v.FloatVal
-		default:
-			valueType = "INT"
-			val = int64(0)
-		}
-
-		reqs = append(reqs, schema.AggRequest{
-			AggKey: a.Field, AggValue: a.Qualifier, AggType: aggType, ValueType: valueType,
-			AliasCol: a.AliasColumn,
-		})
-		aggVals = append(aggVals, aggVal{
-			key: schema.AggCacheKey(a.Field, a.Qualifier, aggType),
-			val: val,
-		})
-	}
-
-	if len(reqs) == 0 {
-		return nil
-	}
-
-	resolved, err := reg.ResolveOrAllocateAggs(ctx, reqs)
-	if err != nil {
-		return fmt.Errorf("resolve aggs: %w", err)
-	}
-	for _, av := range aggVals {
-		if colName, ok := resolved[av.key]; ok {
-			rec.Aggs[colName] = av.val
-		}
 	}
 	return nil
 }

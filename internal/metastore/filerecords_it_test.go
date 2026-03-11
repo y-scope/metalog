@@ -197,7 +197,7 @@ func TestFileRecords_FindConsolidationPending(t *testing.T) {
 		}
 	}
 
-	pending, err := fr.FindConsolidationPending(ctx)
+	pending, err := fr.FindConsolidationPending(ctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,6 +35,9 @@ func NewTimeWindowPolicy(windowSize time.Duration, minFiles, maxFiles int) *Time
 	}
 }
 
+func (p *TimeWindowPolicy) RequiredDims() []string { return nil }
+func (p *TimeWindowPolicy) RequiredAggs() []AggRequirement { return nil }
+
 // SelectFiles groups candidates by time window.
 func (p *TimeWindowPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
 	if len(candidates) == 0 {

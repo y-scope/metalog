@@ -32,6 +32,9 @@ func NewAuditPolicy(minFiles, maxFiles int) *AuditPolicy {
 	}
 }
 
+func (p *AuditPolicy) RequiredDims() []string { return nil }
+func (p *AuditPolicy) RequiredAggs() []AggRequirement { return nil }
+
 // SelectFiles groups candidates by day boundary (UTC).
 func (p *AuditPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
 	if len(candidates) == 0 {

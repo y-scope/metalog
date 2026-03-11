@@ -85,16 +85,37 @@ type FileRecord struct {
 	RetentionDays            uint16
 	ExpiresAt                int64
 
-	// Dynamic columns: dim_fNN values keyed by column name.
+	// Dynamic columns: keyed by logical name during ingestion, remapped to
+	// physical column names (dim_fNN / agg_fNN) at batch flush time.
 	Dims map[string]any
-	// Dynamic columns: agg_fNN values keyed by column name.
 	Aggs map[string]any
+
+	// Schema evolution metadata: carried from proto extraction to batch flush
+	// so the BatchingWriter can resolve/allocate physical columns.
+	DimMeta []DimMeta
+	AggMeta []AggMeta
 
 	// Flushed receives nil after this record has been successfully written to the
 	// database, or an error if the flush failed. Used by the Kafka consumer to
 	// know when it's safe to commit offsets. Buffered (cap 1) so the writer
 	// never blocks.
 	Flushed chan error
+}
+
+// DimMeta carries dimension type info needed for schema evolution (ALTER TABLE ADD COLUMN).
+type DimMeta struct {
+	Key      string // logical dim key (e.g. "host")
+	BaseType string // str, str_utf8, bool, int, float
+	Width    int    // column width hint for string types
+}
+
+// AggMeta carries aggregation type info needed for schema evolution.
+type AggMeta struct {
+	Key       string // agg field name (e.g. "level")
+	Value     string // qualifier (e.g. "error")
+	Type      string // aggregation type: EQ, GTE, SUM, etc.
+	ValueType string // INT or FLOAT
+	AliasCol  string // optional alias column
 }
 
 // DeletionResult holds the outcome of a file deletion batch.

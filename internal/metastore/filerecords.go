@@ -91,10 +91,34 @@ func (fr *FileRecords) UpsertBatch(
 	return totalAffected, nil
 }
 
+// ColumnMapping maps a physical column name (e.g. "dim_f03") to its logical
+// key (e.g. "application_id"). Used to SELECT dynamic columns and populate
+// FileRecord.Dims / FileRecord.Aggs with logical keys.
+type ColumnMapping struct {
+	PhysicalCol string // physical column name in the table (dim_fNN, agg_fNN)
+	LogicalKey  string // logical key the policy uses
+}
+
 // FindConsolidationPending returns files in IR_ARCHIVE_CONSOLIDATION_PENDING state,
 // ordered by min_timestamp ASC, limited to 10000.
-func (fr *FileRecords) FindConsolidationPending(ctx context.Context) ([]*FileRecord, error) {
-	query, args, err := sq.Select(baseSelectCols()...).
+//
+// dimMappings and aggMappings specify dynamic columns to include in the query.
+// The scanned values are populated into FileRecord.Dims and FileRecord.Aggs
+// using logical keys. Pass nil for both to select only base columns.
+func (fr *FileRecords) FindConsolidationPending(
+	ctx context.Context,
+	dimMappings []ColumnMapping,
+	aggMappings []ColumnMapping,
+) ([]*FileRecord, error) {
+	cols := baseSelectCols()
+	for _, m := range dimMappings {
+		cols = append(cols, dbutil.QuoteIdentifier(m.PhysicalCol))
+	}
+	for _, m := range aggMappings {
+		cols = append(cols, dbutil.QuoteIdentifier(m.PhysicalCol))
+	}
+
+	query, args, err := sq.Select(cols...).
 		From(dbutil.QuoteIdentifier(fr.tableName)).
 		Where(sq.Eq{ColState: string(StateIRArchiveConsolidationPending)}).
 		OrderBy(ColMinTimestamp + " ASC").
@@ -110,7 +134,66 @@ func (fr *FileRecords) FindConsolidationPending(ctx context.Context) ([]*FileRec
 	}
 	defer rows.Close()
 
-	return scanFileRecords(rows)
+	return scanFileRecordsWithMappings(rows, dimMappings, aggMappings)
+}
+
+// scanFileRecordsWithMappings scans base columns plus optional dynamic columns
+// into FileRecord structs. Dynamic column values are populated into Dims/Aggs
+// using the logical keys from the mappings.
+func scanFileRecordsWithMappings(rows *sql.Rows, dimMappings []ColumnMapping, aggMappings []ColumnMapping) ([]*FileRecord, error) {
+	var records []*FileRecord
+	for rows.Next() {
+		rec := &FileRecord{}
+		var state string
+
+		// Base column scan destinations.
+		dest := []any{
+			&rec.ID,
+			&rec.ClpIRStorageBackend, &rec.ClpIRBucket, &rec.ClpIRPath,
+			&rec.ClpArchiveStorageBackend, &rec.ClpArchiveBucket, &rec.ClpArchivePath,
+			&state, &rec.MinTimestamp, &rec.MaxTimestamp, &rec.ClpArchiveCreatedAt,
+			&rec.RecordCount, &rec.RawSizeBytes, &rec.ClpIRSizeBytes, &rec.ClpArchiveSizeBytes,
+			&rec.RetentionDays, &rec.ExpiresAt,
+		}
+
+		// Dynamic column scan destinations.
+		dimVals := make([]sql.NullString, len(dimMappings))
+		for i := range dimVals {
+			dest = append(dest, &dimVals[i])
+		}
+		aggVals := make([]sql.NullString, len(aggMappings))
+		for i := range aggVals {
+			dest = append(dest, &aggVals[i])
+		}
+
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		rec.State = FileState(state)
+
+		// Populate Dims with logical keys.
+		if len(dimMappings) > 0 {
+			rec.Dims = make(map[string]any, len(dimMappings))
+			for i, m := range dimMappings {
+				if dimVals[i].Valid {
+					rec.Dims[m.LogicalKey] = dimVals[i].String
+				}
+			}
+		}
+
+		// Populate Aggs with logical keys.
+		if len(aggMappings) > 0 {
+			rec.Aggs = make(map[string]any, len(aggMappings))
+			for i, m := range aggMappings {
+				if aggVals[i].Valid {
+					rec.Aggs[m.LogicalKey] = aggVals[i].String
+				}
+			}
+		}
+
+		records = append(records, rec)
+	}
+	return records, rows.Err()
 }
 
 // GetCurrentStates returns the current state for files identified by IR path hash.

@@ -71,7 +71,6 @@ func NewCoordinatorUnit(
 	}
 
 	writer.SetRegistry(tableName, reg)
-	ingestSvc.SetRegistry(tableName, reg)
 	shared.SetColumnRegistry(tableName, reg)
 
 	// Consolidation planner (conditional on feature flag).
@@ -88,6 +87,7 @@ func NewCoordinatorUnit(
 
 		planner, err = consolidation.NewPlanner(
 			shared.DB, tableName, shared.IsMariaDB, policy, inFlight, taskQueue,
+			reg,
 			shared.StorageRegistry,
 			shared.ArchiveBackend, shared.ArchiveBucket,
 			config.DefaultPlannerInterval,

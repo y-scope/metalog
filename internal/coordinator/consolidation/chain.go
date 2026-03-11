@@ -19,6 +19,41 @@ func NewPolicyChain(policies []Policy) *PolicyChain {
 	return &PolicyChain{policies: policies}
 }
 
+// RequiredDims returns the union of all child policies' required dimension keys.
+func (pc *PolicyChain) RequiredDims() []string {
+	return unionStrings(pc.policies, func(p Policy) []string { return p.RequiredDims() })
+}
+
+// RequiredAggs returns the union of all child policies' required aggregation columns.
+func (pc *PolicyChain) RequiredAggs() []AggRequirement {
+	seen := make(map[AggRequirement]struct{})
+	var result []AggRequirement
+	for _, p := range pc.policies {
+		for _, a := range p.RequiredAggs() {
+			if _, ok := seen[a]; !ok {
+				seen[a] = struct{}{}
+				result = append(result, a)
+			}
+		}
+	}
+	return result
+}
+
+// unionStrings collects and deduplicates strings from multiple policies.
+func unionStrings(policies []Policy, fn func(Policy) []string) []string {
+	seen := make(map[string]struct{})
+	var result []string
+	for _, p := range policies {
+		for _, s := range fn(p) {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				result = append(result, s)
+			}
+		}
+	}
+	return result
+}
+
 // SelectFiles runs the waterfall: each policy selects from remaining candidates.
 func (pc *PolicyChain) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
 	var allGroups [][]*metastore.FileRecord

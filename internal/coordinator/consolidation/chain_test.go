@@ -15,6 +15,9 @@ func (m *mockPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metast
 	return m.selectFn(candidates)
 }
 
+func (m *mockPolicy) RequiredDims() []string { return nil }
+func (m *mockPolicy) RequiredAggs() []AggRequirement { return nil }
+
 func makeRecords(n int) []*metastore.FileRecord {
 	records := make([]*metastore.FileRecord, n)
 	for i := range records {
