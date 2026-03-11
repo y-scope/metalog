@@ -37,11 +37,7 @@ func adminRegisterTable(args []string) {
 	addr := fs.String("addr", "localhost:9090", "gRPC server address")
 	tableName := fs.String("table", "", "table name (required)")
 	displayName := fs.String("display-name", "", "human-readable display name")
-	kafkaTopic := fs.String("kafka-topic", "", "Kafka topic for ingestion")
-	kafkaBootstrapServers := fs.String("kafka-bootstrap-servers", "", "Kafka bootstrap servers")
-	transformer := fs.String("transformer", "", "record transformer name (empty = default)")
-	kafkaPollerEnabled := fs.String("kafka-poller-enabled", "", "enable Kafka consumer (true/false, omit for DB default)")
-	consolidationEnabled := fs.String("consolidation-enabled", "", "enable consolidation planner (true/false, omit for DB default)")
+	configJSON := fs.String("config-json", "", `JSON config blob merged into stored config (e.g. '{"kafka":{"topic":"...","bootstrap_servers":"..."}}')`)
 	fs.Parse(args)
 
 	if *tableName == "" {
@@ -66,20 +62,8 @@ func adminRegisterTable(args []string) {
 		TableName:   *tableName,
 		DisplayName: *displayName,
 	}
-	if *kafkaTopic != "" || *kafkaBootstrapServers != "" {
-		req.Kafka = &pb.KafkaConfig{
-			Topic:             *kafkaTopic,
-			BootstrapServers:  *kafkaBootstrapServers,
-			RecordTransformer: *transformer,
-		}
-	}
-	if *kafkaPollerEnabled != "" {
-		b := *kafkaPollerEnabled == "true"
-		req.KafkaPollerEnabled = &b
-	}
-	if *consolidationEnabled != "" {
-		b := *consolidationEnabled == "true"
-		req.ConsolidationEnabled = &b
+	if *configJSON != "" {
+		req.ConfigJson = configJSON
 	}
 
 	resp, err := client.RegisterTable(ctx, req)

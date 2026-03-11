@@ -21,73 +21,18 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// KafkaConfig is a legacy proto message kept for wire-format compatibility.
+// Kafka settings are now configured via config_json in RegisterTableRequest.
 type KafkaConfig struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Topic             string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`                                                  // required
-	BootstrapServers  string                 `protobuf:"bytes,2,opt,name=bootstrap_servers,json=bootstrapServers,proto3" json:"bootstrap_servers,omitempty"`    // required
-	RecordTransformer string                 `protobuf:"bytes,3,opt,name=record_transformer,json=recordTransformer,proto3" json:"record_transformer,omitempty"` // optional — empty means "default"
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *KafkaConfig) Reset() {
-	*x = KafkaConfig{}
-	mi := &file_admin_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *KafkaConfig) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*KafkaConfig) ProtoMessage() {}
-
-func (x *KafkaConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use KafkaConfig.ProtoReflect.Descriptor instead.
-func (*KafkaConfig) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *KafkaConfig) GetTopic() string {
-	if x != nil {
-		return x.Topic
-	}
-	return ""
-}
-
-func (x *KafkaConfig) GetBootstrapServers() string {
-	if x != nil {
-		return x.BootstrapServers
-	}
-	return ""
-}
-
-func (x *KafkaConfig) GetRecordTransformer() string {
-	if x != nil {
-		return x.RecordTransformer
-	}
-	return ""
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 type RegisterTableRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	TableName            string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
 	DisplayName          string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // optional — defaults to table_name
-	Kafka                *KafkaConfig           `protobuf:"bytes,3,opt,name=kafka,proto3" json:"kafka,omitempty"`                                // required
-	KafkaPollerEnabled   *bool                  `protobuf:"varint,4,opt,name=kafka_poller_enabled,json=kafkaPollerEnabled,proto3,oneof" json:"kafka_poller_enabled,omitempty"`
-	ConsolidationEnabled *bool                  `protobuf:"varint,5,opt,name=consolidation_enabled,json=consolidationEnabled,proto3,oneof" json:"consolidation_enabled,omitempty"`
 	ConfigJson           *string                `protobuf:"bytes,6,opt,name=config_json,json=configJson,proto3,oneof" json:"config_json,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
@@ -135,27 +80,6 @@ func (x *RegisterTableRequest) GetDisplayName() string {
 		return x.DisplayName
 	}
 	return ""
-}
-
-func (x *RegisterTableRequest) GetKafka() *KafkaConfig {
-	if x != nil {
-		return x.Kafka
-	}
-	return nil
-}
-
-func (x *RegisterTableRequest) GetKafkaPollerEnabled() bool {
-	if x != nil && x.KafkaPollerEnabled != nil {
-		return *x.KafkaPollerEnabled
-	}
-	return false
-}
-
-func (x *RegisterTableRequest) GetConsolidationEnabled() bool {
-	if x != nil && x.ConsolidationEnabled != nil {
-		return *x.ConsolidationEnabled
-	}
-	return false
 }
 
 func (x *RegisterTableRequest) GetConfigJson() string {

@@ -372,14 +372,20 @@ worker:
     log_success(f"Coordinator gRPC ready (took {took}s)")
 
     # Step 6b: Register the benchmark table via admin API
+    import json
+    config = {"consolidation_enabled": False, "retention_management_enabled": False}
+    if needs_kafka:
+        config["kafka_poller_enabled"] = True
+        config["kafka"] = {
+            "topic": "clp_spark",
+            "bootstrap_servers": f"localhost:{kafka_port}",
+        }
+    else:
+        config["kafka_poller_enabled"] = False
     register_cmd = [str(SERVER_BIN), "admin", "register-table",
                     "--addr", f"localhost:{grpc_port}",
                     "--table", "clp_spark",
-                    "--kafka-poller-enabled", "true" if needs_kafka else "false",
-                    "--consolidation-enabled", "false"]
-    if needs_kafka:
-        register_cmd += ["--kafka-topic", "clp_spark",
-                         "--kafka-bootstrap-servers", f"localhost:{kafka_port}"]
+                    "--config-json", json.dumps(config)]
     log_info("Registering benchmark table via admin API...")
     result = subprocess.run(register_cmd)
     if result.returncode != 0:

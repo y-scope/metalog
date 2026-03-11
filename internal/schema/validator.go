@@ -83,12 +83,6 @@ var systemTableColumns = map[string][]columnSpec{
 		{"table_name", "varchar"},
 		{"active", ""},
 	},
-	metastore.TableRegistryKafka: {
-		{"table_name", "varchar"},
-		{"kafka_bootstrap_servers", "varchar"},
-		{"kafka_topic", "varchar"},
-		{"record_transformer", "varchar"},
-	},
 	metastore.TableRegistryConfig: {
 		{"table_name", "varchar"},
 		{"config", "mediumtext"},

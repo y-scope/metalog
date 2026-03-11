@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/node"
 	"github.com/y-scope/metalog/internal/testutil"
 )
@@ -45,21 +46,25 @@ func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafka
 		t.Fatalf("insert _table_assignment %s: %v", name, err)
 	}
 
-	_, err = db.ExecContext(ctx,
-		"INSERT IGNORE INTO _table_config (table_name) VALUES (?)",
-		name)
-	if err != nil {
-		t.Fatalf("insert _table_config %s: %v", name, err)
+	// Write config blob with Kafka settings if provided.
+	var configBlob []byte
+	if kafkaTopic != "" {
+		cfg := metastore.DefaultTableConfig()
+		cfg.Kafka = &metastore.KafkaConfig{
+			Topic:            kafkaTopic,
+			BootstrapServers: kafkaBootstrapServers,
+		}
+		configBlob, err = metastore.EncodeTableConfig(cfg)
+		if err != nil {
+			t.Fatalf("encode config for %s: %v", name, err)
+		}
 	}
 
-	if kafkaTopic != "" {
-		_, err = db.ExecContext(ctx,
-			"INSERT INTO _table_kafka (table_name, kafka_topic, kafka_bootstrap_servers) VALUES (?, ?, ?) "+
-				"ON DUPLICATE KEY UPDATE kafka_topic = VALUES(kafka_topic), kafka_bootstrap_servers = VALUES(kafka_bootstrap_servers)",
-			name, kafkaTopic, kafkaBootstrapServers)
-		if err != nil {
-			t.Fatalf("insert _table_kafka %s: %v", name, err)
-		}
+	_, err = db.ExecContext(ctx,
+		"INSERT IGNORE INTO _table_config (table_name, config) VALUES (?, ?)",
+		name, configBlob)
+	if err != nil {
+		t.Fatalf("insert _table_config %s: %v", name, err)
 	}
 }
 
@@ -264,32 +269,26 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_GetTableKafkaConfig(t *testing.T) {
+func TestCoordinatorRegistry_GetTableConfig_Kafka(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// No row yet — should return zero-value config
-	cfg, err := cr.GetTableKafkaConfig(ctx, "nonexistent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Topic != "" {
-		t.Errorf("Topic = %q, want empty", cfg.Topic)
-	}
-
-	// Register table with Kafka config
+	// Register table with Kafka config embedded in config blob
 	registerTestTable(t, mc.DB, "kafka_test", "Kafka Test", "test-topic", "kafka:9092")
 
-	cfg, err = cr.GetTableKafkaConfig(ctx, "kafka_test")
+	cfg, err := cr.GetTableConfig(ctx, "kafka_test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Topic != "test-topic" {
-		t.Errorf("Topic = %q, want test-topic", cfg.Topic)
+	if cfg.Kafka == nil {
+		t.Fatal("Kafka config is nil, want non-nil")
 	}
-	if cfg.BootstrapServers != "kafka:9092" {
-		t.Errorf("BootstrapServers = %q, want kafka:9092", cfg.BootstrapServers)
+	if cfg.Kafka.Topic != "test-topic" {
+		t.Errorf("Kafka.Topic = %q, want test-topic", cfg.Kafka.Topic)
+	}
+	if cfg.Kafka.BootstrapServers != "kafka:9092" {
+		t.Errorf("Kafka.BootstrapServers = %q, want kafka:9092", cfg.Kafka.BootstrapServers)
 	}
 }
 

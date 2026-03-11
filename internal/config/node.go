@@ -82,14 +82,6 @@ func (c *GRPCConfig) HasAnyService() bool {
 	return c.Ingestion || c.Admin || c.Query || c.Metadata
 }
 
-// TableKafkaConfig holds Kafka settings for a single table.
-// Used as a data transfer type for DB-sourced Kafka config.
-type TableKafkaConfig struct {
-	Topic             string `yaml:"topic"`
-	BootstrapServers  string `yaml:"bootstrapServers"`
-	RecordTransformer string `yaml:"recordTransformer"`
-}
-
 // WorkerConfig holds worker settings.
 type WorkerConfig struct {
 	Concurrency              int    `yaml:"concurrency"`

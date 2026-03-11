@@ -5,6 +5,13 @@ import (
 	"fmt"
 )
 
+// KafkaConfig holds Kafka consumer routing for a table.
+type KafkaConfig struct {
+	Topic             string `json:"topic"`
+	BootstrapServers  string `json:"bootstrap_servers"`
+	RecordTransformer string `json:"record_transformer,omitempty"`
+}
+
 // ConsolidationPolicyConfig describes a single consolidation policy.
 // Durations are stored as strings because time.Duration has no native JSON
 // representation. Parse with time.ParseDuration at use sites.
@@ -25,17 +32,20 @@ type ConsolidationPolicyConfig struct {
 // keeps the config human-readable via a simple SELECT and avoids compression
 // overhead that would actually increase size at this scale.
 type TableConfig struct {
-	KafkaPollerEnabled    bool                        `json:"kafka_poller_enabled"`
-	ConsolidationEnabled  bool                        `json:"consolidation_enabled"`
-	RetentionType         string                      `json:"retention_type"`
-	ConsolidationPolicies []ConsolidationPolicyConfig `json:"consolidation_policies,omitempty"`
+	KafkaPollerEnabled         bool                        `json:"kafka_poller_enabled"`
+	ConsolidationEnabled       bool                        `json:"consolidation_enabled"`
+	RetentionManagementEnabled bool                        `json:"retention_management_enabled"`
+	RetentionType              string                      `json:"retention_type"`
+	Kafka                      *KafkaConfig                `json:"kafka,omitempty"`
+	ConsolidationPolicies      []ConsolidationPolicyConfig `json:"consolidation_policies,omitempty"`
 }
 
 // DefaultTableConfig returns a TableConfig with all default values.
 func DefaultTableConfig() TableConfig {
 	return TableConfig{
-		KafkaPollerEnabled:   true,
-		ConsolidationEnabled: true,
+		KafkaPollerEnabled:         true,
+		ConsolidationEnabled:       true,
+		RetentionManagementEnabled: true,
 		RetentionType:        "default",
 	}
 }

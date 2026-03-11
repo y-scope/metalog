@@ -33,34 +33,6 @@ func TestRegisterTable_EmptyTableName(t *testing.T) {
 	assertContains(t, status.Convert(err).Message(), "table_name is required")
 }
 
-func TestRegisterTable_KafkaMissingTopic(t *testing.T) {
-	h := &AdminHandler{}
-	req := &pb.RegisterTableRequest{
-		TableName: "test_table",
-		Kafka: &pb.KafkaConfig{
-			BootstrapServers: "localhost:9092",
-		},
-	}
-	_, err := h.RegisterTable(context.Background(), req)
-
-	assertGRPCCode(t, err, codes.InvalidArgument)
-	assertContains(t, status.Convert(err).Message(), "kafka.topic is required")
-}
-
-func TestRegisterTable_KafkaMissingBootstrap(t *testing.T) {
-	h := &AdminHandler{}
-	req := &pb.RegisterTableRequest{
-		TableName: "test_table",
-		Kafka: &pb.KafkaConfig{
-			Topic: "my-topic",
-		},
-	}
-	_, err := h.RegisterTable(context.Background(), req)
-
-	assertGRPCCode(t, err, codes.InvalidArgument)
-	assertContains(t, status.Convert(err).Message(), "kafka.bootstrap_servers is required")
-}
-
 // --- SetColumnAlias validation tests ---
 
 func TestSetColumnAlias_EmptyTableName(t *testing.T) {

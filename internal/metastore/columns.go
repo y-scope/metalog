@@ -77,9 +77,8 @@ func guardedUpdateCols() []string {
 
 // Table registry table names.
 const (
-	TableRegistry           = "_table"
-	TableRegistryKafka      = "_table_kafka"
-	TableRegistryConfig     = "_table_config"
+	TableRegistry       = "_table"
+	TableRegistryConfig = "_table_config"
 	TableRegistryAssignment = "_table_assignment"
 	NodeRegistryTable       = "_node_registry"
 	DimRegistryTable        = "_dim_registry"

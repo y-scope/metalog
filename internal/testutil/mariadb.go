@@ -138,14 +138,6 @@ func (mc *MariaDBContainer) CreateTestTable(t *testing.T, tableName string) {
 	if err != nil {
 		t.Fatalf("create table %s: %v", tableName, err)
 	}
-
-	// Insert _table_kafka
-	_, err = mc.DB.ExecContext(ctx,
-		"INSERT IGNORE INTO _table_kafka (table_name, kafka_topic) VALUES (?, ?)",
-		tableName, tableName+"-topic")
-	if err != nil {
-		t.Fatalf("insert _table_kafka: %v", err)
-	}
 }
 
 func splitStatements(sql string) []string {

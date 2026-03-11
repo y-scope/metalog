@@ -54,8 +54,7 @@ services:
       - --addr=coordinator:9091
       - --table=clp_cockroachdb
       - --display-name=CockroachDB Logs
-      - --kafka-poller-enabled=false
-      - --consolidation-enabled=false
+      - --config-json={"kafka_poller_enabled":false,"consolidation_enabled":false,"retention_management_enabled":false}
     depends_on:
       coordinator:
         condition: service_healthy

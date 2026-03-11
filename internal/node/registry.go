@@ -10,7 +10,6 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/internal/config"
 	db "github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/metastore"
 	schemadef "github.com/y-scope/metalog/schema"
@@ -102,7 +101,6 @@ func splitSQLStatements(sqlText string) []string {
 func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 	requiredTables := []string{
 		metastore.TableRegistry,
-		metastore.TableRegistryKafka,
 		metastore.TableRegistryAssignment,
 		metastore.TableRegistryConfig,
 		metastore.DimRegistryTable,
@@ -125,27 +123,6 @@ func (r *CoordinatorRegistry) ValidateSchemaReady(ctx context.Context) error {
 	}
 	r.log.Info("schema validation passed", zap.Int("tables", len(requiredTables)))
 	return nil
-}
-
-// GetTableKafkaConfig reads Kafka routing config from the DB for a table.
-// Returns a zero-value config (empty topic) if no row exists.
-func (r *CoordinatorRegistry) GetTableKafkaConfig(ctx context.Context, tableName string) (config.TableKafkaConfig, error) {
-	query, args, _ := sq.Select("kafka_topic", "kafka_bootstrap_servers", "COALESCE(record_transformer, '')").
-		From(metastore.TableRegistryKafka).
-		Where(sq.Eq{"table_name": tableName}).
-		ToSql()
-
-	var cfg config.TableKafkaConfig
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
-		&cfg.Topic, &cfg.BootstrapServers, &cfg.RecordTransformer,
-	)
-	if err == sql.ErrNoRows {
-		return cfg, nil
-	}
-	if err != nil {
-		return cfg, fmt.Errorf("get kafka config for %s: %w", tableName, err)
-	}
-	return cfg, nil
 }
 
 // ClaimTable attempts to claim an unassigned table for this node.

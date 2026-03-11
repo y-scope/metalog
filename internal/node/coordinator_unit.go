@@ -58,7 +58,6 @@ func NewCoordinatorUnit(
 	ctx context.Context,
 	tableName string,
 	tableID string,
-	kafkaCfg config.TableKafkaConfig,
 	tableCfg metastore.TableConfig,
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
@@ -117,14 +116,14 @@ func NewCoordinatorUnit(
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
 	// Create Kafka consumer if configured — routes through IngestionService
-	// for proper dim/agg column resolution. Kafka config is cleared by the
-	// caller when kafka_poller_enabled=false.
+	// for proper dim/agg column resolution.
 	var kc *kafkaconsumer.Consumer
-	if kafkaCfg.Topic != "" && kafkaCfg.BootstrapServers != "" {
+	if tableCfg.KafkaPollerEnabled && tableCfg.Kafka != nil &&
+		tableCfg.Kafka.Topic != "" && tableCfg.Kafka.BootstrapServers != "" {
 		groupID := kafkaGroupPrefix + tableName + "-" + tableID
 		kc = kafkaconsumer.NewConsumer(
-			kafkaCfg.BootstrapServers, groupID, kafkaCfg.Topic, tableName,
-			kafkaconsumer.NewTransformer(kafkaCfg.RecordTransformer),
+			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
+			kafkaconsumer.NewTransformer(tableCfg.Kafka.RecordTransformer),
 			ingestSvc,
 			log,
 		)
@@ -206,12 +205,14 @@ func (u *CoordinatorUnit) Start() {
 		u.runAliasRefresh(ctx)
 	}()
 
-	// Retention cleanup goroutine
-	u.wg.Add(1)
-	go func() {
-		defer u.wg.Done()
-		u.retentionStrategy.Run(ctx)
-	}()
+	// Retention cleanup goroutine (conditional on retention_enabled)
+	if u.tableCfg.RetentionManagementEnabled {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.retentionStrategy.Run(ctx)
+		}()
+	}
 
 	// Column recycler goroutine
 	u.wg.Add(1)

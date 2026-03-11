@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -30,17 +31,14 @@ func NewTableRegistration(db *sql.DB, isMariaDB bool, compressionOverride string
 // RegisterTableOpts holds optional fields for RegisterTable.
 // Nil pointers mean "don't update" (keep DB default or existing value).
 type RegisterTableOpts struct {
-	KafkaPollerEnabled   *bool
-	ConsolidationEnabled *bool
-	ConfigJSON           *string // JSON blob to merge into the config
+	ConfigJSON *string // JSON blob to merge into the config
 }
 
-// RegisterTable provisions a table and upserts its Kafka config.
+// RegisterTable provisions a table and applies config overrides.
 // Returns (created bool, err error). created is true if the table was newly provisioned.
 func (s *TableRegistration) RegisterTable(
 	ctx context.Context,
 	tableName, displayName string,
-	kafkaTopic, kafkaBootstrapServers, recordTransformer string,
 	opts RegisterTableOpts,
 ) (bool, error) {
 	if err := db.ValidateSQLIdentifier(tableName); err != nil {
@@ -73,24 +71,6 @@ func (s *TableRegistration) RegisterTable(
 		}
 	}
 
-	// Upsert Kafka config only when Kafka settings were provided.
-	// Skipping prevents clobbering existing config on re-registration without Kafka.
-	if kafkaTopic != "" {
-		kafkaInsert := sq.Insert(metastore.TableRegistryKafka).
-			Columns("table_name", "kafka_topic", "kafka_bootstrap_servers", "record_transformer").
-			Values(tableName, kafkaTopic, kafkaBootstrapServers, recordTransformer)
-		kafkaCols := []string{"kafka_topic", "kafka_bootstrap_servers", "record_transformer"}
-		if s.isMariaDB {
-			kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateValues(kafkaCols...))
-		} else {
-			kafkaInsert = kafkaInsert.Suffix(db.OnDuplicateKeyUpdateAlias("new", kafkaCols...))
-		}
-		kafkaQuery, kafkaArgs, _ := kafkaInsert.ToSql()
-		if _, err := s.db.ExecContext(ctx, kafkaQuery, kafkaArgs...); err != nil {
-			return false, err
-		}
-	}
-
 	// Update table config blob if any config fields are explicitly set.
 	if err := s.updateTableConfig(ctx, tableName, opts); err != nil {
 		return false, fmt.Errorf("update table config: %w", err)
@@ -107,8 +87,7 @@ func (s *TableRegistration) RegisterTable(
 // updateTableConfig performs a read-modify-write on the config blob.
 // Only fields explicitly set in opts are overridden.
 func (s *TableRegistration) updateTableConfig(ctx context.Context, tableName string, opts RegisterTableOpts) error {
-	needsUpdate := opts.KafkaPollerEnabled != nil || opts.ConsolidationEnabled != nil || opts.ConfigJSON != nil
-	if !needsUpdate {
+	if opts.ConfigJSON == nil {
 		return nil
 	}
 
@@ -127,19 +106,12 @@ func (s *TableRegistration) updateTableConfig(ctx context.Context, tableName str
 		return err
 	}
 
-	// Apply overrides from individual fields.
-	if opts.KafkaPollerEnabled != nil {
-		cfg.KafkaPollerEnabled = *opts.KafkaPollerEnabled
-	}
-	if opts.ConsolidationEnabled != nil {
-		cfg.ConsolidationEnabled = *opts.ConsolidationEnabled
-	}
-
-	// Apply overrides from JSON blob (contains full config including policies).
-	if opts.ConfigJSON != nil {
-		if err := json.Unmarshal([]byte(*opts.ConfigJSON), &cfg); err != nil {
-			return fmt.Errorf("parse config_json: %w", err)
-		}
+	// Merge JSON overrides into existing config.
+	// DisallowUnknownFields catches typos like "consolidation_enbaled".
+	dec := json.NewDecoder(strings.NewReader(*opts.ConfigJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return fmt.Errorf("parse config_json: %w", err)
 	}
 
 	// Encode and write back.

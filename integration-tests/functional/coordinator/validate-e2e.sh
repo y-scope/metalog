@@ -131,8 +131,7 @@ info "=== Test 1: Fight-for-master ==="
 info "Seeding _table registry with 'clp_spark' table (node_id = NULL)..."
 db_exec "
 INSERT IGNORE INTO _table (table_name, display_name, active) VALUES ('clp_spark', 'Spark Logs', true);
-INSERT IGNORE INTO _table_kafka (table_name, kafka_bootstrap_servers, kafka_topic) VALUES ('clp_spark', 'kafka:29092', 'clp_spark');
-INSERT IGNORE INTO _table_config (table_name) VALUES ('clp_spark');
+INSERT IGNORE INTO _table_config (table_name, config) VALUES ('clp_spark', '{\"kafka_poller_enabled\":true,\"consolidation_enabled\":true,\"retention_management_enabled\":true,\"retention_type\":\"default\",\"kafka\":{\"topic\":\"clp_spark\",\"bootstrap_servers\":\"kafka:29092\"}}');
 INSERT IGNORE INTO _table_assignment (table_name, node_id) VALUES ('clp_spark', NULL);
 "
 
@@ -346,8 +345,7 @@ info "=== Test 5: Periodic reconciliation (table added after startup) ==="
 info "Inserting 'clp_flink' table into registry with node_id = NULL..."
 db_exec "
 INSERT IGNORE INTO _table (table_name, display_name, active) VALUES ('clp_flink', 'Flink Logs', true);
-INSERT IGNORE INTO _table_kafka (table_name, kafka_bootstrap_servers, kafka_topic) VALUES ('clp_flink', 'kafka:29092', 'clp_flink');
-INSERT IGNORE INTO _table_config (table_name) VALUES ('clp_flink');
+INSERT IGNORE INTO _table_config (table_name, config) VALUES ('clp_flink', '{\"kafka_poller_enabled\":true,\"consolidation_enabled\":true,\"retention_management_enabled\":true,\"retention_type\":\"default\",\"kafka\":{\"topic\":\"clp_flink\",\"bootstrap_servers\":\"kafka:29092\"}}');
 INSERT IGNORE INTO _table_assignment (table_name, node_id) VALUES ('clp_flink', NULL);
 "
 

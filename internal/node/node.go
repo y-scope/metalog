@@ -331,14 +331,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
 
-	// Read Kafka config from DB (source of truth — set via admin API).
-	kafkaCfg, err := n.registry.GetTableKafkaConfig(n.ctx, tableName)
-	if err != nil {
-		return fmt.Errorf("start coordinator %s: %w", tableName, err)
-	}
-	if !tableCfg.KafkaPollerEnabled {
-		kafkaCfg = config.TableKafkaConfig{} // disable consumer creation
-	} else if kafkaCfg.Topic == "" {
+	if tableCfg.KafkaPollerEnabled && (tableCfg.Kafka == nil || tableCfg.Kafka.Topic == "") {
 		n.log.Warn("no Kafka config in DB for table — coordinator will run without Kafka consumer",
 			zap.String("table", tableName))
 	}
@@ -355,7 +348,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		zap.String("retentionType", tableCfg.RetentionType),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, kafkaCfg, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}
