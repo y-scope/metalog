@@ -745,11 +745,7 @@ metalog admin register-table [flags]
 | `--addr` | `localhost:9090` | gRPC server address |
 | `--table` | _(required)_ | Table name |
 | `--display-name` | | Human-readable display name |
-| `--kafka-topic` | | Kafka topic for ingestion |
-| `--kafka-bootstrap-servers` | | Kafka bootstrap servers |
-| `--transformer` | | Record transformer name (empty = default) |
-| `--kafka-poller-enabled` | | Enable Kafka consumer (`true`/`false`, omit for DB default) |
-| `--consolidation-enabled` | | Enable consolidation planner (`true`/`false`, omit for DB default) |
+| `--config-json` | | JSON blob merged into table config (read-modify-write). See [Config Schema](../guides/configure-tables.md#config-schema). |
 
 **Example:**
 
@@ -758,8 +754,7 @@ metalog admin register-table \
   --addr coordinator:9090 \
   --table clp_spark \
   --display-name "Spark Logs" \
-  --kafka-topic spark-ir \
-  --kafka-bootstrap-servers kafka:29092
+  --config-json '{"kafka":{"enabled":true,"topic":"spark-ir","bootstrap_servers":"kafka:29092"}}'
 ```
 
 ---

@@ -75,11 +75,10 @@ Tables are registered via the admin gRPC API. Register a table from the command 
   --addr localhost:9090 \
   --table clp_spark \
   --display-name "Spark Logs" \
-  --kafka-topic spark-ir \
-  --kafka-bootstrap-servers localhost:9092
+  --config-json '{"kafka":{"enabled":true,"topic":"spark-ir","bootstrap_servers":"localhost:9092"}}'
 ```
 
-This calls the coordinator's AdminService gRPC endpoint to UPSERT the table. Only the fields you specify are updated; omitted fields keep their database defaults.
+This calls the coordinator's AdminService gRPC endpoint to UPSERT the table. The `--config-json` flag accepts a JSON blob that is merged into the existing config (read-modify-write). Only the fields you specify are updated; omitted fields keep their defaults.
 
 Expected output:
 

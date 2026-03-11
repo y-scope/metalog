@@ -125,7 +125,7 @@ Deletions are row-level, driven by `idx_expiration` (scan `expires_at ASC`, batc
 
 ## Retention Strategy
 
-Each coordinator runs a **Retention Strategy** goroutine per table — always enabled, one of the per-coordinator goroutines (see [Architecture Overview: Goroutine Model](overview.md#goroutine-model)). The strategy is configured per-table via the `retention_type` column in `_table_config` (default: `"default"`).
+Each coordinator runs a **Retention Strategy** goroutine per table when `retention.enabled` is `true` in the table config (default: enabled). The strategy type is configured per-table via `retention.type` in the `_table_config` config blob (default: `"default"`). See [Config Schema](../guides/configure-tables.md#config-schema).
 
 ### How It Works
 
