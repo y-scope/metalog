@@ -579,17 +579,7 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 |-------|------|----------|-------------|
 | `table_name` | string | Yes | Metadata table name (must be a valid SQL identifier) |
 | `display_name` | string | No | Human-friendly label. Defaults to `table_name`. |
-| `kafka` | KafkaConfig | Yes | Kafka routing configuration |
-| `kafka_poller_enabled` | optional bool | No | Enable/disable Kafka consumer goroutine. Default: `true` when `kafka` is provided. |
-| `consolidation_enabled` | optional bool | No | Enable/disable consolidation planner. Uses DB default if omitted. |
-
-**`KafkaConfig` fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `topic` | string | Yes | Kafka topic to consume from |
-| `bootstrap_servers` | string | Yes | Kafka broker address(es) |
-| `record_transformer` | string | No | Named transformer for ingested records. Empty = default transformer. |
+| `config_json` | optional string | No | JSON blob merged into the table's config (read-modify-write). Unknown fields are rejected. See [Config Fields](../guides/configure-tables.md#config-fields) for the full schema. |
 
 #### Response fields
 
@@ -600,8 +590,8 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 
 #### Behaviour
 
-1. Validates `table_name`, `kafka`, `kafka.topic`, `kafka.bootstrap_servers` → `INVALID_ARGUMENT` on failure.
-2. Writes `_table`, `_table_kafka`, `_table_config`, `_table_assignment`, and 64 `_sketch_registry` slots (all idempotent).
+1. Validates `table_name` → `INVALID_ARGUMENT` on failure. If `config_json` is provided, validates JSON and rejects unknown fields.
+2. Writes `_table`, `_table_config`, `_table_assignment`, and 64 `_sketch_registry` slots (all idempotent). Merges `config_json` into the existing config blob.
 3. Provisions the physical metadata table with lookahead partitions (no-op if already exists).
 4. The coordinator's periodic `reconcileUnits()` loop claims the new `_table_assignment` row (with `node_id = NULL`) on its next cycle (default: 60 s).
 
@@ -611,7 +601,7 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 # Minimal registration
 grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
-  "kafka": {"topic": "spark-ir", "bootstrap_servers": "kafka:29092"}
+  "config_json": "{\"kafka\":{\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\"}}"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
@@ -623,12 +613,7 @@ grpcurl -plaintext -d '{
 grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "display_name": "Spark Logs",
-  "kafka": {
-    "topic": "spark-ir",
-    "bootstrap_servers": "kafka:29092",
-    "record_transformer": "spark"
-  },
-  "consolidation_enabled": false
+  "config_json": "{\"kafka\":{\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"consolidation_enabled\":false}"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
@@ -637,7 +622,7 @@ grpcurl -plaintext -d '{
 
 | gRPC Status | Cause |
 |-------------|-------|
-| `INVALID_ARGUMENT` | `table_name` blank, `kafka` absent, `kafka.topic` blank, `kafka.bootstrap_servers` blank |
+| `INVALID_ARGUMENT` | `table_name` blank, `config_json` contains unknown fields |
 | `INTERNAL` | Database error |
 
 ### `SetColumnAlias`

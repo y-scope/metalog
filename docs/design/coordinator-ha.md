@@ -324,7 +324,7 @@ CREATE TABLE _node_registry (
 ) ENGINE=InnoDB;
 ```
 
-See `schema.sql` for the full registry (`_table_kafka`, `_table_config`).
+See `schema.sql` for the full registry (`_table_config`, `_table_assignment`).
 
 ---
 

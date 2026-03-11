@@ -192,7 +192,7 @@
 -- Split into identity, Kafka routing, feature config, and node assignment.
 -- Each sub-table uses table_name as PK/FK for 1:1 relationships.
 --
--- WHY 4 TABLES INSTEAD OF 1?
+-- WHY 3 TABLES INSTEAD OF 1?
 --
 -- The split is driven by write cadence and deployment topology, not entity
 -- modeling theory. Each sub-table is written at a different frequency and
@@ -201,14 +201,11 @@
 --   _table            Stable identity. Written once at provisioning, rarely
 --                     changed. Anchor for all FKs.
 --
---   _table_kafka      Environment-specific routing (bootstrap servers, topic).
---                     Different coordinators in dev/prod/staging can point to
---                     different Kafka clusters for the same logical table.
---                     Updated during Kafka migrations, not during normal ops.
---
---   _table_config     Feature flags and operational parameters. Read-heavy,
---                     hot-reloaded by coordinators. Rarely written (operator
---                     config changes). Must not contend with assignment writes.
+--   _table_config     Unified config blob (JSON). Contains feature flags,
+--                     Kafka routing, consolidation policies, and all other
+--                     per-table operational parameters. Read-heavy, hot-reloaded
+--                     by coordinators. Rarely written (operator config changes).
+--                     Must not contend with assignment writes.
 --
 --   _table_assignment Hot table. Heartbeats, lease expiry, and progress
 --                     timestamps updated every few seconds by whichever
@@ -223,10 +220,10 @@
 --
 -- FK CASCADE POLICY:
 -- All child tables use ON DELETE CASCADE. Deleting a row from _table
--- automatically cleans up config, assignment, Kafka routing, registries,
--- and tasks. This is safe because table decommissioning is a rare,
+-- automatically cleans up config, assignment, registries, and tasks.
+-- This is safe because table decommissioning is a rare,
 -- operator-initiated action, and CASCADE eliminates the risk of orphaned
--- rows across 7 child tables. The active flag on _table supports
+-- rows across the child tables. The active flag on _table supports
 -- soft-delete for normal operations; hard delete is reserved for full
 -- decommissioning.
 --
@@ -254,16 +251,7 @@ CREATE TABLE IF NOT EXISTS _table (
     active        BOOLEAN NOT NULL DEFAULT TRUE
 ) ENGINE=InnoDB;
 
--- Kafka routing: bootstrap servers, topic, and message transformer per table
-CREATE TABLE IF NOT EXISTS _table_kafka (
-    table_name              VARCHAR(64) NOT NULL PRIMARY KEY,
-    kafka_bootstrap_servers VARCHAR(255) NOT NULL DEFAULT 'localhost:9092',
-    kafka_topic             VARCHAR(255) NOT NULL,
-    record_transformer      VARCHAR(64) NULL,
-    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
-) ENGINE=InnoDB;
-
--- Feature config: single LZ4+msgpack blob replacing individual typed columns.
+-- Feature config: unified JSON blob containing all per-table settings.
 -- NULL blob → all defaults (kafka_poller=true, consolidation=true, retention="default").
 -- See internal/metastore/tableconfig.go for the TableConfig struct definition.
 -- Adding new settings is a Go struct change + msgpack tag — no schema migration needed.

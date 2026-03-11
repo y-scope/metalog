@@ -60,11 +60,21 @@ type RecordTransformer interface {
 
 ## Configuration
 
-Set the transformer per table via the `_table_kafka` registry table:
+Set the transformer per table via the `config` blob in `_table_config`:
+
+```bash
+grpcurl -plaintext -d '{
+  "table_name": "spark_logs",
+  "config_json": "{\"kafka\":{\"record_transformer\":\"json\"}}"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
+```
+
+Or via SQL (read-modify-write on the JSON blob):
 
 ```sql
-UPDATE _table_kafka
-SET record_transformer = 'json'
+UPDATE _table_config
+SET config = JSON_SET(COALESCE(config, '{}'), '$.kafka.record_transformer', 'json')
 WHERE table_name = 'spark_logs';
 ```
 
@@ -118,8 +128,12 @@ func init() {
 
 Enable for your table via the admin API or SQL:
 
-```sql
-UPDATE _table_kafka SET record_transformer = 'spark' WHERE table_name = 'spark_logs';
+```bash
+grpcurl -plaintext -d '{
+  "table_name": "spark_logs",
+  "config_json": "{\"kafka\":{\"record_transformer\":\"spark\"}}"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
 ## Field Mapping Reference
