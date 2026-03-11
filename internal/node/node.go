@@ -224,7 +224,7 @@ func (n *Node) Start() error {
 		go func() {
 			defer n.wg.Done()
 			if err := n.healthSrv.Start(); err != nil {
-				n.log.Error("health server error", zap.Error(err))
+				n.log.Error("health HTTP server failed", zap.Error(err))
 			}
 		}()
 		n.healthSrv.SetReady(true)
@@ -371,19 +371,26 @@ func (n *Node) runLiveness() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	healthy := true
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
+			var err error
 			if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
-				if err := n.registry.RenewLeases(n.ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second); err != nil {
-					n.log.Warn("lease renewal failed", zap.Error(err))
-				}
+				err = n.registry.RenewLeases(n.ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second)
 			} else {
-				if err := n.registry.SendHeartbeat(n.ctx); err != nil {
-					n.log.Warn("heartbeat failed", zap.Error(err))
+				err = n.registry.SendHeartbeat(n.ctx)
+			}
+			if err != nil {
+				if healthy {
+					n.log.Warn("liveness failed", zap.Error(err))
+					healthy = false
 				}
+			} else if !healthy {
+				n.log.Info("liveness recovered")
+				healthy = true
 			}
 		}
 	}

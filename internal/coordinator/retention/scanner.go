@@ -58,6 +58,7 @@ func (s *defaultStrategy) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
+	healthy := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -67,7 +68,13 @@ func (s *defaultStrategy) Run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				s.log.Warn("retention scan cycle failed", zap.Error(err))
+				if healthy {
+					s.log.Warn("retention scan failed", zap.Error(err))
+					healthy = false
+				}
+			} else if !healthy {
+				s.log.Info("retention scan recovered")
+				healthy = true
 			}
 		}
 	}

@@ -370,7 +370,7 @@ func (tw *tableWriter) notifyBatch(batch []*metastore.FileRecord, err error) {
 			select {
 			case rec.Flushed <- err:
 			default:
-				tw.log.Warn("flushed channel full, dropping notification")
+				tw.log.Debug("flush notification dropped, consumer already returned")
 			}
 		}
 	}

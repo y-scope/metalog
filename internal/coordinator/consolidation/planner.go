@@ -85,19 +85,23 @@ func (p *Planner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
+	healthy := true
 	for {
 		select {
 		case <-ctx.Done():
-			p.log.Info("planner stopped")
 			return
 		case <-ticker.C:
 			if err := p.planOnce(ctx); err != nil {
-				// Suppress errors caused by context cancellation during shutdown.
 				if ctx.Err() != nil {
-					p.log.Info("planner stopped")
 					return
 				}
-				p.log.Warn("planning cycle failed", zap.Error(err))
+				if healthy {
+					p.log.Warn("planning cycle failed", zap.Error(err))
+					healthy = false
+				}
+			} else if !healthy {
+				p.log.Info("planning cycle recovered")
+				healthy = true
 			}
 		}
 	}
@@ -204,7 +208,7 @@ func (p *Planner) planOnce(ctx context.Context) error {
 			return fmt.Errorf("create task: %w", err)
 		}
 
-		p.log.Info("created consolidation task",
+		p.log.Debug("created consolidation task",
 			zap.Int64("taskId", taskID),
 			zap.Int("files", len(group)),
 		)
@@ -388,7 +392,7 @@ func (p *Planner) cleanupOldTasks(ctx context.Context) error {
 		return err
 	}
 	if n > 0 {
-		p.log.Info("cleaned up old tasks", zap.Int64("deleted", n))
+		p.log.Debug("cleaned up old tasks", zap.Int64("deleted", n))
 	}
 	return nil
 }

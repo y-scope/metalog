@@ -142,13 +142,17 @@ func (c *Consumer) Run(ctx context.Context) {
 		"max.partition.fetch.bytes": 1048576,
 	})
 	if err != nil {
-		c.log.Error("failed to create kafka consumer", zap.Error(err))
+		c.log.Error("failed to create kafka consumer",
+			zap.String("bootstrapServers", c.bootstrapServers),
+			zap.Error(err))
 		return
 	}
 	defer consumer.Close()
 
 	if err := consumer.Subscribe(c.topic, nil); err != nil {
-		c.log.Error("failed to subscribe", zap.Error(err))
+		c.log.Error("failed to subscribe to kafka topic",
+			zap.String("topic", c.topic),
+			zap.Error(err))
 		return
 	}
 
@@ -215,7 +219,7 @@ func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *i
 			c.drainFlushes()
 			return true
 		}
-		c.log.Warn("kafka error", zap.Error(e))
+		c.log.Warn("kafka consumer error (transient)", zap.Error(e))
 	}
 	return false
 }
@@ -277,7 +281,7 @@ func (c *Consumer) drainFlushesBlocking() {
 				Offset:    pf.offset + 1,
 			})
 		case <-deadline:
-			c.log.Warn("shutdown drain timeout, uncommitted flushes remain",
+			c.log.Error("shutdown drain timeout, uncommitted flushes remain",
 				zap.Int("remaining", len(c.pendingFlushes)))
 			c.pendingFlushes = nil
 			return

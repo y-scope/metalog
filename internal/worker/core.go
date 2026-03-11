@@ -69,7 +69,10 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 	}
 
 	if len(payload.IRBuckets) == 0 || len(payload.IRPaths) == 0 {
-		log.Error("invalid payload: missing IR buckets or paths")
+		log.Error("invalid payload: missing IR buckets or paths",
+			zap.Int("irBuckets", len(payload.IRBuckets)),
+			zap.Int("irPaths", len(payload.IRPaths)),
+		)
 		if _, fErr := c.taskQueue.FailTask(ctx, task.TaskID); fErr != nil {
 			log.Error("fail task after invalid payload", zap.Error(fErr))
 		}
@@ -110,5 +113,5 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 		log.Error("complete task failed", zap.Error(cErr))
 		return
 	}
-	log.Info("task completed", zap.String("archivePath", payload.ArchivePath), zap.Int64("sizeBytes", sizeBytes))
+	log.Debug("task completed", zap.String("archivePath", payload.ArchivePath), zap.Int64("sizeBytes", sizeBytes))
 }
