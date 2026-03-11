@@ -21,60 +21,23 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// KafkaConfig is a legacy proto message kept for wire-format compatibility.
-// Kafka settings are now configured via config_json in RegisterTableRequest.
-// All protobuf methods are retained because the raw descriptor still references
-// this message type; removing them causes a panic in protobuf reflection.
-type KafkaConfig struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Topic             string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
-	BootstrapServers  string                 `protobuf:"bytes,2,opt,name=bootstrap_servers,json=bootstrapServers,proto3" json:"bootstrap_servers,omitempty"`
-	RecordTransformer string                 `protobuf:"bytes,3,opt,name=record_transformer,json=recordTransformer,proto3" json:"record_transformer,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *KafkaConfig) Reset() {
-	*x = KafkaConfig{}
-	mi := &file_admin_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *KafkaConfig) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*KafkaConfig) ProtoMessage() {}
-
-func (x *KafkaConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-func (*KafkaConfig) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{0}
-}
-
 type RegisterTableRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	TableName            string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
-	DisplayName          string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // optional — defaults to table_name
-	ConfigJson           *string                `protobuf:"bytes,6,opt,name=config_json,json=configJson,proto3,oneof" json:"config_json,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TableName   string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`       // required
+	DisplayName string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // optional — defaults to table_name
+	// JSON representation of the full TableConfig. Parsed server-side and merged
+	// into the stored config blob (read-modify-write). Supports all config fields:
+	// kafka_poller_enabled, consolidation_enabled, retention_management_enabled,
+	// retention_type, kafka (topic, bootstrap_servers, record_transformer),
+	// consolidation_policies, etc.
+	ConfigJson    *string `protobuf:"bytes,6,opt,name=config_json,json=configJson,proto3,oneof" json:"config_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterTableRequest) Reset() {
 	*x = RegisterTableRequest{}
-	mi := &file_admin_proto_msgTypes[1]
+	mi := &file_admin_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -86,7 +49,7 @@ func (x *RegisterTableRequest) String() string {
 func (*RegisterTableRequest) ProtoMessage() {}
 
 func (x *RegisterTableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[1]
+	mi := &file_admin_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -99,7 +62,7 @@ func (x *RegisterTableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterTableRequest.ProtoReflect.Descriptor instead.
 func (*RegisterTableRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{1}
+	return file_admin_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RegisterTableRequest) GetTableName() string {
@@ -133,7 +96,7 @@ type RegisterTableResponse struct {
 
 func (x *RegisterTableResponse) Reset() {
 	*x = RegisterTableResponse{}
-	mi := &file_admin_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -145,7 +108,7 @@ func (x *RegisterTableResponse) String() string {
 func (*RegisterTableResponse) ProtoMessage() {}
 
 func (x *RegisterTableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -158,7 +121,7 @@ func (x *RegisterTableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterTableResponse.ProtoReflect.Descriptor instead.
 func (*RegisterTableResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{2}
+	return file_admin_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RegisterTableResponse) GetTableName() string {
@@ -189,7 +152,7 @@ type SetColumnAliasRequest struct {
 
 func (x *SetColumnAliasRequest) Reset() {
 	*x = SetColumnAliasRequest{}
-	mi := &file_admin_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -201,7 +164,7 @@ func (x *SetColumnAliasRequest) String() string {
 func (*SetColumnAliasRequest) ProtoMessage() {}
 
 func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -214,7 +177,7 @@ func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasRequest.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{3}
+	return file_admin_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SetColumnAliasRequest) GetTableName() string {
@@ -248,7 +211,7 @@ type SetColumnAliasResponse struct {
 
 func (x *SetColumnAliasResponse) Reset() {
 	*x = SetColumnAliasResponse{}
-	mi := &file_admin_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -260,7 +223,7 @@ func (x *SetColumnAliasResponse) String() string {
 func (*SetColumnAliasResponse) ProtoMessage() {}
 
 func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -273,7 +236,7 @@ func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasResponse.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{4}
+	return file_admin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SetColumnAliasResponse) GetColumnName() string {
@@ -304,7 +267,7 @@ type InvalidateColumnRequest struct {
 
 func (x *InvalidateColumnRequest) Reset() {
 	*x = InvalidateColumnRequest{}
-	mi := &file_admin_proto_msgTypes[5]
+	mi := &file_admin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +279,7 @@ func (x *InvalidateColumnRequest) String() string {
 func (*InvalidateColumnRequest) ProtoMessage() {}
 
 func (x *InvalidateColumnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[5]
+	mi := &file_admin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +292,7 @@ func (x *InvalidateColumnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateColumnRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateColumnRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{5}
+	return file_admin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *InvalidateColumnRequest) GetTableName() string {
@@ -356,7 +319,7 @@ type InvalidateColumnResponse struct {
 
 func (x *InvalidateColumnResponse) Reset() {
 	*x = InvalidateColumnResponse{}
-	mi := &file_admin_proto_msgTypes[6]
+	mi := &file_admin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +331,7 @@ func (x *InvalidateColumnResponse) String() string {
 func (*InvalidateColumnResponse) ProtoMessage() {}
 
 func (x *InvalidateColumnResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[6]
+	mi := &file_admin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +344,7 @@ func (x *InvalidateColumnResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateColumnResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateColumnResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{6}
+	return file_admin_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InvalidateColumnResponse) GetColumnName() string {
@@ -402,20 +365,14 @@ var File_admin_proto protoreflect.FileDescriptor
 
 const file_admin_proto_rawDesc = "" +
 	"\n" +
-	"\vadmin.proto\x12#com.yscope.metalog.coordinator.grpc\"\x7f\n" +
-	"\vKafkaConfig\x12\x14\n" +
-	"\x05topic\x18\x01 \x01(\tR\x05topic\x12+\n" +
-	"\x11bootstrap_servers\x18\x02 \x01(\tR\x10bootstrapServers\x12-\n" +
-	"\x12record_transformer\x18\x03 \x01(\tR\x11recordTransformer\"\xc4\x02\n" +
+	"\vadmin.proto\x12#com.yscope.metalog.coordinator.grpc\"\x8e\x01\n" +
 	"\x14RegisterTableRequest\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12!\n" +
-	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12F\n" +
-	"\x05kafka\x18\x03 \x01(\v20.com.yscope.metalog.coordinator.grpc.KafkaConfigR\x05kafka\x125\n" +
-	"\x14kafka_poller_enabled\x18\x04 \x01(\bH\x00R\x12kafkaPollerEnabled\x88\x01\x01\x128\n" +
-	"\x15consolidation_enabled\x18\x05 \x01(\bH\x01R\x14consolidationEnabled\x88\x01\x01B\x17\n" +
-	"\x15_kafka_poller_enabledB\x18\n" +
-	"\x16_consolidation_enabled\"P\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12$\n" +
+	"\vconfig_json\x18\x06 \x01(\tH\x00R\n" +
+	"configJson\x88\x01\x01B\x0e\n" +
+	"\f_config_json\"P\n" +
 	"\x15RegisterTableResponse\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x18\n" +
@@ -457,29 +414,27 @@ func file_admin_proto_rawDescGZIP() []byte {
 	return file_admin_proto_rawDescData
 }
 
-var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_admin_proto_goTypes = []any{
-	(*KafkaConfig)(nil),              // 0: com.yscope.metalog.coordinator.grpc.KafkaConfig
-	(*RegisterTableRequest)(nil),     // 1: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	(*RegisterTableResponse)(nil),    // 2: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	(*SetColumnAliasRequest)(nil),    // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	(*SetColumnAliasResponse)(nil),   // 4: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
-	(*InvalidateColumnRequest)(nil),  // 5: com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
-	(*InvalidateColumnResponse)(nil), // 6: com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
+	(*RegisterTableRequest)(nil),     // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	(*RegisterTableResponse)(nil),    // 1: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	(*SetColumnAliasRequest)(nil),    // 2: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	(*SetColumnAliasResponse)(nil),   // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	(*InvalidateColumnRequest)(nil),  // 4: com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	(*InvalidateColumnResponse)(nil), // 5: com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
 }
 var file_admin_proto_depIdxs = []int32{
-	0, // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest.kafka:type_name -> com.yscope.metalog.coordinator.grpc.KafkaConfig
-	1, // 1: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	3, // 2: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	5, // 3: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:input_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
-	2, // 4: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	4, // 5: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
-	6, // 6: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:output_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	2, // 1: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	4, // 2: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:input_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	1, // 3: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	3, // 4: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	5, // 5: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:output_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_admin_proto_init() }
@@ -487,14 +442,14 @@ func file_admin_proto_init() {
 	if File_admin_proto != nil {
 		return
 	}
-	file_admin_proto_msgTypes[1].OneofWrappers = []any{}
+	file_admin_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
