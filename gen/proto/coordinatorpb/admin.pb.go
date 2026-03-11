@@ -23,10 +23,44 @@ const (
 
 // KafkaConfig is a legacy proto message kept for wire-format compatibility.
 // Kafka settings are now configured via config_json in RegisterTableRequest.
+// All protobuf methods are retained because the raw descriptor still references
+// this message type; removing them causes a panic in protobuf reflection.
 type KafkaConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Topic             string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
+	BootstrapServers  string                 `protobuf:"bytes,2,opt,name=bootstrap_servers,json=bootstrapServers,proto3" json:"bootstrap_servers,omitempty"`
+	RecordTransformer string                 `protobuf:"bytes,3,opt,name=record_transformer,json=recordTransformer,proto3" json:"record_transformer,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *KafkaConfig) Reset() {
+	*x = KafkaConfig{}
+	mi := &file_admin_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KafkaConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KafkaConfig) ProtoMessage() {}
+
+func (x *KafkaConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (*KafkaConfig) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{0}
 }
 
 type RegisterTableRequest struct {
