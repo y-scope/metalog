@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/y-scope/metalog/internal/logutil"
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/timeutil"
 	"github.com/y-scope/metalog/storage"
@@ -58,7 +59,7 @@ func (s *defaultStrategy) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	healthy := true
+	fl := logutil.NewFailureLogger(s.log, time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
@@ -68,13 +69,9 @@ func (s *defaultStrategy) Run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				if healthy {
-					s.log.Warn("retention scan failed", zap.Error(err))
-					healthy = false
-				}
-			} else if !healthy {
-				s.log.Info("retention scan recovered")
-				healthy = true
+				fl.Fail("retention scan failed", zap.Error(err))
+			} else {
+				fl.OK()
 			}
 		}
 	}

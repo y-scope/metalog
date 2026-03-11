@@ -13,6 +13,7 @@ import (
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
 	"github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/health"
+	"github.com/y-scope/metalog/internal/logutil"
 	"github.com/y-scope/metalog/internal/schema"
 	"github.com/y-scope/metalog/storage"
 )
@@ -371,7 +372,7 @@ func (n *Node) runLiveness() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	healthy := true
+	fl := logutil.NewFailureLogger(n.log, time.Minute)
 	for {
 		select {
 		case <-n.ctx.Done():
@@ -384,13 +385,9 @@ func (n *Node) runLiveness() {
 				err = n.registry.SendHeartbeat(n.ctx)
 			}
 			if err != nil {
-				if healthy {
-					n.log.Warn("liveness failed", zap.Error(err))
-					healthy = false
-				}
-			} else if !healthy {
-				n.log.Info("liveness recovered")
-				healthy = true
+				fl.Fail("liveness failed", zap.Error(err))
+			} else {
+				fl.OK()
 			}
 		}
 	}

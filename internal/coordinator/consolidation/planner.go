@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
+	"github.com/y-scope/metalog/internal/logutil"
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/timeutil"
@@ -85,7 +86,7 @@ func (p *Planner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
-	healthy := true
+	fl := logutil.NewFailureLogger(p.log, time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
@@ -95,13 +96,9 @@ func (p *Planner) Run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				if healthy {
-					p.log.Warn("planning cycle failed", zap.Error(err))
-					healthy = false
-				}
-			} else if !healthy {
-				p.log.Info("planning cycle recovered")
-				healthy = true
+				fl.Fail("planning cycle failed", zap.Error(err))
+			} else {
+				fl.OK()
 			}
 		}
 	}
