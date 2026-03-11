@@ -50,10 +50,8 @@ func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafka
 	var configBlob []byte
 	if kafkaTopic != "" {
 		cfg := metastore.DefaultTableConfig()
-		cfg.Kafka = &metastore.KafkaConfig{
-			Topic:            kafkaTopic,
-			BootstrapServers: kafkaBootstrapServers,
-		}
+		cfg.Kafka.Topic = kafkaTopic
+		cfg.Kafka.BootstrapServers = kafkaBootstrapServers
 		configBlob, err = metastore.EncodeTableConfig(cfg)
 		if err != nil {
 			t.Fatalf("encode config for %s: %v", name, err)
@@ -280,9 +278,6 @@ func TestCoordinatorRegistry_GetTableConfig_Kafka(t *testing.T) {
 	cfg, err := cr.GetTableConfig(ctx, "kafka_test")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if cfg.Kafka == nil {
-		t.Fatal("Kafka config is nil, want non-nil")
 	}
 	if cfg.Kafka.Topic != "test-topic" {
 		t.Errorf("Kafka.Topic = %q, want test-topic", cfg.Kafka.Topic)

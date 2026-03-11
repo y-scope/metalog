@@ -331,8 +331,8 @@ func (n *Node) startCoordinator(tableName string) error {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
 
-	if tableCfg.KafkaPollerEnabled && (tableCfg.Kafka == nil || tableCfg.Kafka.Topic == "") {
-		n.log.Warn("no Kafka config in DB for table — coordinator will run without Kafka consumer",
+	if tableCfg.Kafka.Enabled && tableCfg.Kafka.Topic == "" {
+		n.log.Warn("kafka enabled but no topic configured — coordinator will run without Kafka consumer",
 			zap.String("table", tableName))
 	}
 
@@ -343,9 +343,10 @@ func (n *Node) startCoordinator(tableName string) error {
 
 	n.log.Info("starting coordinator",
 		zap.String("table", tableName),
-		zap.Bool("kafkaPoller", tableCfg.KafkaPollerEnabled),
-		zap.Bool("consolidation", tableCfg.ConsolidationEnabled),
-		zap.String("retentionType", tableCfg.RetentionType),
+		zap.Bool("kafka", tableCfg.Kafka.Enabled),
+		zap.Bool("consolidation", tableCfg.Consolidation.Enabled),
+		zap.Bool("retention", tableCfg.Retention.Enabled),
+		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
 	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)

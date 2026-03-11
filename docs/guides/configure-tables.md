@@ -33,7 +33,7 @@ config (read-modify-write). Unknown fields are rejected.
 grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "display_name": "Spark Logs",
-  "config_json": "{\"kafka\":{\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"kafka_poller_enabled\":true,\"consolidation_enabled\":false}"
+  "config_json": "{\"kafka\":{\"enabled\":true,\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"consolidation\":{\"enabled\":false}}"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
@@ -86,22 +86,71 @@ SELECT * FROM _table_config WHERE table_name = 'spark';
 
 ---
 
-## Config Fields
+## Config Schema
 
-All per-table settings live in the `config` JSON blob in `_table_config`. A NULL blob means all defaults apply.
+All per-table settings live in the `config` JSON blob in `_table_config`. A NULL blob means all
+defaults apply. The config is organized by subsystem — each subsystem owns its `enabled` flag and
+its settings under a single key.
+
+### Full example
+
+```json
+{
+  "kafka": {
+    "enabled": true,
+    "topic": "spark-ir",
+    "bootstrap_servers": "kafka:29092",
+    "record_transformer": "spark"
+  },
+  "consolidation": {
+    "enabled": true,
+    "policies": [
+      { "type": "time_window", "window_size": "1h", "min_files": 2, "max_files": 100 }
+    ]
+  },
+  "retention": {
+    "enabled": true,
+    "type": "default"
+  }
+}
+```
+
+### `kafka` — Kafka consumer routing
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `kafka_poller_enabled` | bool | `true` | Enable/disable Kafka consumer goroutine |
-| `consolidation_enabled` | bool | `true` | Enable/disable consolidation planner |
-| `retention_management_enabled` | bool | `true` | Enable/disable retention cleanup |
-| `retention_type` | string | `"default"` | Retention strategy type |
-| `kafka.topic` | string | — | Kafka topic to consume from |
-| `kafka.bootstrap_servers` | string | — | Kafka broker address(es) |
-| `kafka.record_transformer` | string | — | Named record transformer (empty = default) |
-| `consolidation_policies` | array | — | Ordered list of consolidation policies (see consolidation docs) |
+| `enabled` | bool | `true` | Enable/disable Kafka consumer goroutine |
+| `topic` | string | `""` | Kafka topic to consume from |
+| `bootstrap_servers` | string | `""` | Kafka broker address(es) |
+| `record_transformer` | string | `""` | Named record transformer (empty = default). See [Write Transformers](write-transformers.md). |
 
-The `retention_type` field selects which strategy implementation to use. Custom strategies can be registered at compile time for alternative deletion policies (throttling, grace periods, etc.).
+Even when `enabled` is `true`, the consumer only starts if `topic` and `bootstrap_servers` are both
+non-empty. This lets you enable Kafka in advance and configure routing later.
+
+### `consolidation` — IR-to-archive consolidation
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable/disable consolidation planner |
+| `policies` | array | `[]` | Ordered list of consolidation policies (waterfall). If empty, a default `time_window(1h)` policy is used. |
+
+Each policy in the `policies` array:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Policy type: `"time_window"`, `"spark_job"`, `"audit"` |
+| `window_size` | string | Time window duration, e.g. `"1h"`, `"30m"` (time_window only) |
+| `min_files` | int | Minimum files to trigger consolidation (default: 2) |
+| `max_files` | int | Maximum files per consolidation task (default: 100) |
+| `grouping_dim_key` | string | Dimension key to group by (spark_job only) |
+| `job_timeout` | string | Job timeout duration, e.g. `"2h"` (spark_job only) |
+
+### `retention` — Lifecycle and expiration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable/disable retention cleanup |
+| `type` | string | `"default"` | Retention strategy type. Custom strategies can be registered at compile time. |
 
 ---
 

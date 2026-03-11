@@ -74,10 +74,10 @@ func NewCoordinatorUnit(
 
 	// Consolidation planner (conditional on feature flag).
 	var planner *consolidation.Planner
-	if tableCfg.ConsolidationEnabled {
+	if tableCfg.Consolidation.Enabled {
 		inFlight := consolidation.NewInFlightSet()
 
-		policy, err := consolidation.CreatePolicyChain(tableCfg.ConsolidationPolicies)
+		policy, err := consolidation.CreatePolicyChain(tableCfg.Consolidation.Policies)
 		if err != nil {
 			return nil, fmt.Errorf("new coordinator unit: create policy chain: %w", err)
 		}
@@ -97,8 +97,8 @@ func NewCoordinatorUnit(
 		}
 	}
 
-	// Retention strategy — always enabled; every table needs expiration cleanup.
-	retTypeName := tableCfg.RetentionType
+	// Retention strategy — always created; conditionally started in Start().
+	retTypeName := tableCfg.Retention.Type
 	if retTypeName == "" {
 		retTypeName = "default"
 	}
@@ -118,7 +118,7 @@ func NewCoordinatorUnit(
 	// Create Kafka consumer if configured — routes through IngestionService
 	// for proper dim/agg column resolution.
 	var kc *kafkaconsumer.Consumer
-	if tableCfg.KafkaPollerEnabled && tableCfg.Kafka != nil &&
+	if tableCfg.Kafka.Enabled &&
 		tableCfg.Kafka.Topic != "" && tableCfg.Kafka.BootstrapServers != "" {
 		groupID := kafkaGroupPrefix + tableName + "-" + tableID
 		kc = kafkaconsumer.NewConsumer(
@@ -205,8 +205,8 @@ func (u *CoordinatorUnit) Start() {
 		u.runAliasRefresh(ctx)
 	}()
 
-	// Retention cleanup goroutine (conditional on retention_enabled)
-	if u.tableCfg.RetentionManagementEnabled {
+	// Retention cleanup goroutine (conditional on retention.enabled)
+	if u.tableCfg.Retention.Enabled {
 		u.wg.Add(1)
 		go func() {
 			defer u.wg.Done()

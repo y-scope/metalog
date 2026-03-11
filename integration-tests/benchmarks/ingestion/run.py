@@ -373,15 +373,18 @@ worker:
 
     # Step 6b: Register the benchmark table via admin API
     import json
-    config = {"consolidation_enabled": False, "retention_management_enabled": False}
+    config = {
+        "consolidation": {"enabled": False},
+        "retention": {"enabled": False},
+    }
     if needs_kafka:
-        config["kafka_poller_enabled"] = True
         config["kafka"] = {
+            "enabled": True,
             "topic": "clp_spark",
             "bootstrap_servers": f"localhost:{kafka_port}",
         }
     else:
-        config["kafka_poller_enabled"] = False
+        config["kafka"] = {"enabled": False}
     register_cmd = [str(SERVER_BIN), "admin", "register-table",
                     "--addr", f"localhost:{grpc_port}",
                     "--table", "clp_spark",

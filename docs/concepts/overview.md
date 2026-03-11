@@ -139,11 +139,11 @@ Each CoordinatorUnit owns these goroutines. They are created when a coordinator 
 
 | Goroutine | Name | Always On | Reads From | Writes To | Purpose |
 |-----------|------|:---------:|------------|-----------|---------|
-| 1 | **Retention Strategy** | Yes | Database | Database, Object storage | Three-phase retention cleanup (transition → delete rows → delete storage) |
+| 1 | **Retention Strategy** | No | Database | Database, Object storage | Three-phase retention cleanup (requires `retention.enabled`) |
 | 2 | **Partition Maintenance** | Yes | Database | Database (DDL) | Lookahead partition creation, old partition merge/drop |
 | 3 | **Alias Refresh** | Yes | Database | In-memory ColumnRegistry | Periodic re-read of alias_column values from `_dim_registry`/`_agg_registry` |
-| 4 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka_poller_enabled`) |
-| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation_enabled`) |
+| 4 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka.enabled`) |
+| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
 
 ### Node-Level Data Path Goroutines
 

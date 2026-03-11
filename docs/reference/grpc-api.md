@@ -613,7 +613,7 @@ grpcurl -plaintext -d '{
 grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "display_name": "Spark Logs",
-  "config_json": "{\"kafka\":{\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"consolidation_enabled\":false}"
+  "config_json": "{\"kafka\":{\"enabled\":true,\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"consolidation\":{\"enabled\":false}}"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
