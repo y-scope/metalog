@@ -29,7 +29,7 @@ services:
     volumes:
       - ./config/node.yaml:/etc/clp/node.yaml:ro
     ports:
-      - "9091:9091"   # gRPC (ingestion, admin, query, metadata)
+      - "9090:9090"   # gRPC (ingestion, admin, query, metadata)
       - "8081:8081"   # health check
     depends_on:
       mariadb:
@@ -51,7 +51,7 @@ services:
       dockerfile: integration-tests/stacks/presto/Dockerfile
     entrypoint: ["/app/metalog", "admin", "register-table"]
     command:
-      - --addr=coordinator:9091
+      - --addr=coordinator:9090
       - --table=clp_cockroachdb
       - --display-name=CockroachDB Logs
       - --config-json={"kafka":{"enabled":false},"consolidation":{"enabled":false},"retention":{"enabled":false}}
@@ -69,7 +69,7 @@ services:
       dockerfile: integration-tests/stacks/presto/Dockerfile.loader
     environment:
       GRPC_HOST: coordinator
-      GRPC_PORT: "9091"
+      GRPC_PORT: "9090"
       TABLE_NAME: clp_cockroachdb
     depends_on:
       table-register:

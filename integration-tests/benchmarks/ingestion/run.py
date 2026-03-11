@@ -211,7 +211,7 @@ def main():
 
     db_port    = int(os.environ.get("DB_PORT",    3306))
     kafka_port = int(os.environ.get("KAFKA_PORT", 9092))
-    grpc_port  = int(os.environ.get("GRPC_PORT",  9091))
+    grpc_port  = int(os.environ.get("GRPC_PORT",  9090))
     needs_kafka = args.mode.startswith("kafka")
 
     dc = find_docker_compose()

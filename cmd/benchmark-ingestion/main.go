@@ -37,7 +37,7 @@ func main() {
 
 	// gRPC flags
 	grpcHost := flag.String("grpc-host", "localhost", "gRPC server hostname")
-	grpcPort := flag.Int("grpc-port", 9091, "gRPC server port")
+	grpcPort := flag.Int("grpc-port", 9090, "gRPC server port")
 	concurrency := flag.Int("concurrency", 5000, "Max concurrent in-flight RPCs (grpc mode)")
 
 	// Kafka flags

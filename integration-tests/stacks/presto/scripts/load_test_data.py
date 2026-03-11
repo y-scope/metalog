@@ -8,7 +8,7 @@ TableProvisioner.ensureTable(), so no pre-existing schema is required.
 
 Environment variables:
     GRPC_HOST      — coordinator hostname (default: coordinator)
-    GRPC_PORT      — gRPC ingestion port (default: 9091)
+    GRPC_PORT      — gRPC ingestion port (default: 9090)
     TABLE_NAME     — target table name (default: clp_cockroachdb)
 """
 
@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 GRPC_HOST  = os.environ.get('GRPC_HOST', 'coordinator')
-GRPC_PORT  = os.environ.get('GRPC_PORT', '9091')
+GRPC_PORT  = os.environ.get('GRPC_PORT', '9090')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'clp_cockroachdb')
 
 URL_PREFIX = 'https://r2.yscope.io/prod/logging/cockroachdb/'

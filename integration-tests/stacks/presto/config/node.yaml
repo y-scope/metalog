@@ -16,7 +16,7 @@ storage:
       basePath: /tmp/metalog-storage
 
 grpc:
-  port: 9091
+  port: 9090
   ingestion: true
   admin: true
   query: true

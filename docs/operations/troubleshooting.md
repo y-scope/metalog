@@ -61,7 +61,7 @@ health:
 ```
 
 ```bash
-API_GRPC_PORT=9091    # API server gRPC port
+API_GRPC_PORT=9090    # API server gRPC port
 ```
 
 See [Port Configuration](port-configuration.md) for all configurable ports.

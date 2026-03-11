@@ -10,7 +10,7 @@ Running `./start.sh` brings up two long-lived services:
 | Service | Host port(s) | Description |
 |---|---|---|
 | `mariadb` | 3307 | MariaDB 10.6 — metastore database |
-| `coordinator` | 9091 (gRPC), 8081 (health) | CLP coordinator — ingestion, admin, query, and metadata all in one process |
+| `coordinator` | 9090 (gRPC), 8081 (health) | CLP coordinator — ingestion, admin, query, and metadata all in one process |
 
 On startup a one-shot `data-loader` container sends 12 test records into the
 coordinator via gRPC. The coordinator auto-creates the `clp_cockroachdb` table
@@ -18,7 +18,7 @@ coordinator via gRPC. The coordinator auto-creates the `clp_cockroachdb` table
 `data-loader` exits and the two services keep running until you press Ctrl-C.
 
 While the stack is running you can point a Presto instance at the query API on
-port **9091** and issue queries.
+port **9090** and issue queries.
 
 ## Prerequisites
 
@@ -50,12 +50,12 @@ Point your Presto CLP connector at the coordinator:
 | Setting | Value |
 |---|---|
 | Host | `localhost` |
-| Port | `9091` |
+| Port | `9090` |
 | Protocol | gRPC (plaintext) |
 | Table | `clp_cockroachdb` |
 
 The coordinator exposes `SplitQueryService` and `MetadataService` RPCs on
-port **9091** alongside ingestion and admin services.
+port **9090** alongside ingestion and admin services.
 
 ## Smoke-testing with grpcurl
 
@@ -64,22 +64,22 @@ files.
 
 ```bash
 # List all registered services
-grpcurl -plaintext localhost:9091 list
+grpcurl -plaintext localhost:9090 list
 
 # List available tables
-grpcurl -plaintext localhost:9091 \
+grpcurl -plaintext localhost:9090 \
   com.yscope.metalog.query.api.proto.grpc.MetadataService/ListTables
 
 # List dimensions for the test table
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb"}' \
-  localhost:9091 \
+  localhost:9090 \
   com.yscope.metalog.query.api.proto.grpc.MetadataService/ListDimensions
 
 # Stream all splits, newest first
 grpcurl -plaintext \
   -d '{"table": "clp_cockroachdb", "order_by": [{"column": "max_timestamp", "order": "DESC"}]}' \
-  localhost:9091 \
+  localhost:9090 \
   com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 
 # Filter by zone dimension
@@ -89,7 +89,7 @@ grpcurl -plaintext \
     "order_by": [{"column": "max_timestamp", "order": "DESC"}],
     "filter_expression": "__DIM.zone = '\''us-east-1a'\''"
   }' \
-  localhost:9091 \
+  localhost:9090 \
   com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
 ```
 
