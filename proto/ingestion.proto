@@ -1,0 +1,121 @@
+syntax = "proto3";
+package com.yscope.metalog.coordinator.grpc;
+option java_multiple_files = true;
+option java_package = "com.yscope.metalog.coordinator.grpc.proto";
+option go_package = "github.com/y-scope/metalog/gen/proto/ingestionpb";
+
+// ---------------------------------------------------------------------------
+// Dimension types
+// ---------------------------------------------------------------------------
+
+message StringDimension {
+  string value      = 1;
+  int32  max_length = 2;
+}
+
+message DimensionValue {
+  oneof value {
+    StringDimension str       = 1;
+    StringDimension str_utf8  = 2;
+    int64           int_val   = 3;
+    bool            bool_val  = 4;
+    double          float_val = 5;
+  }
+}
+
+message DimEntry {
+  string         key   = 1;
+  DimensionValue value = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation types
+// ---------------------------------------------------------------------------
+
+enum AggType {
+  EQ  = 0;
+  GTE = 1;
+  GT  = 2;
+  LTE = 3;
+  LT  = 4;
+  SUM = 5;
+  AVG = 6;
+  MIN = 7;
+  MAX = 8;
+}
+
+message AggEntry {
+  string  field     = 1;
+  string  qualifier = 2;
+  AggType agg_type  = 3;
+  oneof value {
+    int64  int_val   = 4;
+    double float_val = 5;
+  }
+  string alias_column = 6;
+}
+
+// ---------------------------------------------------------------------------
+// File fields
+// ---------------------------------------------------------------------------
+
+message IrFileInfo {
+  string clp_ir_storage_backend = 1;
+  string clp_ir_bucket          = 2;
+  string clp_ir_path            = 3;
+  int64  clp_ir_size_bytes      = 4;
+}
+
+message ArchiveFileInfo {
+  string clp_archive_storage_backend = 1;
+  string clp_archive_bucket          = 2;
+  string clp_archive_path            = 3;
+  int64  clp_archive_created_at      = 4;
+  int64  clp_archive_size_bytes      = 5;
+}
+
+message FileFields {
+  string          state          = 1;
+  int64           min_timestamp  = 2;
+  int64           max_timestamp  = 3;
+  int64           raw_size_bytes = 4;
+  int32           record_count   = 5;
+  IrFileInfo      ir             = 6;
+  ArchiveFileInfo archive        = 7;
+  int32           retention_days = 8;
+  int64           expires_at     = 9;
+}
+
+// ---------------------------------------------------------------------------
+// Self-describing key-value escape hatch
+// ---------------------------------------------------------------------------
+
+message SelfDescribingEntry {
+  string key   = 1;
+  string value = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Top-level record and RPC messages
+// ---------------------------------------------------------------------------
+
+message MetadataRecord {
+  FileFields                   file               = 1;
+  repeated AggEntry            agg                = 2;
+  repeated DimEntry            dim                = 3;
+  repeated SelfDescribingEntry self_describing_kv = 4;
+}
+
+message IngestRequest {
+  string         table_name = 1;
+  MetadataRecord record     = 2;
+}
+
+message IngestResponse {
+  bool   accepted = 1;
+  string error    = 2;
+}
+
+service MetadataIngestionService {
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+}
