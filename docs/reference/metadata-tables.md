@@ -253,13 +253,13 @@ The 255-byte boundary is the InnoDB threshold where MySQL changes internal encod
 
 ### Throughput
 
-Measured with a single writer goroutine, `interpolateParams=true`, 2 dimension columns, on a single-node database (see [Performance Tuning](../operations/performance-tuning.md) for full methodology and batch size guidance):
+Measured with `interpolateParams=true`, 2 dimension columns, on a single-node MariaDB (see [Performance Tuning](../operations/performance-tuning.md) for full methodology and batch size guidance):
 
-| Operation | MariaDB | MySQL |
-|-----------|---------|-------|
-| batch-UPSERT (5000 rows/batch) | ~32K rows/sec | ~18K rows/sec |
-| Time-range + dimension query (30-day table, 5M rows) | 10-100 ms | 10-100 ms |
-| Point lookup (hash index) | <10 ms | <10 ms |
+| Operation | Throughput |
+|-----------|------------|
+| batch-UPSERT (5000 rows/batch) | ~32K rows/sec |
+| Time-range + dimension query (30-day table, 5M rows) | 10-100 ms |
+| Point lookup (hash index) | <10 ms |
 
 ### Horizontal Scaling
 

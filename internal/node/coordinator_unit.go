@@ -90,6 +90,7 @@ func NewCoordinatorUnit(
 			shared.StorageRegistry,
 			shared.ArchiveBackend, shared.ArchiveBucket,
 			config.DefaultPlannerInterval,
+			shared.FailureLogInterval,
 			log,
 		)
 		if err != nil {
@@ -103,11 +104,12 @@ func NewCoordinatorUnit(
 		retTypeName = "default"
 	}
 	retStrategy, err := retention.CreateStrategy(retTypeName, retention.Deps{
-		DB:              shared.DB,
-		TableName:       tableName,
-		IsMariaDB:       shared.IsMariaDB,
-		StorageRegistry: shared.StorageRegistry,
-		Log:             log,
+		DB:                 shared.DB,
+		TableName:          tableName,
+		IsMariaDB:          shared.IsMariaDB,
+		StorageRegistry:    shared.StorageRegistry,
+		FailureLogInterval: shared.FailureLogInterval,
+		Log:                log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new coordinator unit: retention strategy: %w", err)

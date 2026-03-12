@@ -32,11 +32,12 @@ func init() {
 //  2. DeleteExpiredFiles — collects storage paths, deletes DB rows
 //  3. Delete from object storage (best-effort, idempotent)
 type defaultStrategy struct {
-	fileRecs        *metastore.FileRecords
-	storageRegistry *storage.Registry
-	interval        time.Duration
-	deleteRate      int // max storage deletions per second
-	log             *zap.Logger
+	fileRecs           *metastore.FileRecords
+	storageRegistry    *storage.Registry
+	interval           time.Duration
+	failureLogInterval time.Duration
+	deleteRate         int // max storage deletions per second
+	log                *zap.Logger
 }
 
 func newDefaultStrategy(deps Deps) (Strategy, error) {
@@ -45,12 +46,18 @@ func newDefaultStrategy(deps Deps) (Strategy, error) {
 		return nil, fmt.Errorf("default retention strategy: %w", err)
 	}
 
+	failureInterval := deps.FailureLogInterval
+	if failureInterval <= 0 {
+		failureInterval = 60 * time.Second
+	}
+
 	return &defaultStrategy{
-		fileRecs:        fr,
-		storageRegistry: deps.StorageRegistry,
-		interval:        defaultScanInterval,
-		deleteRate:      defaultDeleteRate,
-		log:             deps.Log.With(zap.String("component", "retention"), zap.String("table", deps.TableName)),
+		fileRecs:           fr,
+		storageRegistry:    deps.StorageRegistry,
+		interval:           defaultScanInterval,
+		failureLogInterval: failureInterval,
+		deleteRate:         defaultDeleteRate,
+		log:                deps.Log.With(zap.String("component", "retention"), zap.String("table", deps.TableName)),
 	}, nil
 }
 
@@ -59,7 +66,7 @@ func (s *defaultStrategy) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	fl := logutil.NewFailureLogger(s.log, time.Minute)
+	fl := logutil.NewFailureLogger(s.log, s.failureLogInterval)
 	for {
 		select {
 		case <-ctx.Done():

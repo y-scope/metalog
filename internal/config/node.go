@@ -4,18 +4,37 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // NodeConfig is the top-level configuration loaded from node.yaml.
 type NodeConfig struct {
-	Database    DatabaseSection     `yaml:"database"`
+	Database    DatabaseSection    `yaml:"database"`
 	Storage     ObjectStorageConfig `yaml:"storage"`
-	GRPC        GRPCConfig          `yaml:"grpc"`
-	Health      HealthConfig        `yaml:"health"`
-	Coordinator CoordinatorConfig `yaml:"coordinator"`
-	Worker      WorkerConfig     `yaml:"worker"`
+	GRPC        GRPCConfig         `yaml:"grpc"`
+	Health      HealthConfig       `yaml:"health"`
+	Logging     LoggingConfig      `yaml:"logging"`
+	Coordinator CoordinatorConfig  `yaml:"coordinator"`
+	Worker      WorkerConfig       `yaml:"worker"`
+}
+
+// LoggingConfig holds logging tuning parameters.
+type LoggingConfig struct {
+	// FailureLogIntervalSeconds controls how often repeated failure warnings
+	// are emitted by periodic loops (liveness, planner, retention). The first
+	// failure is always logged immediately; subsequent failures repeat at
+	// this interval until recovery. Default: 60.
+	FailureLogIntervalSeconds int `yaml:"failureLogIntervalSeconds"`
+}
+
+// FailureLogInterval returns the failure log interval as a time.Duration.
+func (c *LoggingConfig) FailureLogInterval() time.Duration {
+	if c.FailureLogIntervalSeconds <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(c.FailureLogIntervalSeconds) * time.Second
 }
 
 // DatabaseSection holds primary (RW) and optional replica (RO) pool configs.
@@ -242,6 +261,9 @@ func applyDefaults(cfg *NodeConfig) {
 	}
 	if cfg.GRPC.Port == 0 {
 		cfg.GRPC.Port = 9090
+	}
+	if cfg.Logging.FailureLogIntervalSeconds == 0 {
+		cfg.Logging.FailureLogIntervalSeconds = 60
 	}
 
 	// Coordinator defaults — only when coordinator section is present

@@ -3,6 +3,7 @@ package node
 import (
 	"database/sql"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -21,6 +22,10 @@ type SharedResources struct {
 	ArchiveBucket   string
 	IsMariaDB       bool
 	Log             *zap.Logger
+
+	// FailureLogInterval controls how often periodic loops repeat failure
+	// warnings. Set from logging.failureLogIntervalSeconds in node.yaml.
+	FailureLogInterval time.Duration
 
 	regMu      sync.RWMutex
 	registries map[string]*schema.ColumnRegistry

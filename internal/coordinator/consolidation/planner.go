@@ -39,9 +39,10 @@ type Planner struct {
 	storageRegistry *storage.Registry
 	archiveBackend  string
 	archiveBucket   string
-	interval        time.Duration
-	resolver        ColumnResolver
-	log             *zap.Logger
+	interval           time.Duration
+	failureLogInterval time.Duration
+	resolver           ColumnResolver
+	log                *zap.Logger
 }
 
 // NewPlanner creates a Planner. Column resolution happens per-cycle in planOnce
@@ -58,6 +59,7 @@ func NewPlanner(
 	archiveBackend string,
 	archiveBucket string,
 	interval time.Duration,
+	failureLogInterval time.Duration,
 	log *zap.Logger,
 ) (*Planner, error) {
 	fr, err := metastore.NewFileRecords(db, tableName, isMariaDB, log)
@@ -75,9 +77,10 @@ func NewPlanner(
 		storageRegistry: storageRegistry,
 		archiveBackend:  archiveBackend,
 		archiveBucket:   archiveBucket,
-		interval:        interval,
-		resolver:        resolver,
-		log:             log.With(zap.String("table", tableName)),
+		interval:           interval,
+		failureLogInterval: failureLogInterval,
+		resolver:           resolver,
+		log:                log.With(zap.String("table", tableName)),
 	}, nil
 }
 
@@ -86,7 +89,7 @@ func (p *Planner) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
-	fl := logutil.NewFailureLogger(p.log, time.Minute)
+	fl := logutil.NewFailureLogger(p.log, p.failureLogInterval)
 	for {
 		select {
 		case <-ctx.Done():

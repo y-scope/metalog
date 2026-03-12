@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -20,11 +21,12 @@ type Strategy interface {
 
 // Deps holds shared dependencies injected into every strategy.
 type Deps struct {
-	DB              *sql.DB
-	TableName       string
-	IsMariaDB       bool
-	StorageRegistry *storage.Registry
-	Log             *zap.Logger
+	DB                 *sql.DB
+	TableName          string
+	IsMariaDB          bool
+	StorageRegistry    *storage.Registry
+	FailureLogInterval time.Duration
+	Log                *zap.Logger
 }
 
 // StrategyMeta describes a registered strategy type.

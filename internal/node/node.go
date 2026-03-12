@@ -119,14 +119,15 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	archiveCreator := storage.NewArchiveCreator(storageReg, compressor, log)
 
 	shared := &SharedResources{
-		DB:              pool,
-		ReadDB:          readPool,
-		StorageRegistry: storageReg,
-		ArchiveCreator:  archiveCreator,
-		ArchiveBackend:  cfg.Storage.DefaultBackend,
-		ArchiveBucket:   cfg.Storage.Backends[cfg.Storage.DefaultBackend].Bucket,
-		IsMariaDB:       isMariaDB,
-		Log:             log,
+		DB:                 pool,
+		ReadDB:             readPool,
+		StorageRegistry:    storageReg,
+		ArchiveCreator:     archiveCreator,
+		ArchiveBackend:     cfg.Storage.DefaultBackend,
+		ArchiveBucket:      cfg.Storage.Backends[cfg.Storage.DefaultBackend].Bucket,
+		IsMariaDB:          isMariaDB,
+		FailureLogInterval: cfg.Logging.FailureLogInterval(),
+		Log:                log,
 	}
 
 	cr := NewCoordinatorRegistry(pool, nodeID, isMariaDB, log)
@@ -372,7 +373,7 @@ func (n *Node) runLiveness() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	fl := logutil.NewFailureLogger(n.log, time.Minute)
+	fl := logutil.NewFailureLogger(n.log, n.shared.FailureLogInterval)
 	for {
 		select {
 		case <-n.ctx.Done():
