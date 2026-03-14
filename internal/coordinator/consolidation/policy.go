@@ -16,8 +16,10 @@ type AggRequirement struct {
 
 // FileGroup is a set of file records selected for consolidation into a single archive.
 type FileGroup struct {
-	Records     []*metastore.FileRecord
-	ArchivePath string // globally unique archive object key
+	Records        []*metastore.FileRecord
+	ArchivePath    string // globally unique archive object key
+	ArchiveBackend string // storage backend for the archive (empty = use planner default)
+	ArchiveBucket  string // storage bucket for the archive (empty = use planner default)
 }
 
 // Policy determines which files should be consolidated together.

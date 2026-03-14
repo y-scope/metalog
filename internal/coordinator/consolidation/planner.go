@@ -293,10 +293,19 @@ func (p *Planner) planOnce(ctx context.Context) error {
 			continue
 		}
 
+		archiveBackend := group.ArchiveBackend
+		if archiveBackend == "" {
+			archiveBackend = p.archiveBackend
+		}
+		archiveBucket := group.ArchiveBucket
+		if archiveBucket == "" {
+			archiveBucket = p.archiveBucket
+		}
+
 		cons := &taskqueue.ConsolidationPayload{
 			IRPaths:        irPaths,
-			ArchiveBackend: p.archiveBackend,
-			ArchiveBucket:  p.archiveBucket,
+			ArchiveBackend: archiveBackend,
+			ArchiveBucket:  archiveBucket,
 			ArchivePath:    group.ArchivePath,
 		}
 		for _, rec := range group.Records {
