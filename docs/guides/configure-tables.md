@@ -133,6 +133,7 @@ non-empty. This lets you enable Kafka in advance and configure routing later.
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable/disable consolidation planner |
 | `policies` | array | `[]` | Ordered list of consolidation policies (waterfall). If empty, a default `time_window(1h)` policy is used. |
+| `stale_buffering_mins` | int | `60` | Minutes before an `IR_ARCHIVE_BUFFERING` file is auto-promoted to `CONSOLIDATION_PENDING`. Negative value disables. See [Stuck-File Promotion](../concepts/consolidation.md#stuck-file-promotion). |
 
 Each policy in the `policies` array:
 
