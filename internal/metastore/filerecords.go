@@ -196,6 +196,29 @@ func scanFileRecordsWithMappings(rows *sql.Rows, dimMappings []ColumnMapping, ag
 	return records, rows.Err()
 }
 
+// MaxStuckBufferingBatch limits rows promoted per cycle.
+const MaxStuckBufferingBatch = 1000
+
+// PromoteStuckBuffering atomically transitions IR_ARCHIVE_BUFFERING files whose
+// max_timestamp is older than staleBeforeNanos to IR_ARCHIVE_CONSOLIDATION_PENDING.
+// Returns the number of rows promoted. Files that raced ahead to another state
+// are naturally skipped by the WHERE clause.
+func (fr *FileRecords) PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error) {
+	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+		Set(ColState, string(StateIRArchiveConsolidationPending)).
+		Where(sq.Eq{ColState: string(StateIRArchiveBuffering)}).
+		Where(sq.Lt{ColMaxTimestamp: staleBeforeNanos}).
+		Limit(MaxStuckBufferingBatch).
+		ToSql()
+
+	res, err := fr.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("promote stuck buffering: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // GetCurrentStates returns the current state for files identified by IR path hash.
 func (fr *FileRecords) GetCurrentStates(ctx context.Context, irPaths []string) (map[string]FileState, error) {
 	if len(irPaths) == 0 {

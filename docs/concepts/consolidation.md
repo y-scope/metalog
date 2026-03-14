@@ -19,6 +19,8 @@
 - [Worker Workflow](#worker-workflow)
   - [Consolidation Pipeline](#consolidation-pipeline)
   - [Worker Lifecycle](#worker-lifecycle)
+- [Planner Loop](#planner-loop)
+  - [Stuck-File Promotion](#stuck-file-promotion)
 - [Query Layer](#query-layer)
   - [Search Modes](#search-modes)
   - [Query Routing](#query-routing)
@@ -83,6 +85,8 @@ The metastore supports multiple entry types, each with a distinct lifecycle:
 │  (clp_archive_path='')  │
 └───────────┬─────────────┘
             │ file closed (rotation/timeout)
+            │   — OR —
+            │ planner promotes stuck file (max_timestamp stale)
             ▼
 ┌─────────────────────────────────┐
 │  IR_ARCHIVE_CONSOLIDATION_      │  Awaiting consolidation
@@ -98,6 +102,8 @@ The metastore supports multiple entry types, each with a distinct lifecycle:
 ```
 
 After successful consolidation the source IR file in object storage is scheduled for deletion — the metastore row transitions to `ARCHIVE_CLOSED` with the archive path set, and a background purge removes the now-redundant IR object.
+
+Normally, the producer sends a second UPSERT with `state=IR_ARCHIVE_CONSOLIDATION_PENDING` when the IR file is finalized. If the producer crashes or the update is lost, the planner's [stuck-file promotion](#stuck-file-promotion) advances these files automatically.
 
 **Other Entry Types:**
 - **IR-only:** `IR_BUFFERING` → `IR_CLOSED` (never consolidated, deleted after retention)
@@ -187,6 +193,45 @@ Workers execute the full consolidation pipeline:
 5. **Mark complete** by updating task state in database
 
 **On failure:** Coordinator's stale task detection finds stuck tasks, marks them `timed_out`, and creates retry tasks. Workers self-heal by deleting orphan outputs when task row is missing. See [Task Queue Design](../design/task-queue.md).
+
+---
+
+## Planner Loop
+
+The Planner runs on a configurable interval (default 60s) per table. Each cycle executes `planOnce`, a 7-step pipeline organized in three phases:
+
+**Task queue maintenance:**
+
+| Step | Action | Details |
+|------|--------|---------|
+| 1 | Finalize completed tasks | Apply results (mark files `ARCHIVE_CLOSED`, delete source IR from storage), then delete the task row. Also cleans up leaked terminal rows older than 24h as a catch-all. |
+| 2 | Re-queue abandoned tasks | Find `processing` tasks that exceeded the stale timeout (worker crashed mid-task) and create new `pending` retry tasks. |
+| 3 | Backpressure check | If `pending + processing ≥ 100`, skip the rest of the cycle to prevent unbounded queue growth. |
+
+**Candidate discovery:**
+
+| Step | Action | Details |
+|------|--------|---------|
+| 4 | Promote stuck files | Transition `IR_ARCHIVE_BUFFERING` files whose `max_timestamp` is stale to `CONSOLIDATION_PENDING`. See [Stuck-File Promotion](#stuck-file-promotion). |
+| 5 | Find candidates | Resolve the policy's required dimension/aggregation keys to physical columns, then query all `CONSOLIDATION_PENDING` files (including any just-promoted). |
+
+**Task creation:**
+
+| Step | Action | Details |
+|------|--------|---------|
+| 6 | Apply policy | Group candidate files using the configured policy (time window, spark job, audit). |
+| 7 | Create tasks | For each group, build an LZ4+msgpack payload and insert a `pending` task into `_task_queue`. Files are tracked in an in-flight set to prevent duplicate tasks. |
+
+### Stuck-File Promotion
+
+Files enter the hybrid lifecycle as `IR_ARCHIVE_BUFFERING` (set by the producer). Normally, the producer sends a second UPSERT with `state=IR_ARCHIVE_CONSOLIDATION_PENDING` when the IR file is finalized. If the producer crashes or the update is lost, the file stays in `IR_ARCHIVE_BUFFERING` indefinitely and never becomes a consolidation candidate.
+
+The planner detects these stuck files by comparing `max_timestamp` against a configurable threshold (default: 60 minutes). If a file's data is older than the threshold, it is unlikely to receive further writes, and the planner promotes it to `CONSOLIDATION_PENDING` via a direct `UPDATE`. Files that raced ahead (producer sent the update between detection and promotion) are naturally skipped by the `WHERE state = 'IR_ARCHIVE_BUFFERING'` clause.
+
+**Configuration** (`stale_buffering_mins` in table config):
+- Positive value: threshold in minutes (default: 60)
+- Negative value: disables stuck-file promotion
+- Zero/omitted: uses the 60-minute default
 
 ---
 

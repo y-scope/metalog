@@ -84,6 +84,13 @@ func NewCoordinatorUnit(
 
 		taskQueue := taskqueue.NewQueue(shared.DB, log)
 
+		staleThreshold := 60 * time.Minute
+		if tableCfg.Consolidation.StaleBufferingMins > 0 {
+			staleThreshold = time.Duration(tableCfg.Consolidation.StaleBufferingMins) * time.Minute
+		} else if tableCfg.Consolidation.StaleBufferingMins < 0 {
+			staleThreshold = 0 // disabled
+		}
+
 		planner, err = consolidation.NewPlanner(
 			shared.DB, tableName, shared.IsMariaDB, policy, inFlight, taskQueue,
 			reg,
@@ -91,6 +98,7 @@ func NewCoordinatorUnit(
 			shared.ArchiveBackend, shared.ArchiveBucket,
 			config.DefaultPlannerInterval,
 			shared.FailureLogInterval,
+			staleThreshold,
 			log,
 		)
 		if err != nil {

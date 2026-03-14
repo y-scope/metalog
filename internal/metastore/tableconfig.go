@@ -27,8 +27,9 @@ type ConsolidationPolicyConfig struct {
 
 // ConsolidationConfig holds consolidation planner settings for a table.
 type ConsolidationConfig struct {
-	Enabled  bool                        `json:"enabled"`
-	Policies []ConsolidationPolicyConfig `json:"policies,omitempty"`
+	Enabled            bool                        `json:"enabled"`
+	Policies           []ConsolidationPolicyConfig `json:"policies,omitempty"`
+	StaleBufferingMins int                         `json:"stale_buffering_mins,omitempty"` // default 60; negative disables
 }
 
 // RetentionConfig holds retention lifecycle settings for a table.

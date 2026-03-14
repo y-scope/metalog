@@ -41,6 +41,7 @@ type Planner struct {
 	archiveBucket   string
 	interval           time.Duration
 	failureLogInterval time.Duration
+	staleThreshold     time.Duration // 0 disables stuck-file promotion
 	resolver           ColumnResolver
 	log                *zap.Logger
 }
@@ -60,6 +61,7 @@ func NewPlanner(
 	archiveBucket string,
 	interval time.Duration,
 	failureLogInterval time.Duration,
+	staleThreshold time.Duration,
 	log *zap.Logger,
 ) (*Planner, error) {
 	fr, err := metastore.NewFileRecords(db, tableName, isMariaDB, log)
@@ -79,6 +81,7 @@ func NewPlanner(
 		archiveBucket:   archiveBucket,
 		interval:           interval,
 		failureLogInterval: failureLogInterval,
+		staleThreshold:     staleThreshold,
 		resolver:           resolver,
 		log:                log.With(zap.String("table", tableName)),
 	}, nil
@@ -108,22 +111,19 @@ func (p *Planner) Run(ctx context.Context) {
 }
 
 func (p *Planner) planOnce(ctx context.Context) error {
-	// 1. Process completed tasks (marks ARCHIVE_CLOSED, deletes source IR files)
+	// --- Task queue maintenance ---
+
+	// 1. Finalize completed tasks (mark files ARCHIVE_CLOSED, delete source IR).
 	if err := p.processCompletedTasks(ctx); err != nil {
 		return fmt.Errorf("process completed: %w", err)
 	}
 
-	// 2. Reclaim stale tasks
+	// 2. Re-queue abandoned tasks (claimed by a worker that crashed before finishing).
 	if err := p.reclaimStaleTasks(ctx); err != nil {
 		return fmt.Errorf("reclaim stale: %w", err)
 	}
 
-	// 3. Clean up old completed/failed tasks
-	if err := p.cleanupOldTasks(ctx); err != nil {
-		p.log.Warn("cleanup old tasks failed", zap.Error(err))
-	}
-
-	// 4. Backpressure check — skip creating new tasks if queue is deep
+	// 3. Backpressure check — skip creating new tasks if queue is deep.
 	counts, err := p.taskQueue.GetTaskCounts(ctx, p.tableName)
 	if err != nil {
 		return fmt.Errorf("backpressure check: %w", err)
@@ -137,23 +137,27 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// 5. Resolve policy's required columns (fresh each cycle for newly-registered columns).
-	dimMappings, aggMappings := p.resolveColumnMappings()
+	// --- Candidate discovery ---
 
-	// 6. Find consolidation-pending files
-	candidates, err := p.fileRecs.FindConsolidationPending(ctx, dimMappings, aggMappings)
+	// 4. Promote stuck files (IR_ARCHIVE_BUFFERING whose data is stale → CONSOLIDATION_PENDING).
+	p.promoteStuckBuffering(ctx)
+
+	// 5. Find all CONSOLIDATION_PENDING files (includes any just-promoted).
+	candidates, err := p.findCandidates(ctx)
 	if err != nil {
-		return fmt.Errorf("find pending: %w", err)
+		return fmt.Errorf("find candidates: %w", err)
 	}
 
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	// 7. Apply policy to group files
+	// --- Task creation ---
+
+	// 6. Apply policy to group files.
 	groups := p.policy.SelectFiles(candidates)
 
-	// 8. Create tasks for each group
+	// 7. Create tasks for each group.
 	for _, group := range groups {
 		irPaths := make([]string, 0, len(group))
 		for _, rec := range group {
@@ -217,6 +221,13 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	return nil
 }
 
+// findCandidates resolves the policy's required columns and queries for
+// CONSOLIDATION_PENDING files with those columns populated.
+func (p *Planner) findCandidates(ctx context.Context) ([]*metastore.FileRecord, error) {
+	dimMappings, aggMappings := p.resolveColumnMappings()
+	return p.fileRecs.FindConsolidationPending(ctx, dimMappings, aggMappings)
+}
+
 // resolveColumnMappings resolves the policy's required dims and aggs to physical
 // column names using the current registry state. Unresolvable keys are skipped
 // (the column may not exist yet; it will be picked up on a future cycle).
@@ -247,6 +258,25 @@ func (p *Planner) resolveColumnMappings() (dimMappings, aggMappings []metastore.
 		})
 	}
 	return
+}
+
+// promoteStuckBuffering transitions IR_ARCHIVE_BUFFERING files older than
+// staleThreshold to CONSOLIDATION_PENDING so the next FindConsolidationPending
+// picks them up. Errors are logged and swallowed — promotion is best-effort.
+func (p *Planner) promoteStuckBuffering(ctx context.Context) {
+	if p.staleThreshold <= 0 {
+		return
+	}
+
+	staleBeforeNanos := timeutil.EpochNanos() - p.staleThreshold.Nanoseconds()
+	n, err := p.fileRecs.PromoteStuckBuffering(ctx, staleBeforeNanos)
+	if err != nil {
+		p.log.Warn("promote stuck buffering failed", zap.Error(err))
+		return
+	}
+	if n > 0 {
+		p.log.Info("promoted stuck buffering files", zap.Int64("promoted", n))
+	}
 }
 
 func (p *Planner) processCompletedTasks(ctx context.Context) error {
@@ -344,6 +374,15 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		p.markTaskProcessed(ctx, t.taskID)
 	}
 
+	// Catch-all: delete leaked terminal task rows that a previous cycle failed to
+	// clean up (e.g. planner crashed between finalization and deletion). The 24h
+	// age gate avoids racing with the processing loop above.
+	if n, err := p.taskQueue.CleanupOldTasks(ctx, p.tableName, config.DefaultTaskCleanupAge); err != nil {
+		p.log.Warn("cleanup old tasks failed", zap.Error(err))
+	} else if n > 0 {
+		p.log.Debug("cleaned up old tasks", zap.Int64("deleted", n))
+	}
+
 	return nil
 }
 
@@ -384,17 +423,6 @@ func (p *Planner) deleteIRFiles(ctx context.Context, payload *taskqueue.TaskPayl
 				zap.String("path", irPath), zap.String("bucket", bucket), zap.Error(err))
 		}
 	}
-}
-
-func (p *Planner) cleanupOldTasks(ctx context.Context) error {
-	n, err := p.taskQueue.CleanupOldTasks(ctx, p.tableName, config.DefaultTaskCleanupAge)
-	if err != nil {
-		return err
-	}
-	if n > 0 {
-		p.log.Debug("cleaned up old tasks", zap.Int64("deleted", n))
-	}
-	return nil
 }
 
 func (p *Planner) reclaimStaleTasks(ctx context.Context) error {

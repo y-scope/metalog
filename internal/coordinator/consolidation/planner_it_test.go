@@ -30,8 +30,9 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 
 	planner, err := consolidation.NewPlanner(
 		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
-		nil, "", "",
-		1*time.Second, log,
+		nil, nil, "", "",
+		1*time.Second, 1*time.Minute, 60*time.Minute,
+		log,
 	)
 	if err != nil {
 		mc.Teardown(t)
@@ -98,8 +99,9 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 
 	planner, err := consolidation.NewPlanner(
 		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
-		nil, "", "",
-		1*time.Second, log,
+		nil, nil, "", "",
+		1*time.Second, 1*time.Minute, 60*time.Minute,
+		log,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +118,75 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 	}
 	if counts.Pending != 0 {
 		t.Errorf("pending tasks = %d, want 0 (not enough files for a group)", counts.Pending)
+	}
+}
+
+func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
+	mc := testutil.SetupMariaDB(t)
+	defer mc.Teardown(t)
+	mc.LoadSchema(t)
+	mc.CreateTestTable(t, plannerTable)
+	ctx := context.Background()
+
+	log := zap.NewNop()
+	inFlight := consolidation.NewInFlightSet()
+	policy := consolidation.NewTimeWindowPolicy(24*time.Hour, 2, 100)
+	taskQueue := taskqueue.NewQueue(mc.DB, log)
+
+	// Use a very short stale threshold (1 nanosecond) so all files qualify immediately.
+	planner, err := consolidation.NewPlanner(
+		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
+		nil, nil, "", "",
+		1*time.Second, 1*time.Minute, 1*time.Nanosecond,
+		log,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert stuck IR_ARCHIVE_BUFFERING files with old timestamps.
+	baseTs := int64(1704067200000000000)
+	for i := 0; i < 5; i++ {
+		_, err := mc.DB.ExecContext(ctx,
+			"INSERT INTO `"+plannerTable+"` (min_timestamp, max_timestamp, clp_ir_path, clp_ir_storage_backend, clp_ir_bucket, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			baseTs+int64(i)*1000000,
+			baseTs+int64(i)*1000000+500000,
+			"/data/stuck_"+string(rune('a'+i))+".ir",
+			"minio", "logs",
+			"IR_ARCHIVE_BUFFERING",
+			10, 30,
+		)
+		if err != nil {
+			t.Fatalf("insert stuck file %d: %v", i, err)
+		}
+	}
+
+	// Run planner for a couple cycles.
+	plannerCtx, cancel := context.WithCancel(ctx)
+	go planner.Run(plannerCtx)
+	time.Sleep(3 * time.Second)
+	cancel()
+
+	// All 5 files should have been promoted (some may have already been
+	// grouped into tasks; check that none remain in BUFFERING).
+	var bufferingCount int
+	err = mc.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `"+plannerTable+"` WHERE state = 'IR_ARCHIVE_BUFFERING'").
+		Scan(&bufferingCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bufferingCount != 0 {
+		t.Errorf("buffering files remaining = %d, want 0 (all should be promoted)", bufferingCount)
+	}
+
+	// Verify tasks were created (5 files with min 2 per group).
+	counts, err := taskQueue.GetTaskCounts(context.Background(), plannerTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Pending < 1 {
+		t.Errorf("pending tasks = %d, want >= 1", counts.Pending)
 	}
 }
 

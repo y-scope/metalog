@@ -266,6 +266,87 @@ func TestFileRecords_UpdateState(t *testing.T) {
 	}
 }
 
+func TestFileRecords_PromoteStuckBuffering(t *testing.T) {
+	mc, fr := setupFileRecordsIT(t)
+	defer mc.Teardown(t)
+	ctx := context.Background()
+
+	now := int64(1704067200000000000)       // 2024-01-01 00:00:00 UTC in nanos
+	oneHourAgo := now - 3600*1_000_000_000  // 1 hour before now
+	twoHoursAgo := now - 7200*1_000_000_000 // 2 hours before now
+
+	// Insert stuck IR_ARCHIVE_BUFFERING files with old max_timestamp (should be promoted).
+	for i, path := range []string{"/data/stuck1.ir", "/data/stuck2.ir"} {
+		_, err := mc.DB.ExecContext(ctx,
+			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+			twoHoursAgo+int64(i), twoHoursAgo+int64(i)+100,
+			path, "IR_ARCHIVE_BUFFERING", 10, 30)
+		if err != nil {
+			t.Fatalf("insert stuck file: %v", err)
+		}
+	}
+
+	// Insert IR_ARCHIVE_BUFFERING file with recent max_timestamp (should NOT be promoted).
+	_, err := mc.DB.ExecContext(ctx,
+		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+		now-100, now, "/data/recent.ir", "IR_ARCHIVE_BUFFERING", 10, 30)
+	if err != nil {
+		t.Fatalf("insert recent file: %v", err)
+	}
+
+	// Insert files in other states with old max_timestamp (should NOT be promoted).
+	for _, state := range []string{"IR_BUFFERING", "ARCHIVE_CLOSED", "IR_ARCHIVE_CONSOLIDATION_PENDING"} {
+		_, err := mc.DB.ExecContext(ctx,
+			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+			twoHoursAgo, twoHoursAgo+100,
+			"/data/other_"+state+".ir", state, 10, 30)
+		if err != nil {
+			t.Fatalf("insert %s file: %v", state, err)
+		}
+	}
+
+	// Promote: staleBeforeNanos = oneHourAgo (so only the 2-hour-old buffering files qualify).
+	promoted, err := fr.PromoteStuckBuffering(ctx, oneHourAgo)
+	if err != nil {
+		t.Fatalf("PromoteStuckBuffering() error = %v", err)
+	}
+	if promoted != 2 {
+		t.Errorf("PromoteStuckBuffering() promoted = %d, want 2", promoted)
+	}
+
+	// Verify the stuck files are now CONSOLIDATION_PENDING.
+	states, err := fr.GetCurrentStates(ctx, []string{"/data/stuck1.ir", "/data/stuck2.ir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/data/stuck1.ir", "/data/stuck2.ir"} {
+		if states[path] != metastore.StateIRArchiveConsolidationPending {
+			t.Errorf("state for %s = %q, want IR_ARCHIVE_CONSOLIDATION_PENDING", path, states[path])
+		}
+	}
+
+	// Verify the recent buffering file was NOT promoted.
+	states, err = fr.GetCurrentStates(ctx, []string{"/data/recent.ir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states["/data/recent.ir"] != metastore.StateIRArchiveBuffering {
+		t.Errorf("recent file state = %q, want IR_ARCHIVE_BUFFERING (should not be promoted)", states["/data/recent.ir"])
+	}
+
+	// Verify other-state files were NOT touched.
+	for _, state := range []string{"IR_BUFFERING", "ARCHIVE_CLOSED", "IR_ARCHIVE_CONSOLIDATION_PENDING"} {
+		path := "/data/other_" + state + ".ir"
+		states, err := fr.GetCurrentStates(ctx, []string{path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(states[path]) != state {
+			t.Errorf("state for %s = %q, want %s", path, states[path], state)
+		}
+	}
+}
+
 func TestFileRecords_UpdateState_InvalidTransition(t *testing.T) {
 	mc, fr := setupFileRecordsIT(t)
 	defer mc.Teardown(t)
