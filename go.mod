@@ -14,6 +14,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/mariadb v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/minio v0.40.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	go.uber.org/zap v1.27.1
 	google.golang.org/grpc v1.79.1
