@@ -76,21 +76,28 @@ The `input` column in `_task_queue` is a **LZ4-compressed msgpack blob** (not JS
 
 Standard LZ4 frame wrapping msgpack-encoded data. Decode with any LZ4 frame-compatible library (e.g., `lz4.NewReader` in Go, `lz4.frame` in Python).
 
-**Msgpack layout** — a 7-element array (positional, field names are not encoded):
+**Version:** The payload schema version is stored as the `version` column in `_task_queue` (not inside the blob). Workers check the column before deserializing.
+
+**Msgpack layout** — task-type-specific data nested under a key:
 
 ```
-Index  Field                  Type
-─────  ─────────────────────  ──────────────
-  0    archivePath            string   — object key for the target archive
-  1    tableName              string   — metadata table name
-  2    irFilePaths            string[] — list of IR file object keys
-  3    irStorageBackend       string   — backend type for IR files (e.g. "minio", "s3")
-  4    irBucket               string   — bucket where IR files live
-  5    archiveStorageBackend  string   — backend type for archives
-  6    archiveBucket          string   — bucket where archive should be written
+Field                              Type       Description
+─────────────────────────────────  ─────────  ──────────────
+table_name                         string     Metadata table name
+consolidation                      map        Consolidation-specific data (see below)
+
+consolidation fields:
+  ir_paths                         string[]   Source IR file object keys
+  ir_buckets                       string[]   Source IR bucket per file
+  ir_backend                       string     Storage backend for IR files (e.g. "minio", "s3")
+  archive_backend                  string     Storage backend for archives
+  archive_bucket                   string     Bucket where archive should be written
+  file_ids                         int64[]    Database primary keys of the grouped files
+  min_timestamp                    int64      Earliest event timestamp (epoch nanos)
+  archive_path                     string     Target archive object key (UUIDv7 + .clp.zst)
 ```
 
-Serialization and deserialization is handled by `TaskPayload.Serialize()` / `TaskPayload.Deserialize()` in the `taskqueue` package.
+Serialization and deserialization is handled by `MarshalPayload()` / `UnmarshalPayload()` in the `taskqueue` package.
 
 ## Workflow Steps
 
@@ -102,9 +109,9 @@ Worker claims a task using a `SELECT ... FOR UPDATE` + `UPDATE` transaction (REA
 
 ```go
 // From WorkerCore.executeTask():
-payload, err := task.ParsedInput()
-// Internally: reads `input` MEDIUMBLOB, calls TaskPayload.Deserialize(bytes)
-// LZ4 decompression and msgpack unpacking handled by TaskPayload
+payload, err := taskqueue.UnmarshalPayload(task.Input)
+// LZ4 decompression and msgpack unpacking handled internally
+cons := payload.Consolidation  // consolidation-specific data
 ```
 
 ### Step 3: Download IR Files
@@ -113,8 +120,8 @@ IR files are downloaded to a temporary directory. Downloads run in parallel (sem
 
 ```go
 stagingDir, err := os.MkdirTemp("", "clp-staging-")
-// parallel download of payload.IrFilePaths into stagingDir
-storageClient.DownloadIrFilesParallel(ctx, payload.IrBucket, payload.IrFilePaths, stagingDir)
+// parallel download of cons.IRPaths into stagingDir
+storageClient.DownloadIRFilesParallel(ctx, cons.IRBuckets, cons.IRPaths, stagingDir)
 ```
 
 ### Step 4: Execute clp-s
@@ -135,12 +142,12 @@ cmd := exec.CommandContext(ctx, binaryPath, "c", inputDir, "-o", outputPath)
 
 ### Step 5: Upload Archive
 
-The UUID-named archive from `outputDir` is uploaded directly to the destination from the payload. No renaming is needed — the destination path is already known:
+The UUID-named archive from `outputDir` is uploaded to the destination bucket from the payload:
 
 ```go
 archiveFile := findSingleArchive(outputDir)  // the UUID-named file clp-s created
 archiveSize, err := storageClient.UploadFromFile(
-    ctx, payload.ArchiveBucket, payload.ArchivePath, archiveFile)
+    ctx, cons.ArchiveBucket, archivePath, archiveFile)
 ```
 
 ### Step 6: Mark Complete
@@ -300,7 +307,7 @@ mc cp test-data/*.ir local/logs/tenant/table/partition/
 
 The system creates tasks automatically when files reach `IR_ARCHIVE_CONSOLIDATION_PENDING` state. The Planner groups pending files and inserts `TaskPayload`-encoded tasks into `_task_queue`. You can also trigger consolidation manually via the coordinator's planning cycle.
 
-Note: Tasks use LZ4+msgpack binary payload (see `TaskPayload.Serialize()`). Do not insert raw SQL — use the coordinator API or wait for the Planner.
+Note: Tasks use LZ4+msgpack binary payload (see `MarshalPayload()` / `UnmarshalPayload()` in the `taskqueue` package). Do not insert raw SQL — use the coordinator API or wait for the Planner.
 
 ### 4. Monitor Worker
 

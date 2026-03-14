@@ -573,6 +573,7 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     claimed_at          BIGINT NULL,
     completed_at        BIGINT NULL,
     retry_count         TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    version             TINYINT UNSIGNED NOT NULL,
     -- MEDIUMBLOB (16 MB max) is used instead of BLOB (64 KB) to avoid a
     -- table-rebuild ALTER if payloads ever grow beyond 64 KB. Typical payloads
     -- are LZ4+msgpack-encoded file path lists, well under 64 KB. The application

@@ -47,18 +47,20 @@ func makeTask(t *testing.T, taskID int64, payload *taskqueue.TaskPayload) *taskq
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &taskqueue.Task{TaskID: taskID, Input: input}
+	return &taskqueue.Task{TaskID: taskID, Version: taskqueue.TaskPayloadVersion, Input: input}
 }
 
 func validPayload() *taskqueue.TaskPayload {
 	return &taskqueue.TaskPayload{
-		TableName:      "test_table",
-		IRPaths:        []string{"path/to/file1.ir"},
-		IRBuckets:      []string{"test-bucket"},
-		IRBackend:      "minio",
-		ArchivePath:    "/archive/out.clp",
-		ArchiveBucket:  "archive-bucket",
-		ArchiveBackend: "s3",
+		TableName: "test_table",
+		Consolidation: &taskqueue.ConsolidationPayload{
+			IRPaths:        []string{"path/to/file1.ir"},
+			IRBuckets:      []string{"test-bucket"},
+			IRBackend:      "minio",
+			ArchiveBucket:  "archive-bucket",
+			ArchiveBackend: "s3",
+			ArchivePath:    "01902d6c-test-7000-8000-000000000000.clp.zst",
+		},
 	}
 }
 
@@ -91,8 +93,8 @@ func TestExecuteTask_Success(t *testing.T) {
 	if result.ArchiveSizeBytes != 42000 {
 		t.Errorf("ArchiveSizeBytes = %d, want 42000", result.ArchiveSizeBytes)
 	}
-	if result.ArchivePath != "/archive/out.clp" {
-		t.Errorf("ArchivePath = %q", result.ArchivePath)
+	if result.ArchivePath != "01902d6c-test-7000-8000-000000000000.clp.zst" {
+		t.Errorf("ArchivePath = %q, want test archive path", result.ArchivePath)
 	}
 }
 
@@ -152,7 +154,7 @@ func TestExecuteTask_EmptyIRBuckets(t *testing.T) {
 	core := NewCore(tq, ac, pf, zap.NewNop())
 
 	payload := validPayload()
-	payload.IRBuckets = nil // empty buckets
+	payload.Consolidation.IRBuckets = nil // empty buckets
 	task := makeTask(t, 4, payload)
 	core.executeTask(context.Background(), task)
 

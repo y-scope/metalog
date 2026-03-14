@@ -65,6 +65,7 @@ CREATE TABLE _task_queue (
     -- RETRY TRACKING
     -- ========================================================================
     retry_count         TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    version             TINYINT UNSIGNED NOT NULL,
 
     -- ========================================================================
     -- PAYLOAD (opaque, application-defined)
@@ -100,7 +101,8 @@ CREATE TABLE _task_queue (
 | `claimed_at` | BIGINT | When worker claimed task (epoch nanoseconds) |
 | `completed_at` | BIGINT | When task reached terminal state (epoch nanoseconds) |
 | `retry_count` | TINYINT UNSIGNED | Number of previous attempts (for dead-letter threshold) |
-| `input` | MEDIUMBLOB | Task input — LZ4-compressed msgpack `TaskPayload` (IR paths, archive path, buckets) |
+| `version` | TINYINT UNSIGNED | Payload schema version (workers check before deserializing `input`) |
+| `input` | MEDIUMBLOB | Task input — LZ4-compressed msgpack `TaskPayload` (consolidation data nested under `consolidation` key) |
 | `output` | MEDIUMBLOB | Task output — LZ4-compressed msgpack `TaskResult` (actual archive size, timestamp); NULL until worker sets it on completion |
 
 ### State Machine

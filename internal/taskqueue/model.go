@@ -26,6 +26,7 @@ type Task struct {
 	ClaimedAt   sql.NullInt64
 	CompletedAt sql.NullInt64
 	RetryCount  uint8
+	Version     uint8
 	Input       []byte
 	Output      []byte
 }

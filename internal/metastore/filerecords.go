@@ -207,6 +207,7 @@ func (fr *FileRecords) PromoteStuckBuffering(ctx context.Context, staleBeforeNan
 	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(StateIRArchiveConsolidationPending)).
 		Where(sq.Eq{ColState: string(StateIRArchiveBuffering)}).
+		Where(sq.Gt{ColMaxTimestamp: 0}).
 		Where(sq.Lt{ColMaxTimestamp: staleBeforeNanos}).
 		Limit(MaxStuckBufferingBatch).
 		ToSql()

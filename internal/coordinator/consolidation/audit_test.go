@@ -25,8 +25,8 @@ func TestAuditPolicy_GroupsByDay(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("groups = %d, want 1", len(groups))
 	}
-	if len(groups[0]) != 2 {
-		t.Errorf("group size = %d, want 2", len(groups[0]))
+	if len(groups[0].Records) != 2 {
+		t.Errorf("group size = %d, want 2", len(groups[0].Records))
 	}
 }
 

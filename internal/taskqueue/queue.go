@@ -43,10 +43,10 @@ func (q *Queue) SetMaxRetries(n int) { q.maxRetries = n }
 func (q *Queue) SetCleanupBatchLimit(n int) { q.cleanupBatchLimit = n }
 
 // CreateTask inserts a new pending task and returns its ID.
-func (q *Queue) CreateTask(ctx context.Context, tableName string, input []byte) (int64, error) {
+func (q *Queue) CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error) {
 	query, args, err := sq.Insert(TableName).
-		Columns("table_name", "created_at", "input").
-		Values(tableName, time.Now().UnixNano(), input).
+		Columns("table_name", "created_at", "version", "input").
+		Values(tableName, time.Now().UnixNano(), version, input).
 		ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("create task: build query: %w", err)
@@ -91,7 +91,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	defer tx.Rollback()
 
 	// SELECT ... FOR UPDATE SKIP LOCKED
-	builder := sq.Select("task_id", "table_name", "state", "retry_count", "input").
+	builder := sq.Select("task_id", "table_name", "state", "retry_count", "version", "input").
 		From(TableName).
 		Where(sq.Eq{"state": string(TaskStatePending)}).
 		OrderBy("task_id ASC").
@@ -116,7 +116,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	var taskIDs []any
 	for rows.Next() {
 		t := &Task{}
-		if err := rows.Scan(&t.TaskID, &t.TableName, &t.State, &t.RetryCount, &t.Input); err != nil {
+		if err := rows.Scan(&t.TaskID, &t.TableName, &t.State, &t.RetryCount, &t.Version, &t.Input); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("claim tasks: scan: %w", err)
 		}
@@ -300,9 +300,9 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64) error {
 	// Re-enqueue: copy input from old task into new pending task.
 	// retry_count was already incremented on the timed_out row, so copy it as-is.
 	insertQuery, insertArgs, err := sq.Insert(TableName).
-		Columns("table_name", "created_at", "input", "retry_count").
+		Columns("table_name", "created_at", "input", "retry_count", "version").
 		Select(
-			sq.Select("table_name", fmt.Sprintf("%d", nowNano), "input", "retry_count").
+			sq.Select("table_name", fmt.Sprintf("%d", nowNano), "input", "retry_count", "version").
 				From(TableName).
 				Where(sq.Eq{"task_id": taskID}),
 		).

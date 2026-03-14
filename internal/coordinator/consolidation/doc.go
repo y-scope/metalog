@@ -11,6 +11,6 @@
 //   - [SparkJobPolicy]: groups files for Spark-based consolidation
 //   - [AuditPolicy]: logs candidates without creating tasks (dry-run)
 //
-// The [ArchivePathGenerator] creates deterministic archive paths from
-// table name and timestamp range.
+// Archive paths are generated per-group via [GenerateArchivePath] (UUIDv7-based).
+// Policies may override this to produce custom paths.
 package consolidation

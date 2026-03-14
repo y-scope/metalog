@@ -34,15 +34,17 @@ func TestQueue_CreateAndClaim(t *testing.T) {
 	// Create a task
 	payload := &taskqueue.TaskPayload{
 		TableName: testTable,
-		IRPaths:   []string{"/data/file1.ir"},
-		IRBackend: "minio",
+		Consolidation: &taskqueue.ConsolidationPayload{
+			IRPaths:   []string{"/data/file1.ir"},
+			IRBackend: "minio",
+		},
 	}
 	input, err := taskqueue.MarshalPayload(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	taskID, err := tq.CreateTask(ctx, testTable, input)
+	taskID, err := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	if err != nil {
 		t.Fatalf("CreateTask() error = %v", err)
 	}
@@ -87,7 +89,7 @@ func TestQueue_CompleteTask(t *testing.T) {
 
 	// Create and claim
 	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, input)
+	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	tasks, _ := tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 	if len(tasks) != 1 {
 		t.Fatal("expected 1 claimed task")
@@ -123,7 +125,7 @@ func TestQueue_FailTask(t *testing.T) {
 	ctx := context.Background()
 
 	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, input)
+	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 
 	affected, err := tq.FailTask(ctx, taskID)
@@ -150,7 +152,7 @@ func TestQueue_ClaimTasks_BatchSize(t *testing.T) {
 	// Create 5 tasks
 	for i := 0; i < 5; i++ {
 		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		_, err := tq.CreateTask(ctx, testTable, input)
+		_, err := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -183,7 +185,7 @@ func TestQueue_GetTaskCounts(t *testing.T) {
 	// Create 3 tasks
 	for i := 0; i < 3; i++ {
 		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		tq.CreateTask(ctx, testTable, input)
+		tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	}
 
 	// Claim 1
@@ -207,7 +209,7 @@ func TestQueue_ReclaimTask(t *testing.T) {
 	ctx := context.Background()
 
 	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, input)
+	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 
 	// Reclaim the task (retry_count=0 in DB, below max retries)
@@ -240,7 +242,7 @@ func TestQueue_ReclaimTask_DeadLetter(t *testing.T) {
 	ctx := context.Background()
 
 	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, input)
+	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 
 	// Set retry_count >= max retries in DB so reclaim triggers dead_letter.
@@ -275,7 +277,7 @@ func TestQueue_DeleteAllTasks(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		tq.CreateTask(ctx, testTable, input)
+		tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
 	}
 
 	deleted, err := tq.DeleteAllTasks(ctx, testTable)

@@ -36,32 +36,35 @@ func (p *AuditPolicy) RequiredDims() []string { return nil }
 func (p *AuditPolicy) RequiredAggs() []AggRequirement { return nil }
 
 // SelectFiles groups candidates by day boundary (UTC).
-func (p *AuditPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+func (p *AuditPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileGroup {
 	if len(candidates) == 0 {
 		return nil
 	}
 
 	// Group by UTC day of min_timestamp
-	groups := make(map[string][]*metastore.FileRecord)
+	buckets := make(map[string][]*metastore.FileRecord)
 	for _, rec := range candidates {
 		day := time.Unix(0, rec.MinTimestamp).UTC().Format("2006-01-02")
-		groups[day] = append(groups[day], rec)
+		buckets[day] = append(buckets[day], rec)
 	}
 
-	var result [][]*metastore.FileRecord
-	for _, group := range groups {
-		if len(group) < p.MinFilesPerGroup {
+	var result []FileGroup
+	for _, bucket := range buckets {
+		if len(bucket) < p.MinFilesPerGroup {
 			continue
 		}
 
-		for i := 0; i < len(group); i += p.MaxFilesPerGroup {
+		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
 			end := i + p.MaxFilesPerGroup
-			if end > len(group) {
-				end = len(group)
+			if end > len(bucket) {
+				end = len(bucket)
 			}
-			chunk := group[i:end]
+			chunk := bucket[i:end]
 			if len(chunk) >= p.MinFilesPerGroup {
-				result = append(result, chunk)
+				result = append(result, FileGroup{
+					Records:     chunk,
+					ArchivePath: GenerateArchivePath(),
+				})
 			}
 		}
 	}

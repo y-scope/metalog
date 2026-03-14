@@ -14,7 +14,7 @@ func init() {
 		}
 		jt := cfg.JobTimeout
 		if jt <= 0 {
-			jt = 2 * time.Hour
+			jt = 24 * time.Hour
 		}
 		return NewSparkJobPolicy(cfg.GroupingDimKey, cfg.MinFiles, cfg.MaxFiles, jt), nil
 	})
@@ -58,13 +58,13 @@ func (p *SparkJobPolicy) RequiredDims() []string {
 func (p *SparkJobPolicy) RequiredAggs() []AggRequirement { return nil }
 
 // SelectFiles groups candidates by the grouping dimension value.
-func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileGroup {
 	if len(candidates) == 0 {
 		return nil
 	}
 
 	// Group by the dimension value
-	groups := make(map[string][]*metastore.FileRecord)
+	buckets := make(map[string][]*metastore.FileRecord)
 	for _, rec := range candidates {
 		key := ""
 		if rec.Dims != nil {
@@ -77,20 +77,23 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*me
 		if key == "" {
 			key = ungroupedKey
 		}
-		groups[key] = append(groups[key], rec)
+		buckets[key] = append(buckets[key], rec)
 	}
 
-	var result [][]*metastore.FileRecord
+	var result []FileGroup
 	now := time.Now().UnixNano()
 
-	for _, group := range groups {
+	for _, bucket := range buckets {
 		// Check if group meets minimum size or has timed out.
 		// Uses MaxTimestamp (latest event) as a proxy for "last write time".
 		// For historical data (backfills), this will always exceed the timeout,
 		// which is correct: old data implies the producing job is complete.
 		timedOut := false
 		if p.JobTimeout > 0 {
-			for _, rec := range group {
+			for _, rec := range bucket {
+				if rec.MaxTimestamp == 0 {
+					continue // uninitialized — skip
+				}
 				elapsed := now - rec.MaxTimestamp
 				if elapsed <= 0 {
 					continue // future timestamp or clock skew — not timed out
@@ -102,19 +105,22 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*me
 			}
 		}
 
-		if len(group) < p.MinFilesPerGroup && !timedOut {
+		if len(bucket) < p.MinFilesPerGroup && !timedOut {
 			continue
 		}
 
 		// Split into max-sized chunks
-		for i := 0; i < len(group); i += p.MaxFilesPerGroup {
+		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
 			end := i + p.MaxFilesPerGroup
-			if end > len(group) {
-				end = len(group)
+			if end > len(bucket) {
+				end = len(bucket)
 			}
-			chunk := group[i:end]
+			chunk := bucket[i:end]
 			if len(chunk) >= p.MinFilesPerGroup || timedOut {
-				result = append(result, chunk)
+				result = append(result, FileGroup{
+					Records:     chunk,
+					ArchivePath: GenerateArchivePath(),
+				})
 			}
 		}
 	}

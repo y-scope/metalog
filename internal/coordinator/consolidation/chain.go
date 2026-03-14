@@ -55,8 +55,8 @@ func unionStrings(policies []Policy, fn func(Policy) []string) []string {
 }
 
 // SelectFiles runs the waterfall: each policy selects from remaining candidates.
-func (pc *PolicyChain) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
-	var allGroups [][]*metastore.FileRecord
+func (pc *PolicyChain) SelectFiles(candidates []*metastore.FileRecord) []FileGroup {
+	var allGroups []FileGroup
 	remaining := candidates
 
 	for _, p := range pc.policies {
@@ -73,10 +73,10 @@ func (pc *PolicyChain) SelectFiles(candidates []*metastore.FileRecord) [][]*meta
 }
 
 // collectConsumed flattens groups into a set of consumed FileRecord pointers.
-func collectConsumed(groups [][]*metastore.FileRecord) map[*metastore.FileRecord]struct{} {
+func collectConsumed(groups []FileGroup) map[*metastore.FileRecord]struct{} {
 	consumed := make(map[*metastore.FileRecord]struct{})
 	for _, g := range groups {
-		for _, f := range g {
+		for _, f := range g.Records {
 			consumed[f] = struct{}{}
 		}
 	}

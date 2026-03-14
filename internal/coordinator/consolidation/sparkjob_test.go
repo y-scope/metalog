@@ -41,7 +41,7 @@ func TestSparkJobPolicy_TimeoutOverridesMinFiles(t *testing.T) {
 	// One file that's old enough to trigger timeout
 	old := time.Now().Add(-3 * time.Hour).UnixNano()
 	candidates := []*metastore.FileRecord{
-		{MinTimestamp: old, Dims: map[string]any{"app_id": "job-1"}},
+		{MinTimestamp: old, MaxTimestamp: old, Dims: map[string]any{"app_id": "job-1"}},
 	}
 
 	policy := NewSparkJobPolicy("app_id", 2, 100, 2*time.Hour)

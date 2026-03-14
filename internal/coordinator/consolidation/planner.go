@@ -21,6 +21,7 @@ import (
 // before the planner skips creating new consolidation tasks.
 const maxBackpressureDepth = 100
 
+
 // ColumnResolver resolves logical dimension/aggregation keys to physical column names.
 // Satisfied by schema.ColumnRegistry.
 type ColumnResolver interface {
@@ -28,20 +29,55 @@ type ColumnResolver interface {
 	ResolveAgg(aggKey, aggValue, aggType string) string
 }
 
+// fileRecordStore is the subset of metastore.FileRecords used by the planner.
+type fileRecordStore interface {
+	FindConsolidationPending(ctx context.Context, dimMappings, aggMappings []metastore.ColumnMapping) ([]*metastore.FileRecord, error)
+	PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error)
+	MarkArchiveClosed(ctx context.Context, irPaths []string, archivePath, archiveBackend, archiveBucket string, archiveSizeBytes, archiveCreatedAt int64) error
+}
+
+// terminalTask is a completed, failed, or dead-letter task ready for processing.
+type terminalTask struct {
+	taskID int64
+	input  []byte
+	output []byte
+}
+
+// taskStore is the subset of task queue operations used by the planner.
+type taskStore interface {
+	CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error)
+	CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error)
+	FindStaleTasks(ctx context.Context, tableName string, timeout time.Duration) ([]*taskqueue.Task, error)
+	ReclaimTask(ctx context.Context, taskID int64) error
+	FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]terminalTask, error)
+	DeleteTerminalTask(ctx context.Context, taskID int64) error
+	CountActiveTasks(ctx context.Context, tableName string) (int, error)
+}
+
+// storageDeleter deletes objects from storage backends.
+type storageDeleter interface {
+	Delete(ctx context.Context, bucket, path string) error
+}
+
+// storageResolver resolves a backend name to a storageDeleter.
+type storageResolver interface {
+	Get(name string) (storageDeleter, error)
+}
+
 // Planner runs the consolidation planning loop for a single table.
 type Planner struct {
-	db              *sql.DB
 	tableName       string
 	policy          Policy
 	inFlight        *InFlightSet
-	taskQueue       *taskqueue.Queue
-	fileRecs        *metastore.FileRecords
-	storageRegistry *storage.Registry
+	tasks           taskStore
+	fileRecs        fileRecordStore
+	storageResolver storageResolver
 	archiveBackend  string
 	archiveBucket   string
 	interval           time.Duration
 	failureLogInterval time.Duration
 	staleThreshold     time.Duration // 0 disables stuck-file promotion
+	activeTaskCount    int           // in-memory counter for backpressure (pending + processing)
 	resolver           ColumnResolver
 	log                *zap.Logger
 }
@@ -69,14 +105,18 @@ func NewPlanner(
 		return nil, fmt.Errorf("new planner: %w", err)
 	}
 
+	var sr storageResolver
+	if storageRegistry != nil {
+		sr = &registryAdapter{reg: storageRegistry}
+	}
+
 	return &Planner{
-		db:              db,
 		tableName:       tableName,
 		policy:          policy,
 		inFlight:        inFlight,
-		taskQueue:       taskQueue,
+		tasks:           &queueAdapter{db: db, q: taskQueue},
 		fileRecs:        fr,
-		storageRegistry: storageRegistry,
+		storageResolver: sr,
 		archiveBackend:  archiveBackend,
 		archiveBucket:   archiveBucket,
 		interval:           interval,
@@ -87,8 +127,93 @@ func NewPlanner(
 	}, nil
 }
 
+// queueAdapter wraps *taskqueue.Queue and *sql.DB to satisfy taskStore.
+// The raw SQL operations (FindTerminalTasks, DeleteTerminalTask) use the DB
+// directly because the Queue type doesn't expose these methods.
+type queueAdapter struct {
+	db *sql.DB
+	q  *taskqueue.Queue
+}
+
+func (a *queueAdapter) CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error) {
+	return a.q.CreateTask(ctx, tableName, version, input)
+}
+func (a *queueAdapter) CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error) {
+	return a.q.CleanupOldTasks(ctx, tableName, maxAge)
+}
+func (a *queueAdapter) FindStaleTasks(ctx context.Context, tableName string, timeout time.Duration) ([]*taskqueue.Task, error) {
+	return a.q.FindStaleTasks(ctx, tableName, timeout)
+}
+func (a *queueAdapter) ReclaimTask(ctx context.Context, taskID int64) error {
+	return a.q.ReclaimTask(ctx, taskID)
+}
+
+func (a *queueAdapter) CountActiveTasks(ctx context.Context, tableName string) (int, error) {
+	counts, err := a.q.GetTaskCounts(ctx, tableName)
+	if err != nil {
+		return 0, err
+	}
+	return counts.Pending + counts.Processing, nil
+}
+
+func (a *queueAdapter) FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]terminalTask, error) {
+	query, args, err := sq.Select("task_id", "input", "output").
+		From(taskqueue.TableName).
+		Where(sq.Eq{
+			"table_name": tableName,
+			"state":      []string{"completed", "failed", "dead_letter"},
+		}).
+		Limit(uint64(limit)).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("find terminal tasks: build query: %w", err)
+	}
+	rows, err := a.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find terminal tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []terminalTask
+	for rows.Next() {
+		var t terminalTask
+		if err := rows.Scan(&t.taskID, &t.input, &t.output); err != nil {
+			return nil, fmt.Errorf("find terminal tasks: scan: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func (a *queueAdapter) DeleteTerminalTask(ctx context.Context, taskID int64) error {
+	query, args, _ := sq.Delete(taskqueue.TableName).
+		Where(sq.Eq{
+			"task_id": taskID,
+			"state":   []string{"completed", "failed", "dead_letter"},
+		}).
+		ToSql()
+	_, err := a.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+// registryAdapter wraps *storage.Registry to satisfy storageResolver.
+type registryAdapter struct {
+	reg *storage.Registry
+}
+
+func (a *registryAdapter) Get(name string) (storageDeleter, error) {
+	return a.reg.Get(name)
+}
+
 // Run executes the planning loop until ctx is canceled.
 func (p *Planner) Run(ctx context.Context) {
+	// Seed activeTaskCount from the DB so backpressure is accurate after restart.
+	if count, err := p.tasks.CountActiveTasks(ctx, p.tableName); err != nil {
+		p.log.Warn("failed to seed active task count, starting from 0", zap.Error(err))
+	} else {
+		p.activeTaskCount = count
+	}
+
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
@@ -124,15 +249,9 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	}
 
 	// 3. Backpressure check — skip creating new tasks if queue is deep.
-	counts, err := p.taskQueue.GetTaskCounts(ctx, p.tableName)
-	if err != nil {
-		return fmt.Errorf("backpressure check: %w", err)
-	}
-	activeDepth := counts.Pending + counts.Processing
-	if activeDepth >= maxBackpressureDepth {
+	if p.activeTaskCount >= maxBackpressureDepth {
 		p.log.Debug("backpressure: skipping task creation",
-			zap.Int("pending", counts.Pending),
-			zap.Int("processing", counts.Processing),
+			zap.Int("activeTaskCount", p.activeTaskCount),
 		)
 		return nil
 	}
@@ -159,8 +278,8 @@ func (p *Planner) planOnce(ctx context.Context) error {
 
 	// 7. Create tasks for each group.
 	for _, group := range groups {
-		irPaths := make([]string, 0, len(group))
-		for _, rec := range group {
+		irPaths := make([]string, 0, len(group.Records))
+		for _, rec := range group.Records {
 			if rec.ClpIRPath.Valid {
 				irPaths = append(irPaths, rec.ClpIRPath.String)
 			}
@@ -174,29 +293,33 @@ func (p *Planner) planOnce(ctx context.Context) error {
 			continue
 		}
 
-		payload := &taskqueue.TaskPayload{
-			TableName:      p.tableName,
+		cons := &taskqueue.ConsolidationPayload{
 			IRPaths:        irPaths,
 			ArchiveBackend: p.archiveBackend,
 			ArchiveBucket:  p.archiveBucket,
+			ArchivePath:    group.ArchivePath,
 		}
-		for _, rec := range group {
-			payload.FileIDs = append(payload.FileIDs, rec.ID)
+		for _, rec := range group.Records {
+			cons.FileIDs = append(cons.FileIDs, rec.ID)
 			// MinTimestamp == 0 is treated as uninitialized (not a valid epoch-zero timestamp).
-			if payload.MinTimestamp == 0 || rec.MinTimestamp < payload.MinTimestamp {
-				payload.MinTimestamp = rec.MinTimestamp
+			if cons.MinTimestamp == 0 || rec.MinTimestamp < cons.MinTimestamp {
+				cons.MinTimestamp = rec.MinTimestamp
 			}
 		}
-		if len(group) > 0 && group[0].ClpIRStorageBackend.Valid {
-			payload.IRBackend = group[0].ClpIRStorageBackend.String
+		if len(group.Records) > 0 && group.Records[0].ClpIRStorageBackend.Valid {
+			cons.IRBackend = group.Records[0].ClpIRStorageBackend.String
 		}
-		if len(group) > 0 && group[0].ClpIRBucket.Valid {
-			payload.IRBuckets = make([]string, len(group))
-			for i, rec := range group {
+		if len(group.Records) > 0 && group.Records[0].ClpIRBucket.Valid {
+			cons.IRBuckets = make([]string, len(group.Records))
+			for i, rec := range group.Records {
 				if rec.ClpIRBucket.Valid {
-					payload.IRBuckets[i] = rec.ClpIRBucket.String
+					cons.IRBuckets[i] = rec.ClpIRBucket.String
 				}
 			}
+		}
+		payload := &taskqueue.TaskPayload{
+			TableName:     p.tableName,
+			Consolidation: cons,
 		}
 
 		input, err := taskqueue.MarshalPayload(payload)
@@ -206,15 +329,16 @@ func (p *Planner) planOnce(ctx context.Context) error {
 			continue
 		}
 
-		taskID, err := p.taskQueue.CreateTask(ctx, p.tableName, input)
+		taskID, err := p.tasks.CreateTask(ctx, p.tableName, taskqueue.TaskPayloadVersion, input)
 		if err != nil {
 			p.inFlight.Remove(irPaths)
 			return fmt.Errorf("create task: %w", err)
 		}
+		p.activeTaskCount++
 
 		p.log.Debug("created consolidation task",
 			zap.Int64("taskId", taskID),
-			zap.Int("files", len(group)),
+			zap.Int("files", len(group.Records)),
 		)
 	}
 
@@ -280,42 +404,9 @@ func (p *Planner) promoteStuckBuffering(ctx context.Context) {
 }
 
 func (p *Planner) processCompletedTasks(ctx context.Context) error {
-	// Collect all completed tasks first, then close the cursor before processing.
-	// This avoids holding a DB connection open during potentially slow storage operations.
-	type completedTask struct {
-		taskID int64
-		input  []byte
-		output []byte
-	}
-
-	query, qArgs, err := sq.Select("task_id", "input", "output").
-		From(taskqueue.TableName).
-		Where(sq.Eq{
-			"table_name": p.tableName,
-			"state":      []string{"completed", "failed", "dead_letter"},
-		}).
-		Limit(100).
-		ToSql()
+	tasks, err := p.tasks.FindTerminalTasks(ctx, p.tableName, 100)
 	if err != nil {
-		return fmt.Errorf("process completed: build query: %w", err)
-	}
-	rows, err := p.db.QueryContext(ctx, query, qArgs...)
-	if err != nil {
-		return fmt.Errorf("process completed: query: %w", err)
-	}
-
-	var tasks []completedTask
-	for rows.Next() {
-		var t completedTask
-		if err := rows.Scan(&t.taskID, &t.input, &t.output); err != nil {
-			rows.Close()
-			return fmt.Errorf("process completed: scan: %w", err)
-		}
-		tasks = append(tasks, t)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("process completed: rows: %w", err)
+		return fmt.Errorf("process completed: %w", err)
 	}
 
 	for _, t := range tasks {
@@ -326,9 +417,16 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 			continue
 		}
 
+		cons := payload.Consolidation
+		if cons == nil {
+			p.log.Error("task payload missing consolidation data", zap.Int64("taskId", t.taskID))
+			p.markTaskProcessed(ctx, t.taskID)
+			continue
+		}
+
 		// Failed/dead-letter tasks: free in-flight paths, delete task, skip archive update.
 		if t.output == nil {
-			p.inFlight.Remove(payload.IRPaths)
+			p.inFlight.Remove(cons.IRPaths)
 			p.markTaskProcessed(ctx, t.taskID)
 			continue
 		}
@@ -336,24 +434,24 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		result, err := taskqueue.UnmarshalResult(t.output)
 		if err != nil {
 			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.taskID), zap.Error(err))
-			p.inFlight.Remove(payload.IRPaths)
+			p.inFlight.Remove(cons.IRPaths)
 			p.markTaskProcessed(ctx, t.taskID)
 			continue
 		}
 
 		if result.Error != "" {
 			p.log.Warn("task completed with error", zap.Int64("taskId", t.taskID), zap.String("error", result.Error))
-			p.inFlight.Remove(payload.IRPaths)
+			p.inFlight.Remove(cons.IRPaths)
 			p.markTaskProcessed(ctx, t.taskID)
 			continue
 		}
 
 		// Mark files as ARCHIVE_CLOSED
 		err = p.fileRecs.MarkArchiveClosed(ctx,
-			payload.IRPaths,
+			cons.IRPaths,
 			result.ArchivePath,
-			payload.ArchiveBackend,
-			payload.ArchiveBucket,
+			cons.ArchiveBackend,
+			cons.ArchiveBucket,
 			result.ArchiveSizeBytes,
 			timeutil.EpochNanos(),
 		)
@@ -367,17 +465,17 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 		}
 
 		// Delete source IR files from storage (best-effort)
-		p.deleteIRFiles(ctx, payload)
+		p.deleteIRFiles(ctx, cons)
 
 		// Remove from in-flight set and mark task processed
-		p.inFlight.Remove(payload.IRPaths)
+		p.inFlight.Remove(cons.IRPaths)
 		p.markTaskProcessed(ctx, t.taskID)
 	}
 
 	// Catch-all: delete leaked terminal task rows that a previous cycle failed to
 	// clean up (e.g. planner crashed between finalization and deletion). The 24h
 	// age gate avoids racing with the processing loop above.
-	if n, err := p.taskQueue.CleanupOldTasks(ctx, p.tableName, config.DefaultTaskCleanupAge); err != nil {
+	if n, err := p.tasks.CleanupOldTasks(ctx, p.tableName, config.DefaultTaskCleanupAge); err != nil {
 		p.log.Warn("cleanup old tasks failed", zap.Error(err))
 	} else if n > 0 {
 		p.log.Debug("cleaned up old tasks", zap.Int64("deleted", n))
@@ -386,34 +484,32 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 	return nil
 }
 
-// markTaskProcessed deletes a terminal task after the planner has fully processed it.
+// markTaskProcessed deletes a terminal task after the planner has fully processed it
+// and decrements the in-memory active task counter on success.
 func (p *Planner) markTaskProcessed(ctx context.Context, taskID int64) {
-	query, args, _ := sq.Delete(taskqueue.TableName).
-		Where(sq.Eq{
-			"task_id": taskID,
-			"state":   []string{"completed", "failed", "dead_letter"},
-		}).
-		ToSql()
-	_, err := p.db.ExecContext(ctx, query, args...)
-	if err != nil {
+	if err := p.tasks.DeleteTerminalTask(ctx, taskID); err != nil {
 		p.log.Warn("delete processed task failed", zap.Int64("taskId", taskID), zap.Error(err))
+		return
+	}
+	if p.activeTaskCount > 0 {
+		p.activeTaskCount--
 	}
 }
 
 // deleteIRFiles removes source IR files from storage after successful archiving.
-func (p *Planner) deleteIRFiles(ctx context.Context, payload *taskqueue.TaskPayload) {
-	if p.storageRegistry == nil || payload.IRBackend == "" {
+func (p *Planner) deleteIRFiles(ctx context.Context, cons *taskqueue.ConsolidationPayload) {
+	if p.storageResolver == nil || cons.IRBackend == "" {
 		return
 	}
-	backend, err := p.storageRegistry.Get(payload.IRBackend)
+	backend, err := p.storageResolver.Get(cons.IRBackend)
 	if err != nil {
-		p.log.Warn("IR deletion: unknown backend", zap.String("backend", payload.IRBackend))
+		p.log.Warn("IR deletion: unknown backend", zap.String("backend", cons.IRBackend))
 		return
 	}
-	for i, irPath := range payload.IRPaths {
+	for i, irPath := range cons.IRPaths {
 		bucket := ""
-		if i < len(payload.IRBuckets) {
-			bucket = payload.IRBuckets[i]
+		if i < len(cons.IRBuckets) {
+			bucket = cons.IRBuckets[i]
 		}
 		if bucket == "" || irPath == "" {
 			continue
@@ -426,13 +522,13 @@ func (p *Planner) deleteIRFiles(ctx context.Context, payload *taskqueue.TaskPayl
 }
 
 func (p *Planner) reclaimStaleTasks(ctx context.Context) error {
-	staleTasks, err := p.taskQueue.FindStaleTasks(ctx, p.tableName, config.DefaultTaskStaleTimeout)
+	staleTasks, err := p.tasks.FindStaleTasks(ctx, p.tableName, config.DefaultTaskStaleTimeout)
 	if err != nil {
 		return fmt.Errorf("reclaim stale tasks: %w", err)
 	}
 
 	for _, task := range staleTasks {
-		if err := p.taskQueue.ReclaimTask(ctx, task.TaskID); err != nil {
+		if err := p.tasks.ReclaimTask(ctx, task.TaskID); err != nil {
 			p.log.Error("reclaim task failed", zap.Int64("taskId", task.TaskID), zap.Error(err))
 		}
 	}

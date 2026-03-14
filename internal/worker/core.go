@@ -59,6 +59,17 @@ func (c *Core) Run(ctx context.Context) {
 func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 	log := c.log.With(zap.Int64("taskId", task.TaskID))
 
+	if task.Version != taskqueue.TaskPayloadVersion {
+		log.Error("unsupported task version",
+			zap.Uint8("version", task.Version),
+			zap.Uint8("expected", taskqueue.TaskPayloadVersion),
+		)
+		if _, fErr := c.taskQueue.FailTask(ctx, task.TaskID); fErr != nil {
+			log.Error("fail task after version mismatch", zap.Error(fErr))
+		}
+		return
+	}
+
 	payload, err := taskqueue.UnmarshalPayload(task.Input)
 	if err != nil {
 		log.Error("unmarshal payload failed", zap.Error(err))
@@ -68,10 +79,19 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 		return
 	}
 
-	if len(payload.IRBuckets) == 0 || len(payload.IRPaths) == 0 {
+	cons := payload.Consolidation
+	if cons == nil {
+		log.Error("payload missing consolidation data")
+		if _, fErr := c.taskQueue.FailTask(ctx, task.TaskID); fErr != nil {
+			log.Error("fail task after invalid payload", zap.Error(fErr))
+		}
+		return
+	}
+
+	if len(cons.IRBuckets) == 0 || len(cons.IRPaths) == 0 {
 		log.Error("invalid payload: missing IR buckets or paths",
-			zap.Int("irBuckets", len(payload.IRBuckets)),
-			zap.Int("irPaths", len(payload.IRPaths)),
+			zap.Int("irBuckets", len(cons.IRBuckets)),
+			zap.Int("irPaths", len(cons.IRPaths)),
 		)
 		if _, fErr := c.taskQueue.FailTask(ctx, task.TaskID); fErr != nil {
 			log.Error("fail task after invalid payload", zap.Error(fErr))
@@ -81,8 +101,8 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 
 	// Create archive
 	sizeBytes, err := c.archiveCreator.CreateArchive(ctx,
-		payload.IRBackend, payload.IRBuckets, payload.IRPaths,
-		payload.ArchiveBackend, payload.ArchiveBucket, payload.ArchivePath,
+		cons.IRBackend, cons.IRBuckets, cons.IRPaths,
+		cons.ArchiveBackend, cons.ArchiveBucket, cons.ArchivePath,
 	)
 	if err != nil {
 		log.Error("archive creation failed", zap.Error(err))
@@ -96,7 +116,7 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 
 	// Complete task with result
 	result := &taskqueue.TaskResult{
-		ArchivePath:      payload.ArchivePath,
+		ArchivePath:      cons.ArchivePath,
 		ArchiveSizeBytes: sizeBytes,
 		CreatedAt:        timeutil.EpochNanos(),
 	}
@@ -113,5 +133,5 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 		log.Error("complete task failed", zap.Error(cErr))
 		return
 	}
-	log.Debug("task completed", zap.String("archivePath", payload.ArchivePath), zap.Int64("sizeBytes", sizeBytes))
+	log.Debug("task completed", zap.String("archivePath", cons.ArchivePath), zap.Int64("sizeBytes", sizeBytes))
 }

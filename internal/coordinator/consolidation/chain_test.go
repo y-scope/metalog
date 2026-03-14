@@ -8,10 +8,10 @@ import (
 
 // mockPolicy returns predefined groups and tracks which candidates it received.
 type mockPolicy struct {
-	selectFn func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord
+	selectFn func(candidates []*metastore.FileRecord) []FileGroup
 }
 
-func (m *mockPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+func (m *mockPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileGroup {
 	return m.selectFn(candidates)
 }
 
@@ -31,7 +31,7 @@ func TestPolicyChain_Waterfall(t *testing.T) {
 
 	// First policy consumes records[0] and records[1].
 	policy1 := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
 			// Find our target records among candidates.
 			var group []*metastore.FileRecord
 			for _, c := range candidates {
@@ -40,7 +40,7 @@ func TestPolicyChain_Waterfall(t *testing.T) {
 				}
 			}
 			if len(group) > 0 {
-				return [][]*metastore.FileRecord{group}
+				return []FileGroup{{Records: group, ArchivePath: "a.clp.zst"}}
 			}
 			return nil
 		},
@@ -49,10 +49,13 @@ func TestPolicyChain_Waterfall(t *testing.T) {
 	// Second policy gets the remaining 4 records, groups into pairs.
 	var policy2Received int
 	policy2 := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
 			policy2Received = len(candidates)
 			if len(candidates) >= 2 {
-				return [][]*metastore.FileRecord{candidates[:2], candidates[2:]}
+				return []FileGroup{
+					{Records: candidates[:2], ArchivePath: "b.clp.zst"},
+					{Records: candidates[2:], ArchivePath: "c.clp.zst"},
+				}
 			}
 			return nil
 		},
@@ -76,8 +79,8 @@ func TestPolicyChain_SinglePolicy(t *testing.T) {
 	records := makeRecords(4)
 
 	inner := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
-			return [][]*metastore.FileRecord{candidates}
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
+			return []FileGroup{{Records: candidates, ArchivePath: "x.clp.zst"}}
 		},
 	}
 
@@ -87,8 +90,8 @@ func TestPolicyChain_SinglePolicy(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("groups = %d, want 1", len(groups))
 	}
-	if len(groups[0]) != 4 {
-		t.Errorf("group[0] size = %d, want 4", len(groups[0]))
+	if len(groups[0].Records) != 4 {
+		t.Errorf("group[0] size = %d, want 4", len(groups[0].Records))
 	}
 }
 
@@ -97,15 +100,15 @@ func TestPolicyChain_EarlyExhaustion(t *testing.T) {
 
 	// First policy consumes all candidates.
 	policy1 := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
-			return [][]*metastore.FileRecord{candidates}
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
+			return []FileGroup{{Records: candidates, ArchivePath: "x.clp.zst"}}
 		},
 	}
 
 	// Second policy should never be called (no remaining candidates).
 	policy2Called := false
 	policy2 := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
 			policy2Called = true
 			return nil
 		},
@@ -124,7 +127,7 @@ func TestPolicyChain_EarlyExhaustion(t *testing.T) {
 
 func TestPolicyChain_EmptyCandidates(t *testing.T) {
 	policy := &mockPolicy{
-		selectFn: func(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+		selectFn: func(candidates []*metastore.FileRecord) []FileGroup {
 			return nil
 		},
 	}

@@ -71,8 +71,8 @@ func TestTimeWindowPolicy_SelectFiles_ExactlyMinimum(t *testing.T) {
 	if len(result) != 1 {
 		t.Errorf("SelectFiles = %d groups, want 1", len(result))
 	}
-	if len(result) > 0 && len(result[0]) != 2 {
-		t.Errorf("group size = %d, want 2", len(result[0]))
+	if len(result) > 0 && len(result[0].Records) != 2 {
+		t.Errorf("group size = %d, want 2", len(result[0].Records))
 	}
 }
 
@@ -102,7 +102,7 @@ func TestTimeWindowPolicy_SelectFiles_MultipleWindows(t *testing.T) {
 	// Verify total files in groups
 	total := 0
 	for _, g := range result {
-		total += len(g)
+		total += len(g.Records)
 	}
 	if total != 5 {
 		t.Errorf("total files in groups = %d, want 5", total)
@@ -136,8 +136,8 @@ func TestTimeWindowPolicy_SelectFiles_SplitLargeGroup(t *testing.T) {
 	}
 
 	for i, g := range result {
-		if len(g) != 3 {
-			t.Errorf("group %d size = %d, want 3", i, len(g))
+		if len(g.Records) != 3 {
+			t.Errorf("group %d size = %d, want 3", i, len(g.Records))
 		}
 	}
 }
@@ -157,8 +157,8 @@ func TestTimeWindowPolicy_SelectFiles_ChunkExactlyMax(t *testing.T) {
 		t.Errorf("SelectFiles = %d groups, want 2", len(result))
 	}
 	for i, g := range result {
-		if len(g) != 4 {
-			t.Errorf("group %d size = %d, want 4", i, len(g))
+		if len(g.Records) != 4 {
+			t.Errorf("group %d size = %d, want 4", i, len(g.Records))
 		}
 	}
 }

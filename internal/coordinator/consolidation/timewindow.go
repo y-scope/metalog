@@ -39,33 +39,36 @@ func (p *TimeWindowPolicy) RequiredDims() []string { return nil }
 func (p *TimeWindowPolicy) RequiredAggs() []AggRequirement { return nil }
 
 // SelectFiles groups candidates by time window.
-func (p *TimeWindowPolicy) SelectFiles(candidates []*metastore.FileRecord) [][]*metastore.FileRecord {
+func (p *TimeWindowPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileGroup {
 	if len(candidates) == 0 {
 		return nil
 	}
 
 	windowNanos := p.WindowSize.Nanoseconds()
-	groups := make(map[int64][]*metastore.FileRecord)
+	buckets := make(map[int64][]*metastore.FileRecord)
 
 	for _, rec := range candidates {
 		windowKey := rec.MinTimestamp / windowNanos
-		groups[windowKey] = append(groups[windowKey], rec)
+		buckets[windowKey] = append(buckets[windowKey], rec)
 	}
 
-	var result [][]*metastore.FileRecord
-	for _, group := range groups {
-		if len(group) < p.MinFilesPerGroup {
+	var result []FileGroup
+	for _, bucket := range buckets {
+		if len(bucket) < p.MinFilesPerGroup {
 			continue
 		}
 		// Split into max-sized chunks
-		for i := 0; i < len(group); i += p.MaxFilesPerGroup {
+		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
 			end := i + p.MaxFilesPerGroup
-			if end > len(group) {
-				end = len(group)
+			if end > len(bucket) {
+				end = len(bucket)
 			}
-			chunk := group[i:end]
+			chunk := bucket[i:end]
 			if len(chunk) >= p.MinFilesPerGroup {
-				result = append(result, chunk)
+				result = append(result, FileGroup{
+					Records:     chunk,
+					ArchivePath: GenerateArchivePath(),
+				})
 			}
 		}
 	}

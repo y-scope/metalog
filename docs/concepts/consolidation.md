@@ -206,7 +206,7 @@ The Planner runs on a configurable interval (default 60s) per table. Each cycle 
 |------|--------|---------|
 | 1 | Finalize completed tasks | Apply results (mark files `ARCHIVE_CLOSED`, delete source IR from storage), then delete the task row. Also cleans up leaked terminal rows older than 24h as a catch-all. |
 | 2 | Re-queue abandoned tasks | Find `processing` tasks that exceeded the stale timeout (worker crashed mid-task) and create new `pending` retry tasks. |
-| 3 | Backpressure check | If `pending + processing ≥ 100`, skip the rest of the cycle to prevent unbounded queue growth. |
+| 3 | Backpressure check | If the in-memory active task count ≥ 100, skip the rest of the cycle to prevent unbounded queue growth. The counter is seeded from the DB at startup and maintained via increment (on task creation) / decrement (on task finalization). |
 
 **Candidate discovery:**
 
@@ -278,7 +278,7 @@ Workers self-heal: on failure, they delete the archive they just created. On suc
 
 ### Backpressure
 
-The Planner skips creating new tasks if `pending + processing > maxBackpressureDepth` (100), preventing unbounded growth during worker stalls.
+The Planner tracks an in-memory active task counter (seeded from the DB at startup, incremented on task creation, decremented on finalization) and skips creating new tasks when it reaches `maxBackpressureDepth` (100), preventing unbounded growth during worker stalls.
 
 For the full design — schema DDL, SQL operations, design decisions, performance analysis — see [Task Queue Design](../design/task-queue.md).
 
