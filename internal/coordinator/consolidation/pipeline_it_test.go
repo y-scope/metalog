@@ -15,6 +15,8 @@ import (
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/testutil"
+	"github.com/y-scope/metalog/internal/worker"
+	"github.com/y-scope/metalog/storage"
 )
 
 const pipelineTable = "test_pipeline"
@@ -226,5 +228,110 @@ func TestPipeline_PlannerCreatesTask(t *testing.T) {
 	}
 	if cons.IRBackend != testutil.StorageBackendName {
 		t.Errorf("IRBackend = %q, want %q", cons.IRBackend, testutil.StorageBackendName)
+	}
+}
+
+// --- Stage 3: Worker processes task, planner finalizes ---
+
+func TestPipeline_WorkerAndFinalization(t *testing.T) {
+	env := setupPipelineEnv(t)
+	defer env.teardown(t)
+	ctx := context.Background()
+
+	irPaths := env.insertPendingFiles(t, 3)
+	planner, tq := env.newPlanner(t)
+
+	// Run planner to create tasks.
+	plannerCtx, cancel := context.WithCancel(ctx)
+	go planner.Run(plannerCtx)
+	time.Sleep(3 * time.Second)
+	cancel()
+
+	// Verify task was created.
+	counts, err := tq.GetTaskCounts(ctx, pipelineTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Pending < 1 {
+		t.Fatalf("pending tasks = %d, want >= 1", counts.Pending)
+	}
+
+	// Run worker with ConcatCompressor (no real clp-s needed).
+	reg := env.mio.Registry(testutil.StorageBackendName)
+	archiveCreator := storage.NewArchiveCreator(reg, &testutil.ConcatCompressor{}, env.log)
+
+	pf := worker.NewPrefetcher(tq, "test-worker", 10, env.log)
+	core := worker.NewCore(tq, archiveCreator, pf, env.log)
+
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	go pf.Run(workerCtx)
+	go core.Run(workerCtx)
+	time.Sleep(5 * time.Second)
+	workerCancel()
+
+	// Wait for prefetcher to finish.
+	<-pf.Done()
+
+	// Verify task is completed.
+	counts, err = tq.GetTaskCounts(ctx, pipelineTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Completed < 1 {
+		t.Fatalf("completed tasks = %d, want >= 1", counts.Completed)
+	}
+
+	// Run planner again to finalize — processCompletedTasks should:
+	// 1. Mark files ARCHIVE_CLOSED
+	// 2. Delete source IR files from MinIO
+	// 3. Delete the task row
+	planner2, tq2 := env.newPlanner(t)
+	plannerCtx2, cancel2 := context.WithCancel(ctx)
+	go planner2.Run(plannerCtx2)
+	time.Sleep(3 * time.Second)
+	cancel2()
+
+	// Verify files are now ARCHIVE_CLOSED.
+	var closedCount int
+	err = env.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `"+pipelineTable+"` WHERE state = 'ARCHIVE_CLOSED'").
+		Scan(&closedCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closedCount != 3 {
+		t.Errorf("ARCHIVE_CLOSED files = %d, want 3", closedCount)
+	}
+
+	// Verify archive exists in MinIO.
+	var archivePath string
+	err = env.db.QueryRowContext(ctx,
+		"SELECT clp_archive_path FROM `"+pipelineTable+"` WHERE clp_archive_path IS NOT NULL AND clp_archive_path != '' LIMIT 1").
+		Scan(&archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archivePath == "" {
+		t.Fatal("archive path not set on file record")
+	}
+	if !env.mio.ObjectExists(t, testutil.TestBucket, archivePath) {
+		t.Errorf("archive %q not found in MinIO", archivePath)
+	}
+
+	// Verify source IR files were deleted from MinIO.
+	for _, path := range irPaths {
+		if env.mio.ObjectExists(t, testutil.TestBucket, path) {
+			t.Errorf("source IR %q still exists in MinIO (should be deleted after finalization)", path)
+		}
+	}
+
+	// Verify task row was deleted.
+	counts, err = tq2.GetTaskCounts(ctx, pipelineTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totalTasks := counts.Pending + counts.Processing + counts.Completed + counts.Failed
+	if totalTasks != 0 {
+		t.Errorf("remaining tasks = %d, want 0 (task should be deleted after finalization)", totalTasks)
 	}
 }

@@ -9,6 +9,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// Compressor compresses IR files into an archive.
+type Compressor interface {
+	Compress(ctx context.Context, inputDir, outputPath string) error
+}
+
 // ClpCompressor runs the clp-s binary as a subprocess.
 type ClpCompressor struct {
 	binaryPath string

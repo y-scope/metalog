@@ -10,15 +10,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// ArchiveCreator downloads IR files, runs clp-s compression, and uploads the archive.
+// ArchiveCreator downloads IR files, runs compression, and uploads the archive.
 type ArchiveCreator struct {
 	registry   *Registry
-	compressor *ClpCompressor
+	compressor Compressor
 	log        *zap.Logger
 }
 
 // NewArchiveCreator creates an ArchiveCreator.
-func NewArchiveCreator(registry *Registry, compressor *ClpCompressor, log *zap.Logger) *ArchiveCreator {
+func NewArchiveCreator(registry *Registry, compressor Compressor, log *zap.Logger) *ArchiveCreator {
 	return &ArchiveCreator{registry: registry, compressor: compressor, log: log}
 }
 
