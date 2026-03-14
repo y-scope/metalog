@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
@@ -43,19 +44,21 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 
 func insertConsolidationPendingFiles(t *testing.T, db *sql.DB, count int) {
 	t.Helper()
+	baseTs := int64(1704067200000000000)
 	for i := 0; i < count; i++ {
-		_, err := db.ExecContext(context.Background(),
-			"INSERT INTO `"+plannerTable+"` (min_timestamp, max_timestamp, clp_ir_path, clp_ir_storage_backend, clp_ir_bucket, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			int64(1704067200000000000)+int64(i)*1000000,
-			int64(1704067200000000000)+int64(i)*1000000+500000,
-			"/data/consolidation_"+string(rune('a'+i))+".ir",
-			"minio",
-			"logs",
-			"IR_ARCHIVE_CONSOLIDATION_PENDING",
-			10,
-			30,
-		)
-		if err != nil {
+		query, args, _ := sq.Insert("`"+plannerTable+"`").
+			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+				"clp_ir_storage_backend", "clp_ir_bucket",
+				"state", "record_count", "retention_days").
+			Values(
+				baseTs+int64(i)*1000000,
+				baseTs+int64(i)*1000000+500000,
+				"/data/consolidation_"+string(rune('a'+i))+".ir",
+				"minio", "logs",
+				"IR_ARCHIVE_CONSOLIDATION_PENDING",
+				10, 30,
+			).ToSql()
+		if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 			t.Fatalf("insert consolidation file %d: %v", i, err)
 		}
 	}
@@ -147,16 +150,19 @@ func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
 	// Insert stuck IR_ARCHIVE_BUFFERING files with old timestamps.
 	baseTs := int64(1704067200000000000)
 	for i := 0; i < 5; i++ {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+plannerTable+"` (min_timestamp, max_timestamp, clp_ir_path, clp_ir_storage_backend, clp_ir_bucket, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			baseTs+int64(i)*1000000,
-			baseTs+int64(i)*1000000+500000,
-			"/data/stuck_"+string(rune('a'+i))+".ir",
-			"minio", "logs",
-			"IR_ARCHIVE_BUFFERING",
-			10, 30,
-		)
-		if err != nil {
+		query, args, _ := sq.Insert("`"+plannerTable+"`").
+			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+				"clp_ir_storage_backend", "clp_ir_bucket",
+				"state", "record_count", "retention_days").
+			Values(
+				baseTs+int64(i)*1000000,
+				baseTs+int64(i)*1000000+500000,
+				"/data/stuck_"+string(rune('a'+i))+".ir",
+				"minio", "logs",
+				"IR_ARCHIVE_BUFFERING",
+				10, 30,
+			).ToSql()
+		if _, err := mc.DB.ExecContext(ctx, query, args...); err != nil {
 			t.Fatalf("insert stuck file %d: %v", i, err)
 		}
 	}

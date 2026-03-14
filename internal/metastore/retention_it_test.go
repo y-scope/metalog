@@ -4,11 +4,10 @@ package metastore_test
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
+	sq "github.com/Masterminds/squirrel"
 
 	"github.com/y-scope/metalog/internal/metastore"
 )
@@ -24,13 +23,9 @@ func TestFileRecords_TransitionExpiredToPurging_IROnly(t *testing.T) {
 
 	// Insert IR_CLOSED files: 2 expired, 1 not expired.
 	for i, exp := range []int64{pastExpiry, pastExpiry, futureExpiry} {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		insertTestRecordWithExpiry(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/ir_retention_"+string(rune('a'+i))+".ir", "IR_CLOSED", 10, 30, exp)
-		if err != nil {
-			t.Fatal(err)
-		}
+			"/data/ir_retention_"+string(rune('a'+i))+".ir", "IR_CLOSED", exp)
 	}
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
@@ -77,13 +72,9 @@ func TestFileRecords_TransitionExpiredToPurging_ArchiveOnly(t *testing.T) {
 	pastExpiry := now - int64(time.Hour)
 
 	// Insert ARCHIVE_CLOSED file with past expiry.
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+	insertTestRecordWithExpiry(t, mc.DB,
 		1704067200000000000, 1704067200100000000,
-		"/data/archive_retention.ir", "ARCHIVE_CLOSED", 10, 30, pastExpiry)
-	if err != nil {
-		t.Fatal(err)
-	}
+		"/data/archive_retention.ir", "ARCHIVE_CLOSED", pastExpiry)
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
 	if err != nil {
@@ -116,13 +107,9 @@ func TestFileRecords_TransitionExpiredToPurging_SkipsWrongStates(t *testing.T) {
 	// Insert files in states that should NOT be transitioned.
 	states := []string{"IR_BUFFERING", "IR_ARCHIVE_BUFFERING", "IR_ARCHIVE_CONSOLIDATION_PENDING"}
 	for i, s := range states {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		insertTestRecordWithExpiry(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/skip_"+string(rune('a'+i))+".ir", s, 10, 30, pastExpiry)
-		if err != nil {
-			t.Fatal(err)
-		}
+			"/data/skip_"+string(rune('a'+i))+".ir", s, pastExpiry)
 	}
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
@@ -142,13 +129,9 @@ func TestFileRecords_TransitionExpiredToPurging_ZeroExpiresAtIgnored(t *testing.
 	now := time.Now().UnixNano()
 
 	// Insert IR_CLOSED file with expires_at = 0 (no expiration set).
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+	insertTestRecordWithExpiry(t, mc.DB,
 		1704067200000000000, 1704067200100000000,
-		"/data/no_expiry.ir", "IR_CLOSED", 10, 30, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+		"/data/no_expiry.ir", "IR_CLOSED", 0)
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
 	if err != nil {
@@ -168,14 +151,15 @@ func TestFileRecords_FullRetentionPipeline(t *testing.T) {
 	pastExpiry := now - int64(time.Hour)
 
 	// Insert IR_CLOSED file with storage paths and past expiry.
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, "+
-			"clp_ir_storage_backend, clp_ir_bucket, clp_ir_path, "+
-			"state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		1704067200000000000, 1704067200100000000,
-		"s3", "test-bucket", "/data/pipeline.ir",
-		"IR_CLOSED", 10, 30, pastExpiry)
-	if err != nil {
+	query, args, _ := sq.Insert("`"+testTable+"`").
+		Columns("min_timestamp", "max_timestamp",
+			"clp_ir_storage_backend", "clp_ir_bucket", "clp_ir_path",
+			"state", "record_count", "retention_days", "expires_at").
+		Values(1704067200000000000, 1704067200100000000,
+			"s3", "test-bucket", "/data/pipeline.ir",
+			"IR_CLOSED", 10, 30, pastExpiry).
+		ToSql()
+	if _, err := mc.DB.ExecContext(ctx, query, args...); err != nil {
 		t.Fatal(err)
 	}
 
@@ -223,14 +207,9 @@ func TestFileRecords_DeleteExpiredFiles_TOCTOUProtection(t *testing.T) {
 	pastExpiry := now - int64(time.Hour)
 
 	// Insert file already in IR_PURGING with past expiry.
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, "+
-			"state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+	insertTestRecordWithExpiry(t, mc.DB,
 		1704067200000000000, 1704067200100000000,
-		"/data/toctou.ir", "IR_PURGING", 10, 30, pastExpiry)
-	if err != nil {
-		t.Fatal(err)
-	}
+		"/data/toctou.ir", "IR_PURGING", pastExpiry)
 
 	// Simulate retention extension (another tx extended expires_at after SELECT).
 	futureExpiry := now + int64(24*time.Hour)
@@ -271,16 +250,17 @@ func TestFileRecords_DeleteExpiredFiles_ArchiveWithBothPaths(t *testing.T) {
 
 	// Insert ARCHIVE_PURGING file that has both IR and archive paths
 	// (hybrid lifecycle — consolidated but IR path still recorded).
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, "+
-			"clp_ir_storage_backend, clp_ir_bucket, clp_ir_path, "+
-			"clp_archive_storage_backend, clp_archive_bucket, clp_archive_path, "+
-			"state, record_count, retention_days, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		1704067200000000000, 1704067200100000000,
-		"s3", "ir-bucket", "/data/hybrid.ir",
-		"s3", "archive-bucket", "/archives/hybrid.clp",
-		"ARCHIVE_PURGING", 10, 30, pastExpiry)
-	if err != nil {
+	query, args, _ := sq.Insert("`"+testTable+"`").
+		Columns("min_timestamp", "max_timestamp",
+			"clp_ir_storage_backend", "clp_ir_bucket", "clp_ir_path",
+			"clp_archive_storage_backend", "clp_archive_bucket", "clp_archive_path",
+			"state", "record_count", "retention_days", "expires_at").
+		Values(1704067200000000000, 1704067200100000000,
+			"s3", "ir-bucket", "/data/hybrid.ir",
+			"s3", "archive-bucket", "/archives/hybrid.clp",
+			"ARCHIVE_PURGING", 10, 30, pastExpiry).
+		ToSql()
+	if _, err := mc.DB.ExecContext(ctx, query, args...); err != nil {
 		t.Fatal(err)
 	}
 

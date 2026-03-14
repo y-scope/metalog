@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"testing"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/metastore"
@@ -14,6 +15,32 @@ import (
 )
 
 const testTable = "test_logs"
+
+// insertTestRecord inserts a file record with the most common column set.
+func insertTestRecord(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, state string) {
+	t.Helper()
+	query, args, _ := sq.Insert("`"+testTable+"`").
+		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+			"state", "record_count", "retention_days").
+		Values(minTs, maxTs, irPath, state, 10, 30).
+		ToSql()
+	if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
+		t.Fatalf("insert %s (state=%s): %v", irPath, state, err)
+	}
+}
+
+// insertTestRecordWithExpiry is like insertTestRecord but also sets expires_at.
+func insertTestRecordWithExpiry(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, state string, expiresAt int64) {
+	t.Helper()
+	query, args, _ := sq.Insert("`"+testTable+"`").
+		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+			"state", "record_count", "retention_days", "expires_at").
+		Values(minTs, maxTs, irPath, state, 10, 30, expiresAt).
+		ToSql()
+	if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
+		t.Fatalf("insert %s (state=%s): %v", irPath, state, err)
+	}
+}
 
 func setupFileRecordsIT(t *testing.T) (*testutil.MariaDBContainer, *metastore.FileRecords) {
 	t.Helper()
@@ -188,13 +215,9 @@ func TestFileRecords_FindConsolidationPending(t *testing.T) {
 		"ARCHIVE_CLOSED",
 	}
 	for i, s := range states {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+		insertTestRecord(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/consolidation_"+string(rune('a'+i))+".ir", s, 10, 30)
-		if err != nil {
-			t.Fatalf("insert state=%s: %v", s, err)
-		}
+			"/data/consolidation_"+string(rune('a'+i))+".ir", s)
 	}
 
 	pending, err := fr.FindConsolidationPending(ctx, nil, nil)
@@ -213,13 +236,9 @@ func TestFileRecords_GetCurrentStates(t *testing.T) {
 
 	irPaths := []string{"/data/state1.ir", "/data/state2.ir"}
 	for i, p := range irPaths {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+		insertTestRecord(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			p, "IR_BUFFERING", 10, 30)
-		if err != nil {
-			t.Fatal(err)
-		}
+			p, "IR_BUFFERING")
 	}
 
 	states, err := fr.GetCurrentStates(ctx, irPaths)
@@ -243,12 +262,7 @@ func TestFileRecords_UpdateState(t *testing.T) {
 
 	// Insert in IR_BUFFERING
 	irPath := "/data/transition.ir"
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
-		1704067200000000000, 1704067200100000000, irPath, "IR_BUFFERING", 10, 30)
-	if err != nil {
-		t.Fatal(err)
-	}
+	insertTestRecord(t, mc.DB, 1704067200000000000, 1704067200100000000, irPath, "IR_BUFFERING")
 
 	// Transition to IR_CLOSED
 	affected, err := fr.UpdateState(ctx, []string{irPath}, metastore.StateIRClosed)
@@ -277,32 +291,19 @@ func TestFileRecords_PromoteStuckBuffering(t *testing.T) {
 
 	// Insert stuck IR_ARCHIVE_BUFFERING files with old max_timestamp (should be promoted).
 	for i, path := range []string{"/data/stuck1.ir", "/data/stuck2.ir"} {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+		insertTestRecord(t, mc.DB,
 			twoHoursAgo+int64(i), twoHoursAgo+int64(i)+100,
-			path, "IR_ARCHIVE_BUFFERING", 10, 30)
-		if err != nil {
-			t.Fatalf("insert stuck file: %v", err)
-		}
+			path, "IR_ARCHIVE_BUFFERING")
 	}
 
 	// Insert IR_ARCHIVE_BUFFERING file with recent max_timestamp (should NOT be promoted).
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
-		now-100, now, "/data/recent.ir", "IR_ARCHIVE_BUFFERING", 10, 30)
-	if err != nil {
-		t.Fatalf("insert recent file: %v", err)
-	}
+	insertTestRecord(t, mc.DB, now-100, now, "/data/recent.ir", "IR_ARCHIVE_BUFFERING")
 
 	// Insert files in other states with old max_timestamp (should NOT be promoted).
 	for _, state := range []string{"IR_BUFFERING", "ARCHIVE_CLOSED", "IR_ARCHIVE_CONSOLIDATION_PENDING"} {
-		_, err := mc.DB.ExecContext(ctx,
-			"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
+		insertTestRecord(t, mc.DB,
 			twoHoursAgo, twoHoursAgo+100,
-			"/data/other_"+state+".ir", state, 10, 30)
-		if err != nil {
-			t.Fatalf("insert %s file: %v", state, err)
-		}
+			"/data/other_"+state+".ir", state)
 	}
 
 	// Promote: staleBeforeNanos = oneHourAgo (so only the 2-hour-old buffering files qualify).
@@ -354,12 +355,7 @@ func TestFileRecords_UpdateState_InvalidTransition(t *testing.T) {
 
 	// Insert in IR_BUFFERING
 	irPath := "/data/invalid_transition.ir"
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
-		1704067200000000000, 1704067200100000000, irPath, "IR_BUFFERING", 10, 30)
-	if err != nil {
-		t.Fatal(err)
-	}
+	insertTestRecord(t, mc.DB, 1704067200000000000, 1704067200100000000, irPath, "IR_BUFFERING")
 
 	// Try invalid transition: IR_BUFFERING -> ARCHIVE_CLOSED
 	_, err = fr.UpdateState(ctx, []string{irPath}, metastore.StateArchiveClosed)

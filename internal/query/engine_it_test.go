@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/query"
@@ -29,17 +30,19 @@ func setupEngineIT(t *testing.T) (*testutil.MariaDBContainer, *query.SplitQueryE
 
 func insertTestRows(t *testing.T, db *sql.DB, count int) {
 	t.Helper()
+	baseTs := int64(1704067200000000000)
 	for i := 0; i < count; i++ {
-		_, err := db.ExecContext(context.Background(),
-			"INSERT INTO `"+engineTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) VALUES (?, ?, ?, ?, ?, ?)",
-			int64(1704067200000000000)+int64(i)*1000000000,
-			int64(1704067200000000000)+int64(i)*1000000000+500000000,
-			fmt.Sprintf("/data/file_%03d.ir", i),
-			"IR_BUFFERING",
-			int64(10+i),
-			30,
-		)
-		if err != nil {
+		query, args, _ := sq.Insert("`"+engineTable+"`").
+			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+				"state", "record_count", "retention_days").
+			Values(
+				baseTs+int64(i)*1000000000,
+				baseTs+int64(i)*1000000000+500000000,
+				fmt.Sprintf("/data/file_%03d.ir", i),
+				"IR_BUFFERING",
+				int64(10+i), 30,
+			).ToSql()
+		if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 			t.Fatalf("insert row %d: %v", i, err)
 		}
 	}
