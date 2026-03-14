@@ -6,11 +6,14 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
+	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/metastore"
+	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/testutil"
 )
 
@@ -95,6 +98,28 @@ func (env *pipelineEnv) insertPendingFiles(t *testing.T, count int) []string {
 	return irPaths
 }
 
+// newPlanner creates a planner and task queue wired to the test environment.
+func (env *pipelineEnv) newPlanner(t *testing.T) (*consolidation.Planner, *taskqueue.Queue) {
+	t.Helper()
+	inFlight := consolidation.NewInFlightSet()
+	policy := consolidation.NewTimeWindowPolicy(24*time.Hour, 2, 100)
+	tq := taskqueue.NewQueue(env.db, env.log)
+	reg := env.mio.Registry(testutil.StorageBackendName)
+
+	planner, err := consolidation.NewPlanner(
+		env.db, pipelineTable, true, policy, inFlight, tq,
+		nil, // resolver — no dynamic columns needed
+		reg,
+		testutil.StorageBackendName, testutil.TestBucket,
+		1*time.Second, 1*time.Minute, 60*time.Minute,
+		env.log,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return planner, tq
+}
+
 // --- Stage 1: Verify test infrastructure setup ---
 
 func TestPipeline_SetupAndInsert(t *testing.T) {
@@ -123,5 +148,83 @@ func TestPipeline_SetupAndInsert(t *testing.T) {
 		if !env.mio.ObjectExists(t, testutil.TestBucket, path) {
 			t.Errorf("IR file %q not found in MinIO", path)
 		}
+	}
+}
+
+// --- Stage 2: Planner creates tasks from pending files ---
+
+func TestPipeline_PlannerCreatesTask(t *testing.T) {
+	env := setupPipelineEnv(t)
+	defer env.teardown(t)
+	ctx := context.Background()
+
+	irPaths := env.insertPendingFiles(t, 3)
+	planner, tq := env.newPlanner(t)
+
+	// Run planner for a couple cycles.
+	plannerCtx, cancel := context.WithCancel(ctx)
+	go planner.Run(plannerCtx)
+	time.Sleep(3 * time.Second)
+	cancel()
+
+	// Verify tasks were created.
+	counts, err := tq.GetTaskCounts(ctx, pipelineTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Pending < 1 {
+		t.Fatalf("pending tasks = %d, want >= 1", counts.Pending)
+	}
+
+	// Claim the task and verify the payload.
+	tasks, err := tq.ClaimTasks(ctx, pipelineTable, "test-worker", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) < 1 {
+		t.Fatal("no tasks claimed")
+	}
+
+	task := tasks[0]
+	if task.Version != taskqueue.TaskPayloadVersion {
+		t.Errorf("task.Version = %d, want %d", task.Version, taskqueue.TaskPayloadVersion)
+	}
+
+	payload, err := taskqueue.UnmarshalPayload(task.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.TableName != pipelineTable {
+		t.Errorf("TableName = %q, want %q", payload.TableName, pipelineTable)
+	}
+
+	cons := payload.Consolidation
+	if cons == nil {
+		t.Fatal("Consolidation is nil")
+	}
+	if len(cons.IRPaths) == 0 {
+		t.Fatal("IRPaths is empty")
+	}
+	// Verify all claimed IR paths are from our inserted files.
+	irPathSet := make(map[string]bool, len(irPaths))
+	for _, p := range irPaths {
+		irPathSet[p] = true
+	}
+	for _, p := range cons.IRPaths {
+		if !irPathSet[p] {
+			t.Errorf("unexpected IR path in payload: %q", p)
+		}
+	}
+	if cons.ArchiveBackend != testutil.StorageBackendName {
+		t.Errorf("ArchiveBackend = %q, want %q", cons.ArchiveBackend, testutil.StorageBackendName)
+	}
+	if cons.ArchiveBucket != testutil.TestBucket {
+		t.Errorf("ArchiveBucket = %q, want %q", cons.ArchiveBucket, testutil.TestBucket)
+	}
+	if cons.ArchivePath == "" {
+		t.Error("ArchivePath is empty")
+	}
+	if cons.IRBackend != testutil.StorageBackendName {
+		t.Errorf("IRBackend = %q, want %q", cons.IRBackend, testutil.StorageBackendName)
 	}
 }
