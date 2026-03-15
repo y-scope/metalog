@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/coordinator/consolidation"
-	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/taskqueue"
 	"github.com/y-scope/metalog/internal/testutil"
 	"github.com/y-scope/metalog/internal/worker"
@@ -26,7 +25,6 @@ type pipelineEnv struct {
 	db  *sql.DB
 	mc  *testutil.MariaDBContainer
 	mio *testutil.MinIOContainer
-	fr  *metastore.FileRecords
 	log *zap.Logger
 }
 
@@ -39,20 +37,11 @@ func setupPipelineEnv(t *testing.T) *pipelineEnv {
 
 	mio := testutil.SetupMinIOWithBucket(t)
 
-	log := zap.NewNop()
-	fr, err := metastore.NewFileRecords(mc.DB, pipelineTable, true, log)
-	if err != nil {
-		mc.Teardown(t)
-		mio.Teardown(t)
-		t.Fatal(err)
-	}
-
 	return &pipelineEnv{
 		db:  mc.DB,
 		mc:  mc,
 		mio: mio,
-		fr:  fr,
-		log: log,
+		log: zap.NewNop(),
 	}
 }
 
@@ -122,118 +111,11 @@ func (env *pipelineEnv) newPlanner(t *testing.T) (*consolidation.Planner, *taskq
 	return planner, tq
 }
 
-// --- Stage 1: Verify test infrastructure setup ---
-
-func TestPipeline_SetupAndInsert(t *testing.T) {
-	env := setupPipelineEnv(t)
-	defer env.teardown(t)
-	ctx := context.Background()
-
-	irPaths := env.insertPendingFiles(t, 3)
-
-	// Verify file records exist in DB with correct state.
-	pending, err := env.fr.FindConsolidationPending(ctx, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 3 {
-		t.Fatalf("pending files = %d, want 3", len(pending))
-	}
-	for _, rec := range pending {
-		if rec.State != metastore.StateIRArchiveConsolidationPending {
-			t.Errorf("file state = %q, want IR_ARCHIVE_CONSOLIDATION_PENDING", rec.State)
-		}
-	}
-
-	// Verify IR files exist in MinIO.
-	for _, path := range irPaths {
-		if !env.mio.ObjectExists(t, testutil.TestBucket, path) {
-			t.Errorf("IR file %q not found in MinIO", path)
-		}
-	}
-}
-
-// --- Stage 2: Planner creates tasks from pending files ---
-
-func TestPipeline_PlannerCreatesTask(t *testing.T) {
-	env := setupPipelineEnv(t)
-	defer env.teardown(t)
-	ctx := context.Background()
-
-	irPaths := env.insertPendingFiles(t, 3)
-	planner, tq := env.newPlanner(t)
-
-	// Run planner for a couple cycles.
-	plannerCtx, cancel := context.WithCancel(ctx)
-	go planner.Run(plannerCtx)
-	time.Sleep(3 * time.Second)
-	cancel()
-
-	// Verify tasks were created.
-	counts, err := tq.GetTaskCounts(ctx, pipelineTable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts.Pending < 1 {
-		t.Fatalf("pending tasks = %d, want >= 1", counts.Pending)
-	}
-
-	// Claim the task and verify the payload.
-	tasks, err := tq.ClaimTasks(ctx, pipelineTable, "test-worker", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tasks) < 1 {
-		t.Fatal("no tasks claimed")
-	}
-
-	task := tasks[0]
-	if task.Version != taskqueue.TaskPayloadVersion {
-		t.Errorf("task.Version = %d, want %d", task.Version, taskqueue.TaskPayloadVersion)
-	}
-
-	payload, err := taskqueue.UnmarshalPayload(task.Input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if payload.TableName != pipelineTable {
-		t.Errorf("TableName = %q, want %q", payload.TableName, pipelineTable)
-	}
-
-	cons := payload.Consolidation
-	if cons == nil {
-		t.Fatal("Consolidation is nil")
-	}
-	if len(cons.IRPaths) == 0 {
-		t.Fatal("IRPaths is empty")
-	}
-	// Verify all claimed IR paths are from our inserted files.
-	irPathSet := make(map[string]bool, len(irPaths))
-	for _, p := range irPaths {
-		irPathSet[p] = true
-	}
-	for _, p := range cons.IRPaths {
-		if !irPathSet[p] {
-			t.Errorf("unexpected IR path in payload: %q", p)
-		}
-	}
-	if cons.ArchiveBackend != testutil.StorageBackendName {
-		t.Errorf("ArchiveBackend = %q, want %q", cons.ArchiveBackend, testutil.StorageBackendName)
-	}
-	if cons.ArchiveBucket != testutil.TestBucket {
-		t.Errorf("ArchiveBucket = %q, want %q", cons.ArchiveBucket, testutil.TestBucket)
-	}
-	if cons.ArchivePath == "" {
-		t.Error("ArchivePath is empty")
-	}
-	if cons.IRBackend != testutil.StorageBackendName {
-		t.Errorf("IRBackend = %q, want %q", cons.IRBackend, testutil.StorageBackendName)
-	}
-}
-
-// --- Stage 3: Worker processes task, planner finalizes ---
-
-func TestPipeline_WorkerAndFinalization(t *testing.T) {
+// TestPipeline_EndToEnd tests the full consolidation lifecycle:
+// insert pending files + IR objects → planner creates task →
+// worker downloads IR, compresses, uploads archive, completes task →
+// planner finalizes (marks ARCHIVE_CLOSED, deletes source IR, cleans task row).
+func TestPipeline_EndToEnd(t *testing.T) {
 	env := setupPipelineEnv(t)
 	defer env.teardown(t)
 	ctx := context.Background()

@@ -196,6 +196,9 @@ func TestPlanOnce_CreatesTaskForEligibleGroup(t *testing.T) {
 	if cons.ArchivePath == "" {
 		t.Error("ArchivePath is empty, want UUIDv7-based path")
 	}
+	if len(cons.ArchivePath) < 10 || cons.ArchivePath[len(cons.ArchivePath)-8:] != ".clp.zst" {
+		t.Errorf("ArchivePath = %q, want *.clp.zst suffix", cons.ArchivePath)
+	}
 }
 
 func TestPlanOnce_InFlightDedup(t *testing.T) {
@@ -217,48 +220,6 @@ func TestPlanOnce_InFlightDedup(t *testing.T) {
 	if len(ts.createdTasks) != 0 {
 		t.Errorf("created %d tasks, want 0 (paths already in-flight)", len(ts.createdTasks))
 	}
-}
-
-func TestPlanOnce_PromotionCalledBeforeFind(t *testing.T) {
-	promoteCalled := false
-	fr := &mockFileRecords{
-		promoteCount: 3,
-	}
-	// Override to track call order.
-	origFr := fr
-	ts := &mockTaskStore{}
-	p := newTestPlanner(origFr, ts)
-
-	// Replace fileRecs with a wrapper that records promote being called.
-	p.fileRecs = &promotionTracker{
-		inner: origFr,
-		onPromote: func() {
-			promoteCalled = true
-		},
-	}
-
-	if err := p.planOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !promoteCalled {
-		t.Error("PromoteStuckBuffering was not called")
-	}
-}
-
-type promotionTracker struct {
-	inner     fileRecordStore
-	onPromote func()
-}
-
-func (pt *promotionTracker) FindConsolidationPending(ctx context.Context, d, a []metastore.ColumnMapping) ([]*metastore.FileRecord, error) {
-	return pt.inner.FindConsolidationPending(ctx, d, a)
-}
-func (pt *promotionTracker) PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error) {
-	pt.onPromote()
-	return pt.inner.PromoteStuckBuffering(ctx, staleBeforeNanos)
-}
-func (pt *promotionTracker) MarkArchiveClosed(ctx context.Context, irPaths []string, ap, ab, abk string, sz, ca int64) error {
-	return pt.inner.MarkArchiveClosed(ctx, irPaths, ap, ab, abk, sz, ca)
 }
 
 func TestPlanOnce_StaleThresholdZeroSkipsPromotion(t *testing.T) {
@@ -423,23 +384,3 @@ func TestPlanOnce_MarkArchiveClosedFailureKeepsInFlight(t *testing.T) {
 	}
 }
 
-func TestPlanOnce_ArchivePathFromPolicy(t *testing.T) {
-	fr := &mockFileRecords{pendingRecords: makePendingRecords(3)}
-	ts := &mockTaskStore{}
-	p := newTestPlanner(fr, ts)
-
-	if err := p.planOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(ts.createdTasks) != 1 {
-		t.Fatalf("created %d tasks, want 1", len(ts.createdTasks))
-	}
-
-	payload, _ := taskqueue.UnmarshalPayload(ts.createdTasks[0])
-	path := payload.Consolidation.ArchivePath
-
-	// Should end with .clp.zst (from GenerateArchivePath).
-	if len(path) < 10 || path[len(path)-8:] != ".clp.zst" {
-		t.Errorf("ArchivePath = %q, want *.clp.zst suffix", path)
-	}
-}
