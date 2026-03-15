@@ -17,7 +17,7 @@ type KafkaConfig struct {
 // Durations are stored as strings because time.Duration has no native JSON
 // representation. Parse with time.ParseDuration at use sites.
 type ConsolidationPolicyConfig struct {
-	Type           string `json:"type"`                       // "time_window", "spark_job", "audit"
+	Type           string `json:"type"`                       // "time_window", "spark_job"
 	WindowSize     string `json:"window_size,omitempty"`      // e.g. "1h", "30m"
 	MinFiles       int    `json:"min_files,omitempty"`        // default 2
 	MaxFiles       int    `json:"max_files,omitempty"`        // default 100

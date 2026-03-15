@@ -47,7 +47,7 @@ There are two worker deployment modes with different claiming strategies:
 
 1. **Task Creation** (Planner goroutine)
    - Queries database for files in `IR_ARCHIVE_CONSOLIDATION_PENDING` state
-   - Groups files by policy (SparkJob, TimeWindow, Audit)
+   - Groups files by policy (TimeWindow, SparkJob)
    - Creates `TaskPayload` with consolidation data (IR paths, storage info)
    - Inserts to `_task_queue` table with state = `pending`
 
