@@ -17,7 +17,7 @@ type KafkaConfig struct {
 // The Name field selects the policy type; Config holds policy-specific
 // parameters as raw JSON, deserialized by each policy's factory.
 type ConsolidationPolicyConfig struct {
-	Name   string          `json:"name"`             // "time_window", "spark_job"
+	Type   string          `json:"type"`             // "time_window", "spark_job"
 	Config json.RawMessage `json:"config,omitempty"` // policy-specific parameters
 }
 

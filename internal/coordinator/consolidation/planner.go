@@ -202,9 +202,9 @@ func (p *Planner) Run(ctx context.Context) {
 func (p *Planner) planOnce(ctx context.Context) error {
 	// --- Task queue maintenance ---
 
-	// 1. Finalize completed tasks (mark files ARCHIVE_CLOSED, delete source IR).
-	if err := p.processCompletedTasks(ctx); err != nil {
-		return fmt.Errorf("process completed: %w", err)
+	// 1. Finalize terminal tasks (mark files ARCHIVE_CLOSED, delete source IR).
+	if err := p.processTerminalTasks(ctx); err != nil {
+		return fmt.Errorf("process terminal: %w", err)
 	}
 
 	// 2. Re-queue abandoned tasks (claimed by a worker that crashed before finishing).
@@ -394,7 +394,7 @@ func (p *Planner) promoteStuckBuffering(ctx context.Context) {
 	}
 }
 
-func (p *Planner) processCompletedTasks(ctx context.Context) error {
+func (p *Planner) processTerminalTasks(ctx context.Context) error {
 	tasks, err := p.tasks.FindTerminalTasks(ctx, p.tableName, terminalTaskBatchSize)
 	if err != nil {
 		return fmt.Errorf("process completed: %w", err)

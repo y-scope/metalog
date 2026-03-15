@@ -155,7 +155,7 @@ func TestCreatePolicyChain_Empty(t *testing.T) {
 func TestCreatePolicyChain_Single(t *testing.T) {
 	// Single config should produce unwrapped policy (not wrapped in chain).
 	configs := []metastore.ConsolidationPolicyConfig{
-		{Name: "time_window", Config: json.RawMessage(`{"window_size": "1h"}`)},
+		{Type: "time_window", Config: json.RawMessage(`{"window_size": "1h"}`)},
 	}
 	p, err := CreatePolicyChain(configs)
 	if err != nil {
@@ -168,8 +168,8 @@ func TestCreatePolicyChain_Single(t *testing.T) {
 
 func TestCreatePolicyChain_Multi(t *testing.T) {
 	configs := []metastore.ConsolidationPolicyConfig{
-		{Name: "time_window", Config: json.RawMessage(`{"window_size": "1h", "min_files": 1, "max_files": 500}`)},
-		{Name: "time_window", Config: json.RawMessage(`{"window_size": "30m", "min_files": 2, "max_files": 50}`)},
+		{Type: "time_window", Config: json.RawMessage(`{"window_size": "1h", "min_files": 1, "max_files": 500}`)},
+		{Type: "time_window", Config: json.RawMessage(`{"window_size": "30m", "min_files": 2, "max_files": 50}`)},
 	}
 	p, err := CreatePolicyChain(configs)
 	if err != nil {
@@ -186,7 +186,7 @@ func TestCreatePolicyChain_Multi(t *testing.T) {
 
 func TestCreatePolicyChain_InvalidConfig(t *testing.T) {
 	configs := []metastore.ConsolidationPolicyConfig{
-		{Name: "time_window", Config: json.RawMessage(`{"window_size": "not-a-duration"}`)},
+		{Type: "time_window", Config: json.RawMessage(`{"window_size": "not-a-duration"}`)},
 	}
 	_, err := CreatePolicyChain(configs)
 	// Invalid duration is silently treated as default (1h), so no error.
@@ -198,7 +198,7 @@ func TestCreatePolicyChain_InvalidConfig(t *testing.T) {
 
 func TestCreatePolicyChain_UnknownType(t *testing.T) {
 	configs := []metastore.ConsolidationPolicyConfig{
-		{Name: "nonexistent"},
+		{Type: "nonexistent"},
 	}
 	_, err := CreatePolicyChain(configs)
 	if err == nil {

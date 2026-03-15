@@ -56,9 +56,9 @@ func (c *timeWindowConfig) maxFiles() int {
 
 // TimeWindowPolicy groups files by time window for consolidation.
 type TimeWindowPolicy struct {
-	WindowSize       time.Duration
-	MinFiles int
-	MaxFiles int
+	WindowSize time.Duration
+	MinFiles   int
+	MaxFiles   int
 }
 
 // NewTimeWindowPolicy creates a TimeWindowPolicy.

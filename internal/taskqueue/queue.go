@@ -345,7 +345,7 @@ func (q *Queue) ReclaimTask(ctx context.Context, taskID int64) error {
 	return nil
 }
 
-// CleanupOldTasks deletes completed/failed/timed_out tasks older than maxAge.
+// CleanupOldTasks deletes terminal tasks (completed, failed, timed_out, dead_letter) older than maxAge.
 func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-maxAge).UnixNano()
 	query, args, err := sq.Delete(TableName).

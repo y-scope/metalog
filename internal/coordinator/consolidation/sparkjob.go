@@ -68,10 +68,10 @@ const ungroupedKey = "\x00ungrouped"
 // SparkJobPolicy groups files by a dimension value (e.g., application_id)
 // to consolidate all IR files belonging to the same job together.
 type SparkJobPolicy struct {
-	GroupingDimKey   string
-	MinFiles int
-	MaxFiles int
-	JobTimeout       time.Duration
+	GroupingDimKey string
+	MinFiles      int
+	MaxFiles      int
+	JobTimeout    time.Duration
 }
 
 // NewSparkJobPolicy creates a SparkJobPolicy.

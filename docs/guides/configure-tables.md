@@ -105,7 +105,7 @@ its settings under a single key.
   "consolidation": {
     "enabled": true,
     "policies": [
-      { "name": "time_window", "config": {"window_size": "1h", "min_files": 2, "max_files": 100} }
+      { "type": "time_window", "config": {"window_size": "1h", "min_files": 2, "max_files": 100} }
     ]
   },
   "retention": {
@@ -139,7 +139,7 @@ Each policy in the `policies` array has a `name` and a policy-specific `config` 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Policy type: `"time_window"`, `"spark_job"` |
+| `type` | string | Policy type: `"time_window"`, `"spark_job"` |
 | `config` | object | Policy-specific parameters (see below) |
 
 **`time_window` config:**

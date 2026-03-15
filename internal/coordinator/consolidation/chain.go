@@ -103,14 +103,14 @@ func CreatePolicyChain(configs []metastore.ConsolidationPolicyConfig) (Policy, e
 		return CreatePolicy(defaultPolicyType, nil)
 	}
 	if len(configs) == 1 {
-		return CreatePolicy(configs[0].Name, configs[0].Config)
+		return CreatePolicy(configs[0].Type, configs[0].Config)
 	}
 
 	policies := make([]Policy, 0, len(configs))
 	for i, c := range configs {
-		p, err := CreatePolicy(c.Name, c.Config)
+		p, err := CreatePolicy(c.Type, c.Config)
 		if err != nil {
-			return nil, fmt.Errorf("policy %d (%s): %w", i, c.Name, err)
+			return nil, fmt.Errorf("policy %d (%s): %w", i, c.Type, err)
 		}
 		policies = append(policies, p)
 	}

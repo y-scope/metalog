@@ -38,11 +38,11 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 			Enabled: true,
 			Policies: []ConsolidationPolicyConfig{
 				{
-					Name:   "time_window",
+					Type:   "time_window",
 					Config: json.RawMessage(`{"window_size":"30m","min_files":3,"max_files":50}`),
 				},
 				{
-					Name:   "spark_job",
+					Type:   "spark_job",
 					Config: json.RawMessage(`{"grouping_dim_key":"application_id","job_timeout":"2h","min_files":1,"max_files":200}`),
 				},
 			},
@@ -81,13 +81,13 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 	}
 
 	p0 := decoded.Consolidation.Policies[0]
-	if p0.Name != "time_window" {
-		t.Errorf("policy[0].Name = %q, want time_window", p0.Name)
+	if p0.Type != "time_window" {
+		t.Errorf("policy[0].Name = %q, want time_window", p0.Type)
 	}
 
 	p1 := decoded.Consolidation.Policies[1]
-	if p1.Name != "spark_job" {
-		t.Errorf("policy[1].Name = %q, want spark_job", p1.Name)
+	if p1.Type != "spark_job" {
+		t.Errorf("policy[1].Name = %q, want spark_job", p1.Type)
 	}
 }
 
