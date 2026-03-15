@@ -5,6 +5,7 @@ package metastore_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	sq "github.com/Masterminds/squirrel"
@@ -219,7 +220,7 @@ func TestFileRecords_FindConsolidationPending(t *testing.T) {
 	for i, s := range states {
 		insertTestRecord(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/consolidation_"+string(rune('a'+i))+".ir", s)
+			fmt.Sprintf("/data/consolidation_%d.ir", i), s)
 	}
 
 	pending, err := fr.FindConsolidationPending(ctx, nil, nil)

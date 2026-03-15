@@ -98,6 +98,10 @@ type PlannerConfig struct {
 // NewPlanner creates a Planner. Column resolution happens per-cycle in planOnce
 // so that newly-registered columns are picked up without restarting the planner.
 func NewPlanner(cfg PlannerConfig) (*Planner, error) {
+	if cfg.FailureLogInterval <= 0 {
+		cfg.FailureLogInterval = time.Minute
+	}
+
 	fr, err := metastore.NewFileRecords(cfg.DB, cfg.TableName, cfg.IsMariaDB, cfg.Log)
 	if err != nil {
 		return nil, fmt.Errorf("new planner: %w", err)

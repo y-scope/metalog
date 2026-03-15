@@ -387,7 +387,9 @@ func (q *Queue) GetTaskCounts(ctx context.Context, tableName string) (*TaskCount
 	return counts, nil
 }
 
-// terminalStates are the states considered terminal (task fully processed or abandoned).
+// terminalStates are the states considered terminal for planner processing.
+// Note: timed_out is excluded because ReclaimTask handles re-enqueueing those
+// tasks. They are cleaned up by CleanupOldTasks if re-enqueue fails.
 var terminalStates = []string{
 	string(TaskStateCompleted),
 	string(TaskStateFailed),

@@ -5,6 +5,7 @@ package consolidation_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func (env *pipelineEnv) insertPendingFiles(t *testing.T, count int) []string {
 
 	irPaths := make([]string, count)
 	for i := 0; i < count; i++ {
-		irPath := "/data/pipeline_" + string(rune('a'+i)) + ".ir"
+		irPath := fmt.Sprintf("/data/pipeline_%d.ir", i)
 		irPaths[i] = irPath
 
 		// Insert file record into DB.

@@ -1,8 +1,8 @@
 package testutil
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 

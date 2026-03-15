@@ -5,6 +5,7 @@ package consolidation_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func insertConsolidationPendingFiles(t *testing.T, db *sql.DB, count int) {
 			Values(
 				baseTs+int64(i)*1000000,
 				baseTs+int64(i)*1000000+500000,
-				"/data/consolidation_"+string(rune('a'+i))+".ir",
+				fmt.Sprintf("/data/consolidation_%d.ir", i),
 				"minio", "logs",
 				"IR_ARCHIVE_CONSOLIDATION_PENDING",
 				10, 30, 0,
@@ -175,7 +176,7 @@ func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
 			Values(
 				baseTs+int64(i)*1000000,
 				baseTs+int64(i)*1000000+500000,
-				"/data/stuck_"+string(rune('a'+i))+".ir",
+				fmt.Sprintf("/data/stuck_%d.ir", i),
 				"minio", "logs",
 				"IR_ARCHIVE_BUFFERING",
 				10, 30, 0,

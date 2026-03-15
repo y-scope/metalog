@@ -4,6 +4,7 @@ package metastore_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestFileRecords_TransitionExpiredToPurging_IROnly(t *testing.T) {
 	for i, exp := range []int64{pastExpiry, pastExpiry, futureExpiry} {
 		insertTestRecordWithExpiry(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/ir_retention_"+string(rune('a'+i))+".ir", "IR_CLOSED", exp)
+			fmt.Sprintf("/data/ir_retention_%d.ir", i), "IR_CLOSED", exp)
 	}
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
@@ -107,7 +108,7 @@ func TestFileRecords_TransitionExpiredToPurging_SkipsWrongStates(t *testing.T) {
 	for i, s := range states {
 		insertTestRecordWithExpiry(t, mc.DB,
 			1704067200000000000, 1704067200100000000+int64(i),
-			"/data/skip_"+string(rune('a'+i))+".ir", s, pastExpiry)
+			fmt.Sprintf("/data/skip_%d.ir", i), s, pastExpiry)
 	}
 
 	transitioned, err := fr.TransitionExpiredToPurging(ctx, now)
