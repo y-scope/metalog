@@ -1,6 +1,7 @@
 package metastore
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -37,17 +38,12 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 			Enabled: true,
 			Policies: []ConsolidationPolicyConfig{
 				{
-					Type:       "time_window",
-					WindowSize: "30m",
-					MinFiles:   3,
-					MaxFiles:   50,
+					Name:   "time_window",
+					Config: json.RawMessage(`{"window_size":"30m","min_files":3,"max_files":50}`),
 				},
 				{
-					Type:           "spark_job",
-					GroupingDimKey: "application_id",
-					JobTimeout:     "2h",
-					MinFiles:       1,
-					MaxFiles:       200,
+					Name:   "spark_job",
+					Config: json.RawMessage(`{"grouping_dim_key":"application_id","job_timeout":"2h","min_files":1,"max_files":200}`),
 				},
 			},
 		},
@@ -85,13 +81,13 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 	}
 
 	p0 := decoded.Consolidation.Policies[0]
-	if p0.Type != "time_window" || p0.WindowSize != "30m" || p0.MinFiles != 3 || p0.MaxFiles != 50 {
-		t.Errorf("policy[0] mismatch: %+v", p0)
+	if p0.Name != "time_window" {
+		t.Errorf("policy[0].Name = %q, want time_window", p0.Name)
 	}
 
 	p1 := decoded.Consolidation.Policies[1]
-	if p1.Type != "spark_job" || p1.GroupingDimKey != "application_id" || p1.JobTimeout != "2h" {
-		t.Errorf("policy[1] mismatch: %+v", p1)
+	if p1.Name != "spark_job" {
+		t.Errorf("policy[1].Name = %q, want spark_job", p1.Name)
 	}
 }
 

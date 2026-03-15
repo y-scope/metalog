@@ -105,7 +105,7 @@ its settings under a single key.
   "consolidation": {
     "enabled": true,
     "policies": [
-      { "type": "time_window", "window_size": "1h", "min_files": 2, "max_files": 100 }
+      { "name": "time_window", "config": {"window_size": "1h", "min_files": 2, "max_files": 100} }
     ]
   },
   "retention": {
@@ -135,16 +135,29 @@ non-empty. This lets you enable Kafka in advance and configure routing later.
 | `policies` | array | `[]` | Ordered list of consolidation policies (waterfall). If empty, a default `time_window(1h)` policy is used. |
 | `stale_buffering_mins` | int | `60` | Minutes before an `IR_ARCHIVE_BUFFERING` file is auto-promoted to `CONSOLIDATION_PENDING`. Negative value disables. See [Stuck-File Promotion](../concepts/consolidation.md#stuck-file-promotion). |
 
-Each policy in the `policies` array:
+Each policy in the `policies` array has a `name` and a policy-specific `config` object:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | Policy type: `"time_window"`, `"spark_job"` |
-| `window_size` | string | Time window duration, e.g. `"1h"`, `"30m"` (time_window only) |
-| `min_files` | int | Minimum files to trigger consolidation (default: 2) |
-| `max_files` | int | Maximum files per consolidation task (default: 100) |
-| `grouping_dim_key` | string | Dimension key to group by (spark_job only) |
-| `job_timeout` | string | Job timeout duration, e.g. `"2h"` (spark_job only) |
+| `name` | string | Policy type: `"time_window"`, `"spark_job"` |
+| `config` | object | Policy-specific parameters (see below) |
+
+**`time_window` config:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `window_size` | string | `"1h"` | Time window duration, e.g. `"1h"`, `"30m"` |
+| `min_files` | int | `2` | Minimum files to trigger consolidation |
+| `max_files` | int | `100` | Maximum files per consolidation task |
+
+**`spark_job` config:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `grouping_dim_key` | string | *(required)* | Dimension key to group by (e.g. `"application_id"`) |
+| `min_files` | int | `2` | Minimum files to trigger consolidation |
+| `max_files` | int | `100` | Maximum files per consolidation task |
+| `job_timeout` | string | `"24h"` | Timeout before forcing consolidation of incomplete groups |
 
 ### `retention` — Lifecycle and expiration
 

@@ -14,15 +14,11 @@ type KafkaConfig struct {
 }
 
 // ConsolidationPolicyConfig describes a single consolidation policy.
-// Durations are stored as strings because time.Duration has no native JSON
-// representation. Parse with time.ParseDuration at use sites.
+// The Name field selects the policy type; Config holds policy-specific
+// parameters as raw JSON, deserialized by each policy's factory.
 type ConsolidationPolicyConfig struct {
-	Type           string `json:"type"`                       // "time_window", "spark_job"
-	WindowSize     string `json:"window_size,omitempty"`      // e.g. "1h", "30m"
-	MinFiles       int    `json:"min_files,omitempty"`        // default 2
-	MaxFiles       int    `json:"max_files,omitempty"`        // default 100
-	GroupingDimKey string `json:"grouping_dim_key,omitempty"` // spark_job only
-	JobTimeout     string `json:"job_timeout,omitempty"`      // spark_job only, e.g. "2h"
+	Name   string          `json:"name"`             // "time_window", "spark_job"
+	Config json.RawMessage `json:"config,omitempty"` // policy-specific parameters
 }
 
 // ConsolidationConfig holds consolidation planner settings for a table.

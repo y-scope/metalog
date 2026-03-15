@@ -2,7 +2,6 @@ package consolidation
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/y-scope/metalog/internal/metastore"
 )
@@ -98,57 +97,22 @@ func subtract(candidates []*metastore.FileRecord, consumed map[*metastore.FileRe
 }
 
 // CreatePolicyChain builds a Policy from a slice of ConsolidationPolicyConfig.
-// Each config is converted to a PolicyConfig and instantiated via CreatePolicy.
 // If the slice is empty, a default time_window policy is used.
 func CreatePolicyChain(configs []metastore.ConsolidationPolicyConfig) (Policy, error) {
 	if len(configs) == 0 {
-		return CreatePolicy(DefaultPolicyConfig())
+		return CreatePolicy(defaultPolicyType, nil)
 	}
 	if len(configs) == 1 {
-		pc, err := toPolicyConfig(configs[0])
-		if err != nil {
-			return nil, err
-		}
-		return CreatePolicy(pc)
+		return CreatePolicy(configs[0].Name, configs[0].Config)
 	}
 
 	policies := make([]Policy, 0, len(configs))
 	for i, c := range configs {
-		pc, err := toPolicyConfig(c)
+		p, err := CreatePolicy(c.Name, c.Config)
 		if err != nil {
-			return nil, fmt.Errorf("policy %d (%s): %w", i, c.Type, err)
-		}
-		p, err := CreatePolicy(pc)
-		if err != nil {
-			return nil, fmt.Errorf("policy %d (%s): %w", i, c.Type, err)
+			return nil, fmt.Errorf("policy %d (%s): %w", i, c.Name, err)
 		}
 		policies = append(policies, p)
 	}
 	return NewPolicyChain(policies), nil
-}
-
-// toPolicyConfig converts a ConsolidationPolicyConfig (string durations from
-// msgpack) to a PolicyConfig (parsed time.Duration values).
-func toPolicyConfig(c metastore.ConsolidationPolicyConfig) (PolicyConfig, error) {
-	cfg := PolicyConfig{
-		Type:           c.Type,
-		MinFiles:       c.MinFiles,
-		MaxFiles:       c.MaxFiles,
-		GroupingDimKey: c.GroupingDimKey,
-	}
-	if c.WindowSize != "" {
-		d, err := time.ParseDuration(c.WindowSize)
-		if err != nil {
-			return PolicyConfig{}, fmt.Errorf("parse window_size %q: %w", c.WindowSize, err)
-		}
-		cfg.WindowSize = d
-	}
-	if c.JobTimeout != "" {
-		d, err := time.ParseDuration(c.JobTimeout)
-		if err != nil {
-			return PolicyConfig{}, fmt.Errorf("parse job_timeout %q: %w", c.JobTimeout, err)
-		}
-		cfg.JobTimeout = d
-	}
-	return cfg, nil
 }

@@ -1,23 +1,65 @@
 package consolidation
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/y-scope/metalog/internal/metastore"
 )
 
+const defaultJobTimeout = 24 * time.Hour
+
 func init() {
-	RegisterPolicyType("spark_job", func(cfg PolicyConfig) (Policy, error) {
+	RegisterPolicyType("spark_job", func(config json.RawMessage) (Policy, error) {
+		var cfg sparkJobConfig
+		if len(config) > 0 {
+			if err := json.Unmarshal(config, &cfg); err != nil {
+				return nil, fmt.Errorf("spark_job config: %w", err)
+			}
+		}
 		if cfg.GroupingDimKey == "" {
-			return nil, fmt.Errorf("spark_job policy requires groupingDimKey")
+			return nil, fmt.Errorf("spark_job policy requires grouping_dim_key")
 		}
-		jt := cfg.JobTimeout
-		if jt <= 0 {
-			jt = 24 * time.Hour
-		}
-		return NewSparkJobPolicy(cfg.GroupingDimKey, cfg.MinFiles, cfg.MaxFiles, jt), nil
+		return NewSparkJobPolicy(
+			cfg.GroupingDimKey,
+			cfg.minFiles(),
+			cfg.maxFiles(),
+			cfg.jobTimeout(),
+		), nil
 	})
+}
+
+// sparkJobConfig is the JSON-deserialized config for SparkJobPolicy.
+type sparkJobConfig struct {
+	GroupingDimKey string `json:"grouping_dim_key"`
+	MinFiles      int    `json:"min_files"`
+	MaxFiles      int    `json:"max_files"`
+	JobTimeout    string `json:"job_timeout"` // e.g. "24h", "2h"
+}
+
+func (c *sparkJobConfig) minFiles() int {
+	if c.MinFiles > 0 {
+		return c.MinFiles
+	}
+	return defaultMinFilesPerGroup
+}
+
+func (c *sparkJobConfig) maxFiles() int {
+	if c.MaxFiles > 0 {
+		return c.MaxFiles
+	}
+	return defaultMaxFilesPerGroup
+}
+
+func (c *sparkJobConfig) jobTimeout() time.Duration {
+	if c.JobTimeout != "" {
+		d, err := time.ParseDuration(c.JobTimeout)
+		if err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultJobTimeout
 }
 
 // ungroupedKey is the sentinel key for records missing the grouping dimension.
@@ -26,20 +68,16 @@ const ungroupedKey = "\x00ungrouped"
 // SparkJobPolicy groups files by a dimension value (e.g., application_id)
 // to consolidate all IR files belonging to the same job together.
 type SparkJobPolicy struct {
-	// GroupingDimKey is the dimension key to group by (e.g., "application_id").
-	GroupingDimKey string
-	// MinFilesPerGroup is the minimum number of files to form a group.
+	GroupingDimKey   string
 	MinFilesPerGroup int
-	// MaxFilesPerGroup is the maximum number of files per group.
 	MaxFilesPerGroup int
-	// JobTimeout triggers consolidation after this duration even if the job isn't complete.
-	JobTimeout time.Duration
+	JobTimeout       time.Duration
 }
 
 // NewSparkJobPolicy creates a SparkJobPolicy.
 func NewSparkJobPolicy(groupingKey string, minFiles, maxFiles int, timeout time.Duration) *SparkJobPolicy {
 	if maxFiles <= 0 {
-		maxFiles = 100
+		maxFiles = defaultMaxFilesPerGroup
 	}
 	return &SparkJobPolicy{
 		GroupingDimKey:   groupingKey,
@@ -63,7 +101,6 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileG
 		return nil
 	}
 
-	// Group by the dimension value
 	buckets := make(map[string][]*metastore.FileRecord)
 	for _, rec := range candidates {
 		key := ""
@@ -84,10 +121,6 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileG
 	now := time.Now().UnixNano()
 
 	for _, bucket := range buckets {
-		// Check if group meets minimum size or has timed out.
-		// Uses MaxTimestamp (latest event) as a proxy for "last write time".
-		// For historical data (backfills), this will always exceed the timeout,
-		// which is correct: old data implies the producing job is complete.
 		timedOut := false
 		if p.JobTimeout > 0 {
 			for _, rec := range bucket {
@@ -109,7 +142,6 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileG
 			continue
 		}
 
-		// Split into max-sized chunks
 		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
 			end := i + p.MaxFilesPerGroup
 			if end > len(bucket) {

@@ -21,6 +21,10 @@ import (
 // before the planner skips creating new consolidation tasks.
 const maxBackpressureDepth = 100
 
+// terminalTaskBatchSize is the maximum number of completed/failed/dead-letter
+// tasks to process per planning cycle.
+const terminalTaskBatchSize = 100
+
 // ColumnResolver resolves logical dimension/aggregation keys to physical column names.
 // Satisfied by schema.ColumnRegistry.
 type ColumnResolver interface {
@@ -416,7 +420,7 @@ func (p *Planner) promoteStuckBuffering(ctx context.Context) {
 }
 
 func (p *Planner) processCompletedTasks(ctx context.Context) error {
-	tasks, err := p.tasks.FindTerminalTasks(ctx, p.tableName, 100)
+	tasks, err := p.tasks.FindTerminalTasks(ctx, p.tableName, terminalTaskBatchSize)
 	if err != nil {
 		return fmt.Errorf("process completed: %w", err)
 	}

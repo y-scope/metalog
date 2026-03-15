@@ -1,55 +1,41 @@
 package consolidation
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 )
 
-// PolicyConfig holds configuration for creating a consolidation policy.
-type PolicyConfig struct {
-	Type           string        `yaml:"type"`
-	WindowSize     time.Duration `yaml:"windowSize"`
-	MinFiles       int           `yaml:"minFiles"`
-	MaxFiles       int           `yaml:"maxFiles"`
-	GroupingDimKey string        `yaml:"groupingDimKey"`
-	JobTimeout     time.Duration `yaml:"jobTimeout"`
-}
-
-// DefaultPolicyConfig returns a default time-window policy config.
-func DefaultPolicyConfig() PolicyConfig {
-	return PolicyConfig{
-		Type:       "time_window",
-		WindowSize: time.Hour,
-		MinFiles:   2,
-		MaxFiles:   100,
-	}
-}
+const (
+	// defaultMinFilesPerGroup is the minimum files needed to form a consolidation group.
+	defaultMinFilesPerGroup = 2
+	// defaultMaxFilesPerGroup is the maximum files per consolidation task.
+	defaultMaxFilesPerGroup = 100
+	// defaultPolicyType is used when no policies are configured.
+	defaultPolicyType = "time_window"
+)
 
 var (
 	policyMu       sync.RWMutex
-	policyRegistry = map[string]func(cfg PolicyConfig) (Policy, error){}
+	policyRegistry = map[string]PolicyFactory{}
 )
 
+// PolicyFactory creates a Policy from raw JSON config.
+// The factory is responsible for deserializing the config into its own struct.
+// A nil config means "use defaults".
+type PolicyFactory func(config json.RawMessage) (Policy, error)
+
 // RegisterPolicyType registers a policy type factory.
-func RegisterPolicyType(typeName string, factory func(cfg PolicyConfig) (Policy, error)) {
+func RegisterPolicyType(typeName string, factory PolicyFactory) {
 	policyMu.Lock()
 	defer policyMu.Unlock()
 	policyRegistry[typeName] = factory
 }
 
-// CreatePolicy instantiates a Policy from configuration.
-func CreatePolicy(cfg PolicyConfig) (Policy, error) {
-	if cfg.MinFiles <= 0 {
-		cfg.MinFiles = 2
-	}
-	if cfg.MaxFiles <= 0 {
-		cfg.MaxFiles = 100
-	}
-
-	typeName := cfg.Type
+// CreatePolicy instantiates a Policy by type name and raw JSON config.
+func CreatePolicy(typeName string, config json.RawMessage) (Policy, error) {
 	if typeName == "" {
-		typeName = "time_window"
+		typeName = defaultPolicyType
 	}
 
 	policyMu.RLock()
@@ -58,5 +44,5 @@ func CreatePolicy(cfg PolicyConfig) (Policy, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown policy type: %q", typeName)
 	}
-	return factory(cfg)
+	return factory(config)
 }
