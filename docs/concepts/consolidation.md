@@ -138,21 +138,17 @@ The policy determines how IR files are grouped into archives. Policies are **dom
 
 ### Policy Types
 
-Three built-in policy types are registered in the `consolidation` package:
-
-**`spark_job`** — Dimension-based grouping (e.g., Spark logs):
-- Groups IR files by a dimension key (e.g., `application_id` via `groupingDimKey`)
-- All logs from a single Spark job end up in the same archive(s)
-- Enables efficient job-level queries
+Two built-in policy types are registered in the `consolidation` package:
 
 **`time_window`** — Time-window grouping (e.g., microservices):
 - Groups IR files by configurable time windows (e.g., 15 min, 1 hour)
 - Optimized for time-range filtering
 - This is the default policy when no type is specified
 
-**`audit`** — Exact-day grouping:
-- Groups IR files by calendar day boundaries
-- Designed for compliance/audit logs where day-aligned archives simplify retention
+**`spark_job`** — Dimension-based grouping (e.g., Spark logs):
+- Groups IR files by a dimension key (e.g., `application_id` via `groupingDimKey`)
+- All logs from a single Spark job end up in the same archive(s)
+- Enables efficient job-level queries
 
 All policies support common triggers: size limits (`minFiles`/`maxFiles`) and timeout fallbacks.
 
@@ -219,7 +215,7 @@ The Planner runs on a configurable interval (default 60s) per table. Each cycle 
 
 | Step | Action | Details |
 |------|--------|---------|
-| 6 | Apply policy | Group candidate files using the configured policy (time window, spark job, audit). |
+| 6 | Apply policy | Group candidate files using the configured policy (time window, spark job). |
 | 7 | Create tasks | For each group, build an LZ4+msgpack payload and insert a `pending` task into `_task_queue`. Files are tracked in an in-flight set to prevent duplicate tasks. |
 
 ### Stuck-File Promotion

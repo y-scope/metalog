@@ -139,7 +139,7 @@ Each policy in the `policies` array:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | Policy type: `"time_window"`, `"spark_job"`, `"audit"` |
+| `type` | string | Policy type: `"time_window"`, `"spark_job"` |
 | `window_size` | string | Time window duration, e.g. `"1h"`, `"30m"` (time_window only) |
 | `min_files` | int | Minimum files to trigger consolidation (default: 2) |
 | `max_files` | int | Maximum files per consolidation task (default: 100) |

@@ -8,8 +8,7 @@
 //
 // Built-in policies:
 //   - [TimeWindowPolicy]: groups files by time window boundaries
-//   - [SparkJobPolicy]: groups files for Spark-based consolidation
-//   - [AuditPolicy]: groups files by exact UTC day boundaries for compliance-oriented consolidation
+//   - [SparkJobPolicy]: groups files by a dimension key (e.g., application_id)
 //
 // Archive paths are generated per-group via [GenerateArchivePath] (UUIDv7-based).
 // Policies may override this to produce custom paths.

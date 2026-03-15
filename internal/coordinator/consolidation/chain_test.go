@@ -167,7 +167,7 @@ func TestCreatePolicyChain_Single(t *testing.T) {
 
 func TestCreatePolicyChain_Multi(t *testing.T) {
 	configs := []metastore.ConsolidationPolicyConfig{
-		{Type: "audit", MinFiles: 1, MaxFiles: 500},
+		{Type: "time_window", WindowSize: "1h", MinFiles: 1, MaxFiles: 500},
 		{Type: "time_window", WindowSize: "30m", MinFiles: 2, MaxFiles: 50},
 	}
 	p, err := CreatePolicyChain(configs)

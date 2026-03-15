@@ -42,16 +42,6 @@ func TestCreatePolicy_SparkJob_MissingKey(t *testing.T) {
 	}
 }
 
-func TestCreatePolicy_Audit(t *testing.T) {
-	p, err := CreatePolicy(PolicyConfig{Type: "audit", MinFiles: 1, MaxFiles: 500})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := p.(*AuditPolicy); !ok {
-		t.Errorf("expected *AuditPolicy, got %T", p)
-	}
-}
-
 func TestCreatePolicy_Unknown(t *testing.T) {
 	_, err := CreatePolicy(PolicyConfig{Type: "nonexistent"})
 	if err == nil {
