@@ -82,12 +82,12 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 
 	p0 := decoded.Consolidation.Policies[0]
 	if p0.Type != "time_window" {
-		t.Errorf("policy[0].Name = %q, want time_window", p0.Type)
+		t.Errorf("policy[0].Type = %q, want time_window", p0.Type)
 	}
 
 	p1 := decoded.Consolidation.Policies[1]
 	if p1.Type != "spark_job" {
-		t.Errorf("policy[1].Name = %q, want spark_job", p1.Type)
+		t.Errorf("policy[1].Type = %q, want spark_job", p1.Type)
 	}
 }
 

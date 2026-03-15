@@ -171,7 +171,7 @@ func TestPipeline_EndToEnd(t *testing.T) {
 		t.Fatalf("completed tasks = %d, want >= 1", counts.Completed)
 	}
 
-	// Run planner again to finalize — processCompletedTasks should:
+	// Run planner again to finalize — processTerminalTasks should:
 	// 1. Mark files ARCHIVE_CLOSED
 	// 2. Delete source IR files from MinIO
 	// 3. Delete the task row
