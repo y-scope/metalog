@@ -52,10 +52,10 @@ type mockTaskStore struct {
 func (m *mockTaskStore) CountActiveTasks(_ context.Context, _ string) (int, error) {
 	return 0, nil
 }
-func (m *mockTaskStore) CreateTask(_ context.Context, _ string, _ uint8, input []byte) (int64, error) {
-	m.createdTasks = append(m.createdTasks, input)
-	m.nextTaskID++
-	return m.nextTaskID, m.createErr
+func (m *mockTaskStore) CreateTasks(_ context.Context, _ string, _ uint8, inputs [][]byte) (int64, error) {
+	m.createdTasks = append(m.createdTasks, inputs...)
+	m.nextTaskID += int64(len(inputs))
+	return int64(len(inputs)), m.createErr
 }
 func (m *mockTaskStore) CleanupOldTasks(_ context.Context, _ string, _ time.Duration) (int64, error) {
 	return m.cleanupCount, m.cleanupErr

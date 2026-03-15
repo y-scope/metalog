@@ -40,7 +40,7 @@ type fileRecordStore interface {
 
 // taskStore is the subset of task queue operations used by the planner.
 type taskStore interface {
-	CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error)
+	CreateTasks(ctx context.Context, tableName string, version uint8, inputs [][]byte) (int64, error)
 	CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error)
 	FindStaleTasks(ctx context.Context, tableName string, timeout time.Duration) ([]*taskqueue.Task, error)
 	ReclaimTask(ctx context.Context, taskID int64) error
@@ -134,8 +134,8 @@ type queueAdapter struct {
 	q *taskqueue.Queue
 }
 
-func (a *queueAdapter) CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error) {
-	return a.q.CreateTask(ctx, tableName, version, input)
+func (a *queueAdapter) CreateTasks(ctx context.Context, tableName string, version uint8, inputs [][]byte) (int64, error) {
+	return a.q.CreateTasks(ctx, tableName, version, inputs)
 }
 func (a *queueAdapter) CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error) {
 	return a.q.CleanupOldTasks(ctx, tableName, maxAge)
@@ -240,52 +240,53 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	// 6. Apply policy to group files.
 	groups := p.policy.SelectFiles(candidates)
 
-	// 7. Create tasks for each group.
+	// 7. Build payloads and batch-insert tasks.
+	var inputs [][]byte
+	var groupPaths [][]string // IR paths per group, for rollback on failure
 	for _, group := range groups {
-		if err := p.submitGroup(ctx, group); err != nil {
-			return err
+		irPaths := make([]string, 0, len(group.Records))
+		for _, rec := range group.Records {
+			if rec.ClpIRPath.Valid {
+				irPaths = append(irPaths, rec.ClpIRPath.String)
+			}
 		}
-	}
-
-	return nil
-}
-
-// submitGroup creates a consolidation task from a FileGroup.
-func (p *Planner) submitGroup(ctx context.Context, group FileGroup) error {
-	irPaths := make([]string, 0, len(group.Records))
-	for _, rec := range group.Records {
-		if rec.ClpIRPath.Valid {
-			irPaths = append(irPaths, rec.ClpIRPath.String)
+		if len(irPaths) == 0 {
+			continue
 		}
+		if !p.inFlight.TryAdd(irPaths) {
+			continue
+		}
+
+		payload := p.buildPayload(group, irPaths)
+		input, err := taskqueue.MarshalPayload(payload)
+		if err != nil {
+			p.inFlight.Remove(irPaths)
+			p.log.Error("marshal payload failed", zap.Error(err))
+			continue
+		}
+		inputs = append(inputs, input)
+		groupPaths = append(groupPaths, irPaths)
 	}
 
-	if len(irPaths) == 0 {
+	if len(inputs) == 0 {
 		return nil
 	}
 
-	if !p.inFlight.TryAdd(irPaths) {
-		return nil
-	}
-
-	payload := p.buildPayload(group, irPaths)
-	input, err := taskqueue.MarshalPayload(payload)
+	n, err := p.tasks.CreateTasks(ctx, p.tableName, taskqueue.TaskPayloadVersion, inputs)
 	if err != nil {
-		p.inFlight.Remove(irPaths)
-		p.log.Error("marshal payload failed", zap.Error(err))
-		return nil
+		// Roll back all in-flight paths since the batch failed.
+		for _, paths := range groupPaths {
+			p.inFlight.Remove(paths)
+		}
+		return fmt.Errorf("create tasks: %w", err)
 	}
+	p.activeTaskCount += int(n)
 
-	taskID, err := p.tasks.CreateTask(ctx, p.tableName, taskqueue.TaskPayloadVersion, input)
-	if err != nil {
-		p.inFlight.Remove(irPaths)
-		return fmt.Errorf("create task: %w", err)
-	}
-	p.activeTaskCount++
-
-	p.log.Debug("created consolidation task",
-		zap.Int64("taskId", taskID),
-		zap.Int("files", len(group.Records)),
+	p.log.Debug("created consolidation tasks",
+		zap.Int64("count", n),
+		zap.Int("groups", len(inputs)),
 	)
+
 	return nil
 }
 

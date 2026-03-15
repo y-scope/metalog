@@ -63,6 +63,30 @@ func (q *Queue) CreateTask(ctx context.Context, tableName string, version uint8,
 	return id, nil
 }
 
+// CreateTasks inserts multiple tasks in a single batch INSERT.
+// Returns the number of rows inserted.
+func (q *Queue) CreateTasks(ctx context.Context, tableName string, version uint8, inputs [][]byte) (int64, error) {
+	if len(inputs) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UnixNano()
+	builder := sq.Insert(TableName).Columns("table_name", "created_at", "version", "input")
+	for _, input := range inputs {
+		builder = builder.Values(tableName, now, version, input)
+	}
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("create tasks: build query: %w", err)
+	}
+	res, err := q.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("create tasks: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	q.log.Debug("created tasks", zap.Int64("count", n), zap.String("table", tableName))
+	return n, nil
+}
+
 // ClaimTasks claims up to batchSize pending tasks for the given worker.
 // If tableName is empty, tasks from any table are claimed.
 // Uses READ COMMITTED isolation and retries on deadlock.
