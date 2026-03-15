@@ -34,13 +34,13 @@ func insertTestRows(t *testing.T, db *sql.DB, count int) {
 	for i := 0; i < count; i++ {
 		query, args, _ := sq.Insert("`"+engineTable+"`").
 			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
-				"state", "record_count", "retention_days").
+				"state", "record_count", "retention_days", "expires_at").
 			Values(
 				baseTs+int64(i)*1000000000,
 				baseTs+int64(i)*1000000000+500000000,
 				fmt.Sprintf("/data/file_%03d.ir", i),
 				"IR_BUFFERING",
-				int64(10+i), 30,
+				int64(10+i), 30, 0,
 			).ToSql()
 		if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 			t.Fatalf("insert row %d: %v", i, err)

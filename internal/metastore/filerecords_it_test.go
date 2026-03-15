@@ -21,8 +21,8 @@ func insertTestRecord(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, stat
 	t.Helper()
 	query, args, _ := sq.Insert("`"+testTable+"`").
 		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
-			"state", "record_count", "retention_days").
-		Values(minTs, maxTs, irPath, state, 10, 30).
+			"state", "record_count", "retention_days", "expires_at").
+		Values(minTs, maxTs, irPath, state, 10, 30, 0).
 		ToSql()
 	if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 		t.Fatalf("insert %s (state=%s): %v", irPath, state, err)
@@ -158,12 +158,14 @@ func TestFileRecords_UpsertBatch_GuardPreventsOverwrite(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Insert record in ARCHIVE_CLOSED state (guarded)
-	_, err := mc.DB.ExecContext(ctx,
-		"INSERT INTO `"+testTable+"` (min_timestamp, max_timestamp, clp_ir_path, state, record_count, retention_days) "+
-			"VALUES (?, ?, ?, ?, ?, ?)",
-		1704067200000000000, 1704067200100000000,
-		"/data/protected.ir", "ARCHIVE_CLOSED", 100, 30)
+	// Insert record in ARCHIVE_CLOSED state (guarded) with record_count=100.
+	query, args, _ := sq.Insert("`"+testTable+"`").
+		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
+			"state", "record_count", "retention_days", "expires_at").
+		Values(1704067200000000000, 1704067200100000000,
+			"/data/protected.ir", "ARCHIVE_CLOSED", 100, 30, 0).
+		ToSql()
+	_, err := mc.DB.ExecContext(ctx, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +360,7 @@ func TestFileRecords_UpdateState_InvalidTransition(t *testing.T) {
 	insertTestRecord(t, mc.DB, 1704067200000000000, 1704067200100000000, irPath, "IR_BUFFERING")
 
 	// Try invalid transition: IR_BUFFERING -> ARCHIVE_CLOSED
-	_, err = fr.UpdateState(ctx, []string{irPath}, metastore.StateArchiveClosed)
+	_, err := fr.UpdateState(ctx, []string{irPath}, metastore.StateArchiveClosed)
 	if err == nil {
 		t.Error("UpdateState() with invalid transition should return error")
 	}

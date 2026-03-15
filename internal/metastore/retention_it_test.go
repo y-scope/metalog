@@ -8,8 +8,6 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-
-	"github.com/y-scope/metalog/internal/metastore"
 )
 
 func TestFileRecords_TransitionExpiredToPurging_IROnly(t *testing.T) {
@@ -213,7 +211,7 @@ func TestFileRecords_DeleteExpiredFiles_TOCTOUProtection(t *testing.T) {
 
 	// Simulate retention extension (another tx extended expires_at after SELECT).
 	futureExpiry := now + int64(24*time.Hour)
-	_, err = mc.DB.ExecContext(ctx,
+	_, err := mc.DB.ExecContext(ctx,
 		"UPDATE `"+testTable+"` SET expires_at = ? WHERE clp_ir_path_hash = UNHEX(MD5(?))",
 		futureExpiry, "/data/toctou.ir")
 	if err != nil {
