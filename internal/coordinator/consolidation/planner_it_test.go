@@ -29,12 +29,18 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 	policy := consolidation.NewTimeWindowPolicy(24*time.Hour, 2, 100)
 	taskQueue := taskqueue.NewQueue(mc.DB, log)
 
-	planner, err := consolidation.NewPlanner(
-		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
-		nil, nil, "", "",
-		1*time.Second, 1*time.Minute, 60*time.Minute,
-		log,
-	)
+	planner, err := consolidation.NewPlanner(consolidation.PlannerConfig{
+		DB:                 mc.DB,
+		TableName:          plannerTable,
+		IsMariaDB:          true,
+		Policy:             policy,
+		InFlight:           inFlight,
+		TaskQueue:          taskQueue,
+		Interval:           1 * time.Second,
+		FailureLogInterval: 1 * time.Minute,
+		StaleThreshold:     60 * time.Minute,
+		Log:                log,
+	})
 	if err != nil {
 		mc.Teardown(t)
 		t.Fatal(err)
@@ -100,12 +106,18 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 	inFlight := consolidation.NewInFlightSet()
 	policy := consolidation.NewTimeWindowPolicy(24*time.Hour, 2, 100)
 
-	planner, err := consolidation.NewPlanner(
-		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
-		nil, nil, "", "",
-		1*time.Second, 1*time.Minute, 60*time.Minute,
-		log,
-	)
+	planner, err := consolidation.NewPlanner(consolidation.PlannerConfig{
+		DB:                 mc.DB,
+		TableName:          plannerTable,
+		IsMariaDB:          true,
+		Policy:             policy,
+		InFlight:           inFlight,
+		TaskQueue:          taskQueue,
+		Interval:           1 * time.Second,
+		FailureLogInterval: 1 * time.Minute,
+		StaleThreshold:     60 * time.Minute,
+		Log:                log,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +149,18 @@ func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
 	taskQueue := taskqueue.NewQueue(mc.DB, log)
 
 	// Use a very short stale threshold (1 nanosecond) so all files qualify immediately.
-	planner, err := consolidation.NewPlanner(
-		mc.DB, plannerTable, true, policy, inFlight, taskQueue,
-		nil, nil, "", "",
-		1*time.Second, 1*time.Minute, 1*time.Nanosecond,
-		log,
-	)
+	planner, err := consolidation.NewPlanner(consolidation.PlannerConfig{
+		DB:                 mc.DB,
+		TableName:          plannerTable,
+		IsMariaDB:          true,
+		Policy:             policy,
+		InFlight:           inFlight,
+		TaskQueue:          taskQueue,
+		Interval:           1 * time.Second,
+		FailureLogInterval: 1 * time.Minute,
+		StaleThreshold:     1 * time.Nanosecond,
+		Log:                log,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

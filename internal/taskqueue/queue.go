@@ -387,6 +387,56 @@ func (q *Queue) GetTaskCounts(ctx context.Context, tableName string) (*TaskCount
 	return counts, nil
 }
 
+// terminalStates are the states considered terminal (task fully processed or abandoned).
+var terminalStates = []string{
+	string(TaskStateCompleted),
+	string(TaskStateFailed),
+	string(TaskStateDeadLetter),
+}
+
+// TerminalTask holds the ID and payloads of a completed, failed, or dead-letter task.
+type TerminalTask struct {
+	TaskID int64
+	Input  []byte
+	Output []byte
+}
+
+// FindTerminalTasks returns up to limit tasks in terminal states for the given table.
+func (q *Queue) FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]TerminalTask, error) {
+	query, args, err := sq.Select("task_id", "input", "output").
+		From(TableName).
+		Where(sq.Eq{"table_name": tableName, "state": terminalStates}).
+		Limit(uint64(limit)).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("find terminal tasks: build query: %w", err)
+	}
+	rows, err := q.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find terminal tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []TerminalTask
+	for rows.Next() {
+		var t TerminalTask
+		if err := rows.Scan(&t.TaskID, &t.Input, &t.Output); err != nil {
+			return nil, fmt.Errorf("find terminal tasks: scan: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// DeleteTerminalTask deletes a single task that is in a terminal state.
+func (q *Queue) DeleteTerminalTask(ctx context.Context, taskID int64) error {
+	query, args, _ := sq.Delete(TableName).
+		Where(sq.Eq{"task_id": taskID, "state": terminalStates}).
+		ToSql()
+	_, err := q.db.ExecContext(ctx, query, args...)
+	return err
+}
+
 // DeleteAllTasks removes all tasks for a table (used on coordinator restart).
 func (q *Queue) DeleteAllTasks(ctx context.Context, tableName string) (int64, error) {
 	query, args, err := sq.Delete(TableName).

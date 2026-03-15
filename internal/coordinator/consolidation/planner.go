@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
@@ -39,20 +38,13 @@ type fileRecordStore interface {
 	MarkArchiveClosed(ctx context.Context, irPaths []string, archivePath, archiveBackend, archiveBucket string, archiveSizeBytes, archiveCreatedAt int64) error
 }
 
-// terminalTask is a completed, failed, or dead-letter task ready for processing.
-type terminalTask struct {
-	taskID int64
-	input  []byte
-	output []byte
-}
-
 // taskStore is the subset of task queue operations used by the planner.
 type taskStore interface {
 	CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error)
 	CleanupOldTasks(ctx context.Context, tableName string, maxAge time.Duration) (int64, error)
 	FindStaleTasks(ctx context.Context, tableName string, timeout time.Duration) ([]*taskqueue.Task, error)
 	ReclaimTask(ctx context.Context, taskID int64) error
-	FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]terminalTask, error)
+	FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]taskqueue.TerminalTask, error)
 	DeleteTerminalTask(ctx context.Context, taskID int64) error
 	CountActiveTasks(ctx context.Context, tableName string) (int, error)
 }
@@ -85,57 +77,57 @@ type Planner struct {
 	log                *zap.Logger
 }
 
+// PlannerConfig holds configuration for creating a Planner.
+type PlannerConfig struct {
+	DB              *sql.DB
+	TableName       string
+	IsMariaDB       bool
+	Policy          Policy
+	InFlight        *InFlightSet
+	TaskQueue       *taskqueue.Queue
+	Resolver        ColumnResolver
+	StorageRegistry *storage.Registry
+	ArchiveBackend  string
+	ArchiveBucket   string
+	Interval        time.Duration
+	FailureLogInterval time.Duration
+	StaleThreshold  time.Duration
+	Log             *zap.Logger
+}
+
 // NewPlanner creates a Planner. Column resolution happens per-cycle in planOnce
 // so that newly-registered columns are picked up without restarting the planner.
-func NewPlanner(
-	db *sql.DB,
-	tableName string,
-	isMariaDB bool,
-	policy Policy,
-	inFlight *InFlightSet,
-	taskQueue *taskqueue.Queue,
-	resolver ColumnResolver,
-	storageRegistry *storage.Registry,
-	archiveBackend string,
-	archiveBucket string,
-	interval time.Duration,
-	failureLogInterval time.Duration,
-	staleThreshold time.Duration,
-	log *zap.Logger,
-) (*Planner, error) {
-	fr, err := metastore.NewFileRecords(db, tableName, isMariaDB, log)
+func NewPlanner(cfg PlannerConfig) (*Planner, error) {
+	fr, err := metastore.NewFileRecords(cfg.DB, cfg.TableName, cfg.IsMariaDB, cfg.Log)
 	if err != nil {
 		return nil, fmt.Errorf("new planner: %w", err)
 	}
 
 	var sr storageResolver
-	if storageRegistry != nil {
-		sr = &registryAdapter{reg: storageRegistry}
+	if cfg.StorageRegistry != nil {
+		sr = &registryAdapter{reg: cfg.StorageRegistry}
 	}
 
 	return &Planner{
-		tableName:       tableName,
-		policy:          policy,
-		inFlight:        inFlight,
-		tasks:           &queueAdapter{db: db, q: taskQueue},
+		tableName:       cfg.TableName,
+		policy:          cfg.Policy,
+		inFlight:        cfg.InFlight,
+		tasks:           &queueAdapter{q: cfg.TaskQueue},
 		fileRecs:        fr,
 		storageResolver: sr,
-		archiveBackend:  archiveBackend,
-		archiveBucket:   archiveBucket,
-		interval:           interval,
-		failureLogInterval: failureLogInterval,
-		staleThreshold:     staleThreshold,
-		resolver:           resolver,
-		log:                log.With(zap.String("table", tableName)),
+		archiveBackend:  cfg.ArchiveBackend,
+		archiveBucket:   cfg.ArchiveBucket,
+		interval:           cfg.Interval,
+		failureLogInterval: cfg.FailureLogInterval,
+		staleThreshold:     cfg.StaleThreshold,
+		resolver:           cfg.Resolver,
+		log:                cfg.Log.With(zap.String("table", cfg.TableName)),
 	}, nil
 }
 
-// queueAdapter wraps *taskqueue.Queue and *sql.DB to satisfy taskStore.
-// The raw SQL operations (FindTerminalTasks, DeleteTerminalTask) use the DB
-// directly because the Queue type doesn't expose these methods.
+// queueAdapter wraps *taskqueue.Queue to satisfy taskStore.
 type queueAdapter struct {
-	db *sql.DB
-	q  *taskqueue.Queue
+	q *taskqueue.Queue
 }
 
 func (a *queueAdapter) CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error) {
@@ -150,53 +142,18 @@ func (a *queueAdapter) FindStaleTasks(ctx context.Context, tableName string, tim
 func (a *queueAdapter) ReclaimTask(ctx context.Context, taskID int64) error {
 	return a.q.ReclaimTask(ctx, taskID)
 }
-
+func (a *queueAdapter) FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]taskqueue.TerminalTask, error) {
+	return a.q.FindTerminalTasks(ctx, tableName, limit)
+}
+func (a *queueAdapter) DeleteTerminalTask(ctx context.Context, taskID int64) error {
+	return a.q.DeleteTerminalTask(ctx, taskID)
+}
 func (a *queueAdapter) CountActiveTasks(ctx context.Context, tableName string) (int, error) {
 	counts, err := a.q.GetTaskCounts(ctx, tableName)
 	if err != nil {
 		return 0, err
 	}
 	return counts.Pending + counts.Processing, nil
-}
-
-func (a *queueAdapter) FindTerminalTasks(ctx context.Context, tableName string, limit int) ([]terminalTask, error) {
-	query, args, err := sq.Select("task_id", "input", "output").
-		From(taskqueue.TableName).
-		Where(sq.Eq{
-			"table_name": tableName,
-			"state":      []string{"completed", "failed", "dead_letter"},
-		}).
-		Limit(uint64(limit)).
-		ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("find terminal tasks: build query: %w", err)
-	}
-	rows, err := a.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("find terminal tasks: %w", err)
-	}
-	defer rows.Close()
-
-	var tasks []terminalTask
-	for rows.Next() {
-		var t terminalTask
-		if err := rows.Scan(&t.taskID, &t.input, &t.output); err != nil {
-			return nil, fmt.Errorf("find terminal tasks: scan: %w", err)
-		}
-		tasks = append(tasks, t)
-	}
-	return tasks, rows.Err()
-}
-
-func (a *queueAdapter) DeleteTerminalTask(ctx context.Context, taskID int64) error {
-	query, args, _ := sq.Delete(taskqueue.TableName).
-		Where(sq.Eq{
-			"task_id": taskID,
-			"state":   []string{"completed", "failed", "dead_letter"},
-		}).
-		ToSql()
-	_, err := a.db.ExecContext(ctx, query, args...)
-	return err
 }
 
 // registryAdapter wraps *storage.Registry to satisfy storageResolver.
@@ -281,80 +238,92 @@ func (p *Planner) planOnce(ctx context.Context) error {
 
 	// 7. Create tasks for each group.
 	for _, group := range groups {
-		irPaths := make([]string, 0, len(group.Records))
-		for _, rec := range group.Records {
-			if rec.ClpIRPath.Valid {
-				irPaths = append(irPaths, rec.ClpIRPath.String)
-			}
+		if err := p.submitGroup(ctx, group); err != nil {
+			return err
 		}
-
-		if len(irPaths) == 0 {
-			continue
-		}
-
-		if !p.inFlight.TryAdd(irPaths) {
-			continue
-		}
-
-		archiveBackend := group.ArchiveBackend
-		if archiveBackend == "" {
-			archiveBackend = p.archiveBackend
-		}
-		archiveBucket := group.ArchiveBucket
-		if archiveBucket == "" {
-			archiveBucket = p.archiveBucket
-		}
-
-		cons := &taskqueue.ConsolidationPayload{
-			IRPaths:        irPaths,
-			ArchiveBackend: archiveBackend,
-			ArchiveBucket:  archiveBucket,
-			ArchivePath:    group.ArchivePath,
-		}
-		for _, rec := range group.Records {
-			cons.FileIDs = append(cons.FileIDs, rec.ID)
-			// MinTimestamp == 0 is treated as uninitialized (not a valid epoch-zero timestamp).
-			if cons.MinTimestamp == 0 || rec.MinTimestamp < cons.MinTimestamp {
-				cons.MinTimestamp = rec.MinTimestamp
-			}
-		}
-		if len(group.Records) > 0 && group.Records[0].ClpIRStorageBackend.Valid {
-			cons.IRBackend = group.Records[0].ClpIRStorageBackend.String
-		}
-		if len(group.Records) > 0 && group.Records[0].ClpIRBucket.Valid {
-			cons.IRBuckets = make([]string, len(group.Records))
-			for i, rec := range group.Records {
-				if rec.ClpIRBucket.Valid {
-					cons.IRBuckets[i] = rec.ClpIRBucket.String
-				}
-			}
-		}
-		payload := &taskqueue.TaskPayload{
-			TableName:     p.tableName,
-			Consolidation: cons,
-		}
-
-		input, err := taskqueue.MarshalPayload(payload)
-		if err != nil {
-			p.inFlight.Remove(irPaths)
-			p.log.Error("marshal payload failed", zap.Error(err))
-			continue
-		}
-
-		taskID, err := p.tasks.CreateTask(ctx, p.tableName, taskqueue.TaskPayloadVersion, input)
-		if err != nil {
-			p.inFlight.Remove(irPaths)
-			return fmt.Errorf("create task: %w", err)
-		}
-		p.activeTaskCount++
-
-		p.log.Debug("created consolidation task",
-			zap.Int64("taskId", taskID),
-			zap.Int("files", len(group.Records)),
-		)
 	}
 
 	return nil
+}
+
+// submitGroup creates a consolidation task from a FileGroup.
+func (p *Planner) submitGroup(ctx context.Context, group FileGroup) error {
+	irPaths := make([]string, 0, len(group.Records))
+	for _, rec := range group.Records {
+		if rec.ClpIRPath.Valid {
+			irPaths = append(irPaths, rec.ClpIRPath.String)
+		}
+	}
+
+	if len(irPaths) == 0 {
+		return nil
+	}
+
+	if !p.inFlight.TryAdd(irPaths) {
+		return nil
+	}
+
+	payload := p.buildPayload(group, irPaths)
+	input, err := taskqueue.MarshalPayload(payload)
+	if err != nil {
+		p.inFlight.Remove(irPaths)
+		p.log.Error("marshal payload failed", zap.Error(err))
+		return nil
+	}
+
+	taskID, err := p.tasks.CreateTask(ctx, p.tableName, taskqueue.TaskPayloadVersion, input)
+	if err != nil {
+		p.inFlight.Remove(irPaths)
+		return fmt.Errorf("create task: %w", err)
+	}
+	p.activeTaskCount++
+
+	p.log.Debug("created consolidation task",
+		zap.Int64("taskId", taskID),
+		zap.Int("files", len(group.Records)),
+	)
+	return nil
+}
+
+// buildPayload constructs a TaskPayload from a FileGroup and its extracted IR paths.
+func (p *Planner) buildPayload(group FileGroup, irPaths []string) *taskqueue.TaskPayload {
+	archiveBackend := group.ArchiveBackend
+	if archiveBackend == "" {
+		archiveBackend = p.archiveBackend
+	}
+	archiveBucket := group.ArchiveBucket
+	if archiveBucket == "" {
+		archiveBucket = p.archiveBucket
+	}
+
+	cons := &taskqueue.ConsolidationPayload{
+		IRPaths:        irPaths,
+		ArchiveBackend: archiveBackend,
+		ArchiveBucket:  archiveBucket,
+		ArchivePath:    group.ArchivePath,
+	}
+	for _, rec := range group.Records {
+		cons.FileIDs = append(cons.FileIDs, rec.ID)
+		if cons.MinTimestamp == 0 || rec.MinTimestamp < cons.MinTimestamp {
+			cons.MinTimestamp = rec.MinTimestamp
+		}
+	}
+	if len(group.Records) > 0 && group.Records[0].ClpIRStorageBackend.Valid {
+		cons.IRBackend = group.Records[0].ClpIRStorageBackend.String
+	}
+	if len(group.Records) > 0 && group.Records[0].ClpIRBucket.Valid {
+		cons.IRBuckets = make([]string, len(group.Records))
+		for i, rec := range group.Records {
+			if rec.ClpIRBucket.Valid {
+				cons.IRBuckets[i] = rec.ClpIRBucket.String
+			}
+		}
+	}
+
+	return &taskqueue.TaskPayload{
+		TableName:     p.tableName,
+		Consolidation: cons,
+	}
 }
 
 // findCandidates resolves the policy's required columns and queries for
@@ -427,39 +396,39 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 	}
 
 	for _, t := range tasks {
-		payload, err := taskqueue.UnmarshalPayload(t.input)
+		payload, err := taskqueue.UnmarshalPayload(t.Input)
 		if err != nil {
-			p.log.Error("unmarshal task payload failed", zap.Int64("taskId", t.taskID), zap.Error(err))
-			p.markTaskProcessed(ctx, t.taskID)
+			p.log.Error("unmarshal task payload failed", zap.Int64("taskId", t.TaskID), zap.Error(err))
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
 		cons := payload.Consolidation
 		if cons == nil {
-			p.log.Error("task payload missing consolidation data", zap.Int64("taskId", t.taskID))
-			p.markTaskProcessed(ctx, t.taskID)
+			p.log.Error("task payload missing consolidation data", zap.Int64("taskId", t.TaskID))
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
 		// Failed/dead-letter tasks: free in-flight paths, delete task, skip archive update.
-		if t.output == nil {
+		if t.Output == nil {
 			p.inFlight.Remove(cons.IRPaths)
-			p.markTaskProcessed(ctx, t.taskID)
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
-		result, err := taskqueue.UnmarshalResult(t.output)
+		result, err := taskqueue.UnmarshalResult(t.Output)
 		if err != nil {
-			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			p.log.Error("unmarshal task result failed", zap.Int64("taskId", t.TaskID), zap.Error(err))
 			p.inFlight.Remove(cons.IRPaths)
-			p.markTaskProcessed(ctx, t.taskID)
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
 		if result.Error != "" {
-			p.log.Warn("task completed with error", zap.Int64("taskId", t.taskID), zap.String("error", result.Error))
+			p.log.Warn("task completed with error", zap.Int64("taskId", t.TaskID), zap.String("error", result.Error))
 			p.inFlight.Remove(cons.IRPaths)
-			p.markTaskProcessed(ctx, t.taskID)
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
@@ -473,7 +442,7 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 			timeutil.EpochNanos(),
 		)
 		if err != nil {
-			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.taskID), zap.Error(err))
+			p.log.Error("mark archive closed failed", zap.Int64("taskId", t.TaskID), zap.Error(err))
 			// Keep paths in inFlight — removing them would allow
 			// FindConsolidationPending to re-queue the same files as a
 			// duplicate task. The next cycle will retry MarkArchiveClosed
@@ -486,7 +455,7 @@ func (p *Planner) processCompletedTasks(ctx context.Context) error {
 
 		// Remove from in-flight set and mark task processed
 		p.inFlight.Remove(cons.IRPaths)
-		p.markTaskProcessed(ctx, t.taskID)
+		p.markTaskProcessed(ctx, t.TaskID)
 	}
 
 	// Catch-all: delete leaked terminal task rows that a previous cycle failed to

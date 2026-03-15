@@ -63,9 +63,6 @@ type TimeWindowPolicy struct {
 
 // NewTimeWindowPolicy creates a TimeWindowPolicy.
 func NewTimeWindowPolicy(windowSize time.Duration, minFiles, maxFiles int) *TimeWindowPolicy {
-	if maxFiles <= 0 {
-		maxFiles = defaultMaxFiles
-	}
 	return &TimeWindowPolicy{
 		WindowSize:       windowSize,
 		MinFiles: minFiles,

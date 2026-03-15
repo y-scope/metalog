@@ -76,9 +76,6 @@ type SparkJobPolicy struct {
 
 // NewSparkJobPolicy creates a SparkJobPolicy.
 func NewSparkJobPolicy(groupingKey string, minFiles, maxFiles int, timeout time.Duration) *SparkJobPolicy {
-	if maxFiles <= 0 {
-		maxFiles = defaultMaxFiles
-	}
 	return &SparkJobPolicy{
 		GroupingDimKey:   groupingKey,
 		MinFiles: minFiles,

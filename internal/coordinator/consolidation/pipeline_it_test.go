@@ -97,14 +97,21 @@ func (env *pipelineEnv) newPlanner(t *testing.T) (*consolidation.Planner, *taskq
 	tq := taskqueue.NewQueue(env.db, env.log)
 	reg := env.mio.Registry(testutil.StorageBackendName)
 
-	planner, err := consolidation.NewPlanner(
-		env.db, pipelineTable, true, policy, inFlight, tq,
-		nil, // resolver — no dynamic columns needed
-		reg,
-		testutil.StorageBackendName, testutil.TestBucket,
-		1*time.Second, 1*time.Minute, 60*time.Minute,
-		env.log,
-	)
+	planner, err := consolidation.NewPlanner(consolidation.PlannerConfig{
+		DB:                 env.db,
+		TableName:          pipelineTable,
+		IsMariaDB:          true,
+		Policy:             policy,
+		InFlight:           inFlight,
+		TaskQueue:          tq,
+		StorageRegistry:    reg,
+		ArchiveBackend:     testutil.StorageBackendName,
+		ArchiveBucket:      testutil.TestBucket,
+		Interval:           1 * time.Second,
+		FailureLogInterval: 1 * time.Minute,
+		StaleThreshold:     60 * time.Minute,
+		Log:                env.log,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

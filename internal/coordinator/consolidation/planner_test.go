@@ -39,7 +39,7 @@ type mockTaskStore struct {
 	createdTasks   [][]byte
 	createErr      error
 	nextTaskID     int64
-	terminalTasks  []terminalTask
+	terminalTasks  []taskqueue.TerminalTask
 	terminalErr    error
 	deletedTaskIDs []int64
 	staleTasks     []*taskqueue.Task
@@ -66,7 +66,7 @@ func (m *mockTaskStore) FindStaleTasks(_ context.Context, _ string, _ time.Durat
 func (m *mockTaskStore) ReclaimTask(_ context.Context, _ int64) error {
 	return m.reclaimErr
 }
-func (m *mockTaskStore) FindTerminalTasks(_ context.Context, _ string, _ int) ([]terminalTask, error) {
+func (m *mockTaskStore) FindTerminalTasks(_ context.Context, _ string, _ int) ([]taskqueue.TerminalTask, error) {
 	return m.terminalTasks, m.terminalErr
 }
 func (m *mockTaskStore) DeleteTerminalTask(_ context.Context, taskID int64) error {
@@ -258,8 +258,8 @@ func TestPlanOnce_ProcessCompletedTasksClearsInFlight(t *testing.T) {
 
 	fr := &mockFileRecords{pendingRecords: nil}
 	ts := &mockTaskStore{
-		terminalTasks: []terminalTask{
-			{taskID: 42, input: input, output: output},
+		terminalTasks: []taskqueue.TerminalTask{
+			{TaskID: 42, Input: input, Output: output},
 		},
 	}
 	p := newTestPlanner(fr, ts)
@@ -305,8 +305,8 @@ func TestPlanOnce_FailedTaskFreesInFlight(t *testing.T) {
 
 	fr := &mockFileRecords{pendingRecords: nil}
 	ts := &mockTaskStore{
-		terminalTasks: []terminalTask{
-			{taskID: 99, input: input, output: nil}, // nil output = failed/dead-letter
+		terminalTasks: []taskqueue.TerminalTask{
+			{TaskID: 99, Input: input, Output: nil}, // nil output = failed/dead-letter
 		},
 	}
 	p := newTestPlanner(fr, ts)
@@ -356,8 +356,8 @@ func TestPlanOnce_MarkArchiveClosedFailureKeepsInFlight(t *testing.T) {
 		closedErr: fmt.Errorf("simulated DB error"),
 	}
 	ts := &mockTaskStore{
-		terminalTasks: []terminalTask{
-			{taskID: 55, input: input, output: output},
+		terminalTasks: []taskqueue.TerminalTask{
+			{TaskID: 55, Input: input, Output: output},
 		},
 	}
 	p := newTestPlanner(fr, ts)

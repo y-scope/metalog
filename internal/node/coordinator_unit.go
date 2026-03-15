@@ -91,16 +91,22 @@ func NewCoordinatorUnit(
 			staleThreshold = 0 // disabled
 		}
 
-		planner, err = consolidation.NewPlanner(
-			shared.DB, tableName, shared.IsMariaDB, policy, inFlight, taskQueue,
-			reg,
-			shared.StorageRegistry,
-			shared.ArchiveBackend, shared.ArchiveBucket,
-			config.DefaultPlannerInterval,
-			shared.FailureLogInterval,
-			staleThreshold,
-			log,
-		)
+		planner, err = consolidation.NewPlanner(consolidation.PlannerConfig{
+			DB:                 shared.DB,
+			TableName:          tableName,
+			IsMariaDB:          shared.IsMariaDB,
+			Policy:             policy,
+			InFlight:           inFlight,
+			TaskQueue:          taskQueue,
+			Resolver:           reg,
+			StorageRegistry:    shared.StorageRegistry,
+			ArchiveBackend:     shared.ArchiveBackend,
+			ArchiveBucket:      shared.ArchiveBucket,
+			Interval:           config.DefaultPlannerInterval,
+			FailureLogInterval: shared.FailureLogInterval,
+			StaleThreshold:     staleThreshold,
+			Log:                log,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("new coordinator unit: planner: %w", err)
 		}
