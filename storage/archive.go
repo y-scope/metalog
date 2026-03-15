@@ -60,10 +60,19 @@ func (ac *ArchiveCreator) CreateArchive(
 		}
 	}
 
-	// Compress
-	outputPath := filepath.Join(tmpDir, "archive.clp")
-	if err := ac.compressor.Compress(ctx, inputDir, outputPath); err != nil {
+	// Compress into output directory (clp-s produces a single file with --single-file-archive).
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return 0, fmt.Errorf("create archive: mkdir output: %w", err)
+	}
+	if err := ac.compressor.Compress(ctx, inputDir, outputDir); err != nil {
 		return 0, fmt.Errorf("create archive: compress: %w", err)
+	}
+
+	// Find the single archive file produced by the compressor.
+	outputPath, err := findSingleFile(outputDir)
+	if err != nil {
+		return 0, fmt.Errorf("create archive: %w", err)
 	}
 
 	// Upload
@@ -93,6 +102,28 @@ func (ac *ArchiveCreator) CreateArchive(
 		zap.Int("irFiles", len(irPaths)),
 	)
 	return stat.Size(), nil
+}
+
+// findSingleFile returns the path of the sole file in dir.
+// Returns an error if dir contains zero or more than one file.
+func findSingleFile(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read output dir: %w", err)
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("no output file found in %s", dir)
+	}
+	if len(files) > 1 {
+		return "", fmt.Errorf("expected 1 output file in %s, found %d", dir, len(files))
+	}
+	return files[0], nil
 }
 
 func downloadFile(ctx context.Context, backend Backend, bucket, key, localPath string) error {

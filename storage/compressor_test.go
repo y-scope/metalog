@@ -17,9 +17,10 @@ func TestClpCompressor_Compress_BinaryNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputDir := filepath.Join(tmpDir, "input")
 	os.MkdirAll(inputDir, 0755)
-	outputPath := filepath.Join(tmpDir, "output.clp")
+	outputDir := filepath.Join(tmpDir, "output")
+	os.MkdirAll(outputDir, 0755)
 
-	err := c.Compress(context.Background(), inputDir, outputPath)
+	err := c.Compress(context.Background(), inputDir, outputDir)
 	if err == nil {
 		t.Fatal("Compress() with nonexistent binary should return error")
 	}
@@ -33,9 +34,10 @@ func TestClpCompressor_Compress_Timeout(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputDir := filepath.Join(tmpDir, "input")
 	os.MkdirAll(inputDir, 0755)
-	outputPath := filepath.Join(tmpDir, "output.clp")
+	outputDir := filepath.Join(tmpDir, "output")
+	os.MkdirAll(outputDir, 0755)
 
-	err := c.Compress(context.Background(), inputDir, outputPath)
+	err := c.Compress(context.Background(), inputDir, outputDir)
 	if err == nil {
 		t.Fatal("Compress() with timeout should return error")
 	}
@@ -48,12 +50,13 @@ func TestClpCompressor_Compress_ContextCancelled(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputDir := filepath.Join(tmpDir, "input")
 	os.MkdirAll(inputDir, 0755)
-	outputPath := filepath.Join(tmpDir, "output.clp")
+	outputDir := filepath.Join(tmpDir, "output")
+	os.MkdirAll(outputDir, 0755)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	err := c.Compress(ctx, inputDir, outputPath)
+	err := c.Compress(ctx, inputDir, outputDir)
 	if err == nil {
 		t.Fatal("Compress() with canceled context should return error")
 	}
