@@ -44,32 +44,32 @@ func (c *timeWindowConfig) minFiles() int {
 	if c.MinFiles > 0 {
 		return c.MinFiles
 	}
-	return defaultMinFilesPerGroup
+	return defaultMinFiles
 }
 
 func (c *timeWindowConfig) maxFiles() int {
 	if c.MaxFiles > 0 {
 		return c.MaxFiles
 	}
-	return defaultMaxFilesPerGroup
+	return defaultMaxFiles
 }
 
 // TimeWindowPolicy groups files by time window for consolidation.
 type TimeWindowPolicy struct {
 	WindowSize       time.Duration
-	MinFilesPerGroup int
-	MaxFilesPerGroup int
+	MinFiles int
+	MaxFiles int
 }
 
 // NewTimeWindowPolicy creates a TimeWindowPolicy.
 func NewTimeWindowPolicy(windowSize time.Duration, minFiles, maxFiles int) *TimeWindowPolicy {
 	if maxFiles <= 0 {
-		maxFiles = defaultMaxFilesPerGroup
+		maxFiles = defaultMaxFiles
 	}
 	return &TimeWindowPolicy{
 		WindowSize:       windowSize,
-		MinFilesPerGroup: minFiles,
-		MaxFilesPerGroup: maxFiles,
+		MinFiles: minFiles,
+		MaxFiles: maxFiles,
 	}
 }
 
@@ -92,17 +92,17 @@ func (p *TimeWindowPolicy) SelectFiles(candidates []*metastore.FileRecord) []Fil
 
 	var result []FileGroup
 	for _, bucket := range buckets {
-		if len(bucket) < p.MinFilesPerGroup {
+		if len(bucket) < p.MinFiles {
 			continue
 		}
 		// Split into max-sized chunks
-		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
-			end := i + p.MaxFilesPerGroup
+		for i := 0; i < len(bucket); i += p.MaxFiles {
+			end := i + p.MaxFiles
 			if end > len(bucket) {
 				end = len(bucket)
 			}
 			chunk := bucket[i:end]
-			if len(chunk) >= p.MinFilesPerGroup {
+			if len(chunk) >= p.MinFiles {
 				result = append(result, FileGroup{
 					Records:     chunk,
 					ArchivePath: GenerateArchivePath(),

@@ -92,7 +92,7 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Insert only 1 file (below MinFilesPerGroup = 2)
+	// Insert only 1 file (below MinFiles = 2)
 	insertConsolidationPendingFiles(t, mc.DB, 1)
 
 	// Create a planner manually and run one cycle

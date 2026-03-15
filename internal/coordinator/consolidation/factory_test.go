@@ -25,11 +25,11 @@ func TestCreatePolicy_TimeWindow_Defaults(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *TimeWindowPolicy, got %T", p)
 	}
-	if tw.MinFilesPerGroup != defaultMinFilesPerGroup {
-		t.Errorf("MinFilesPerGroup = %d, want %d", tw.MinFilesPerGroup, defaultMinFilesPerGroup)
+	if tw.MinFiles != defaultMinFiles {
+		t.Errorf("MinFiles = %d, want %d", tw.MinFiles, defaultMinFiles)
 	}
-	if tw.MaxFilesPerGroup != defaultMaxFilesPerGroup {
-		t.Errorf("MaxFilesPerGroup = %d, want %d", tw.MaxFilesPerGroup, defaultMaxFilesPerGroup)
+	if tw.MaxFiles != defaultMaxFiles {
+		t.Errorf("MaxFiles = %d, want %d", tw.MaxFiles, defaultMaxFiles)
 	}
 }
 

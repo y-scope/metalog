@@ -42,14 +42,14 @@ func (c *sparkJobConfig) minFiles() int {
 	if c.MinFiles > 0 {
 		return c.MinFiles
 	}
-	return defaultMinFilesPerGroup
+	return defaultMinFiles
 }
 
 func (c *sparkJobConfig) maxFiles() int {
 	if c.MaxFiles > 0 {
 		return c.MaxFiles
 	}
-	return defaultMaxFilesPerGroup
+	return defaultMaxFiles
 }
 
 func (c *sparkJobConfig) jobTimeout() time.Duration {
@@ -69,20 +69,20 @@ const ungroupedKey = "\x00ungrouped"
 // to consolidate all IR files belonging to the same job together.
 type SparkJobPolicy struct {
 	GroupingDimKey   string
-	MinFilesPerGroup int
-	MaxFilesPerGroup int
+	MinFiles int
+	MaxFiles int
 	JobTimeout       time.Duration
 }
 
 // NewSparkJobPolicy creates a SparkJobPolicy.
 func NewSparkJobPolicy(groupingKey string, minFiles, maxFiles int, timeout time.Duration) *SparkJobPolicy {
 	if maxFiles <= 0 {
-		maxFiles = defaultMaxFilesPerGroup
+		maxFiles = defaultMaxFiles
 	}
 	return &SparkJobPolicy{
 		GroupingDimKey:   groupingKey,
-		MinFilesPerGroup: minFiles,
-		MaxFilesPerGroup: maxFiles,
+		MinFiles: minFiles,
+		MaxFiles: maxFiles,
 		JobTimeout:       timeout,
 	}
 }
@@ -138,17 +138,17 @@ func (p *SparkJobPolicy) SelectFiles(candidates []*metastore.FileRecord) []FileG
 			}
 		}
 
-		if len(bucket) < p.MinFilesPerGroup && !timedOut {
+		if len(bucket) < p.MinFiles && !timedOut {
 			continue
 		}
 
-		for i := 0; i < len(bucket); i += p.MaxFilesPerGroup {
-			end := i + p.MaxFilesPerGroup
+		for i := 0; i < len(bucket); i += p.MaxFiles {
+			end := i + p.MaxFiles
 			if end > len(bucket) {
 				end = len(bucket)
 			}
 			chunk := bucket[i:end]
-			if len(chunk) >= p.MinFilesPerGroup || timedOut {
+			if len(chunk) >= p.MinFiles || timedOut {
 				result = append(result, FileGroup{
 					Records:     chunk,
 					ArchivePath: GenerateArchivePath(),

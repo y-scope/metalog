@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	// defaultMinFilesPerGroup is the minimum files needed to form a consolidation group.
-	defaultMinFilesPerGroup = 2
-	// defaultMaxFilesPerGroup is the maximum files per consolidation task.
-	defaultMaxFilesPerGroup = 100
+	// defaultMinFiles is the minimum files needed to form a consolidation group.
+	defaultMinFiles = 2
+	// defaultMaxFiles is the maximum files per consolidation task.
+	defaultMaxFiles = 100
 	// defaultPolicyType is used when no policies are configured.
 	defaultPolicyType = "time_window"
 )

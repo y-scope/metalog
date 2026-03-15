@@ -20,11 +20,11 @@ func TestNewTimeWindowPolicy(t *testing.T) {
 	if p.WindowSize != 15*time.Minute {
 		t.Errorf("WindowSize = %v, want %v", p.WindowSize, 15*time.Minute)
 	}
-	if p.MinFilesPerGroup != 2 {
-		t.Errorf("MinFilesPerGroup = %d, want 2", p.MinFilesPerGroup)
+	if p.MinFiles != 2 {
+		t.Errorf("MinFiles = %d, want 2", p.MinFiles)
 	}
-	if p.MaxFilesPerGroup != 10 {
-		t.Errorf("MaxFilesPerGroup = %d, want 10", p.MaxFilesPerGroup)
+	if p.MaxFiles != 10 {
+		t.Errorf("MaxFiles = %d, want 10", p.MaxFiles)
 	}
 }
 
