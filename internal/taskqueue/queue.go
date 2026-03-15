@@ -327,7 +327,7 @@ func (q *Queue) CleanupOldTasks(ctx context.Context, tableName string, maxAge ti
 	query, args, err := sq.Delete(TableName).
 		Where(sq.Eq{
 			"table_name": tableName,
-			"state":      []string{string(TaskStateCompleted), string(TaskStateFailed), string(TaskStateTimedOut)},
+			"state":      []string{string(TaskStateCompleted), string(TaskStateFailed), string(TaskStateTimedOut), string(TaskStateDeadLetter)},
 		}).
 		Where(sq.Lt{"completed_at": cutoff}).
 		Suffix(fmt.Sprintf("LIMIT %d", q.cleanupBatchLimit)).

@@ -364,7 +364,11 @@ func (p *Planner) findCandidates(ctx context.Context) ([]*metastore.FileRecord, 
 // resolveColumnMappings resolves the policy's required dims and aggs to physical
 // column names using the current registry state. Unresolvable keys are skipped
 // (the column may not exist yet; it will be picked up on a future cycle).
+// Returns nil, nil if no resolver is configured (e.g., in tests).
 func (p *Planner) resolveColumnMappings() (dimMappings, aggMappings []metastore.ColumnMapping) {
+	if p.resolver == nil {
+		return nil, nil
+	}
 	for _, dimKey := range p.policy.RequiredDims() {
 		physCol := p.resolver.ResolveDim(dimKey)
 		if physCol == "" {

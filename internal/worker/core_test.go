@@ -134,7 +134,7 @@ func TestExecuteTask_InvalidPayload(t *testing.T) {
 
 	core := NewCore(tq, ac, pf, zap.NewNop())
 
-	task := &taskqueue.Task{TaskID: 3, Input: []byte("garbage")}
+	task := &taskqueue.Task{TaskID: 3, Version: taskqueue.TaskPayloadVersion, Input: []byte("garbage")}
 	core.executeTask(context.Background(), task)
 
 	if ac.calls != 0 {
