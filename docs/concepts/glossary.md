@@ -71,7 +71,7 @@ Service component that manages the mapping between opaque physical column names 
 Component that reconciles index configuration at startup and on config reload. Creates indexes enabled in config, drops indexes disabled in config (except protected base indexes: `PRIMARY`, `idx_consolidation`, `idx_expiration`). Uses `ALGORITHM=INPLACE, LOCK=NONE` for online DDL with an automatic fallback to default DDL if the engine does not support it. See [Schema Evolution](../guides/evolve-schema.md) and [Naming Conventions](../reference/naming-conventions.md).
 
 ### clp-s
-The CLP compression binary. Accepts IR files as input, compresses them into a columnar archive using semantic compression. Invoked by consolidation workers as: `clp-s c --single-file-archive <outputDir> <stagingDir>`. See [CLP Integration](../guides/integrate-clp.md).
+The CLP compression binary. Accepts IR files as input, compresses them into a columnar archive using semantic compression. Invoked by consolidation workers with `--single-file-archive`, `--remove-path-prefix`, and path normalization flags. See [CLP Integration](../guides/integrate-clp.md) for the full invocation.
 
 ---
 

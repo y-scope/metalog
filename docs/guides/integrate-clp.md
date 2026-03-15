@@ -60,7 +60,7 @@ Each worker goroutine receives tasks from the Prefetcher's channel and executes:
 │  1. Receive task from Prefetcher channel (blocks until available)    │
 │  2. Deserialize payload (LZ4+msgpack) → TaskPayload                │
 │  3. Download IR files to temp staging directory (parallel)          │
-│  4. Execute: clp-s c <stagingDir> -o <outputPath>                    │
+│  4. Execute: clp-s c --single-file-archive <outputDir> <inputDir>    │
 │  5. Upload archive to archiveBucket/archivePath                     │
 │  6. Mark task complete (write TaskResult to output column)          │
 │  7. Cleanup local temp dirs                                         │
@@ -126,15 +126,25 @@ storageClient.DownloadIRFilesParallel(ctx, cons.IRBuckets, cons.IRPaths, staging
 
 ### Step 4: Execute clp-s
 
-Run `clp-s c` to compress the staged IR files into a single archive:
+Run `clp-s c` to compress the staged IR files into a single-file archive:
 
 ```bash
-clp-s c <stagingDir> -o <outputPath>
+clp-s c --single-file-archive \
+    --remove-path-prefix <inputDir> \
+    --remove-leading-slash \
+    --normalize-paths \
+    <outputDir> <inputDir>
 ```
 
 ```go
 // From ClpCompressor.Compress():
-cmd := exec.CommandContext(ctx, binaryPath, "c", inputDir, "-o", outputPath)
+cmd := exec.CommandContext(ctx, binaryPath, "c",
+    "--single-file-archive",
+    "--remove-path-prefix", inputDir,
+    "--remove-leading-slash",
+    "--normalize-paths",
+    outputDir, inputDir,
+)
 // stdout/stderr captured via cmd.CombinedOutput()
 ```
 

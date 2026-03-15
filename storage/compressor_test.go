@@ -78,10 +78,11 @@ func TestClpCompressor_Compress_SuccessWithEcho(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputDir := filepath.Join(tmpDir, "input")
 	os.MkdirAll(inputDir, 0755)
-	outputPath := filepath.Join(tmpDir, "output.clp")
+	outputDir := filepath.Join(tmpDir, "output")
+	os.MkdirAll(outputDir, 0755)
 
 	// /bin/true ignores arguments and exits 0
-	err := c.Compress(context.Background(), inputDir, outputPath)
+	err := c.Compress(context.Background(), inputDir, outputDir)
 	if err != nil {
 		t.Fatalf("Compress() with /bin/true should succeed, got: %v", err)
 	}

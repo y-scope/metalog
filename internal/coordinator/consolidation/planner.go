@@ -21,7 +21,6 @@ import (
 // before the planner skips creating new consolidation tasks.
 const maxBackpressureDepth = 100
 
-
 // ColumnResolver resolves logical dimension/aggregation keys to physical column names.
 // Satisfied by schema.ColumnRegistry.
 type ColumnResolver interface {
