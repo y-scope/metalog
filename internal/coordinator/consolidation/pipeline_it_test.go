@@ -64,8 +64,7 @@ func (env *pipelineEnv) insertPendingFiles(t *testing.T, count int) []string {
 		irPath := fmt.Sprintf("/data/pipeline_%d.ir", i)
 		irPaths[i] = irPath
 
-		// Insert file record into DB.
-		query, args, _ := sq.Insert("`"+pipelineTable+"`").
+		query, args, err := sq.Insert("`"+pipelineTable+"`").
 			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 				"clp_ir_storage_backend", "clp_ir_bucket",
 				"state", "record_count", "retention_days", "expires_at").
@@ -78,12 +77,13 @@ func (env *pipelineEnv) insertPendingFiles(t *testing.T, count int) []string {
 				"IR_ARCHIVE_CONSOLIDATION_PENDING",
 				10, 30, 0,
 			).ToSql()
-		_, err := env.db.ExecContext(ctx, query, args...)
 		if err != nil {
+			t.Fatalf("build insert SQL: %v", err)
+		}
+		if _, err := env.db.ExecContext(ctx, query, args...); err != nil {
 			t.Fatalf("insert file %d: %v", i, err)
 		}
 
-		// Upload dummy IR file to MinIO.
 		env.mio.PutObject(t, testutil.TestBucket, irPath, []byte("dummy-ir-content"))
 	}
 
@@ -108,7 +108,7 @@ func (env *pipelineEnv) newPlanner(t *testing.T) (*consolidation.Planner, *taskq
 		StorageRegistry:    reg,
 		ArchiveBackend:     testutil.StorageBackendName,
 		ArchiveBucket:      testutil.TestBucket,
-		Interval:           1 * time.Second,
+		Interval:           500 * time.Millisecond,
 		FailureLogInterval: 1 * time.Minute,
 		StaleThreshold:     60 * time.Minute,
 		Log:                env.log,
@@ -128,25 +128,21 @@ func TestPipeline_EndToEnd(t *testing.T) {
 	defer env.teardown(t)
 	ctx := context.Background()
 
+	// --- Setup: insert 3 pending files with IR objects in MinIO ---
 	irPaths := env.insertPendingFiles(t, 3)
+
+	// --- Phase 1: Planner creates tasks ---
 	planner, tq := env.newPlanner(t)
-
-	// Run planner to create tasks.
-	plannerCtx, cancel := context.WithCancel(ctx)
+	plannerCtx, plannerCancel := context.WithCancel(ctx)
 	go planner.Run(plannerCtx)
-	time.Sleep(3 * time.Second)
-	cancel()
 
-	// Verify task was created.
-	counts, err := tq.GetTaskCounts(ctx, pipelineTable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts.Pending < 1 {
-		t.Fatalf("pending tasks = %d, want >= 1", counts.Pending)
-	}
+	testutil.WaitFor(t, 15*time.Second, "planner to create tasks", func() bool {
+		counts, err := tq.GetTaskCounts(ctx, pipelineTable)
+		return err == nil && counts.Pending >= 1
+	})
+	plannerCancel()
 
-	// Run worker with ConcatCompressor (no real clp-s needed).
+	// --- Phase 2: Worker processes tasks ---
 	reg := env.mio.Registry(testutil.StorageBackendName)
 	archiveCreator := storage.NewArchiveCreator(reg, &testutil.ConcatCompressor{}, env.log)
 
@@ -156,34 +152,31 @@ func TestPipeline_EndToEnd(t *testing.T) {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	go pf.Run(workerCtx)
 	go core.Run(workerCtx)
-	time.Sleep(5 * time.Second)
-	workerCancel()
 
-	// Wait for prefetcher to finish.
+	testutil.WaitFor(t, 15*time.Second, "worker to complete tasks", func() bool {
+		counts, err := tq.GetTaskCounts(ctx, pipelineTable)
+		return err == nil && counts.Completed >= 1
+	})
+	workerCancel()
 	<-pf.Done()
 
-	// Verify task is completed.
-	counts, err = tq.GetTaskCounts(ctx, pipelineTable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts.Completed < 1 {
-		t.Fatalf("completed tasks = %d, want >= 1", counts.Completed)
-	}
-
-	// Run planner again to finalize — processTerminalTasks should:
-	// 1. Mark files ARCHIVE_CLOSED
-	// 2. Delete source IR files from MinIO
-	// 3. Delete the task row
+	// --- Phase 3: Planner finalizes ---
 	planner2, tq2 := env.newPlanner(t)
-	plannerCtx2, cancel2 := context.WithCancel(ctx)
+	plannerCtx2, plannerCancel2 := context.WithCancel(ctx)
 	go planner2.Run(plannerCtx2)
-	time.Sleep(3 * time.Second)
-	cancel2()
 
-	// Verify files are now ARCHIVE_CLOSED.
+	testutil.WaitFor(t, 15*time.Second, "planner to finalize tasks", func() bool {
+		var closedCount int
+		err := env.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM `"+pipelineTable+"` WHERE state = 'ARCHIVE_CLOSED'").
+			Scan(&closedCount)
+		return err == nil && closedCount == 3
+	})
+	plannerCancel2()
+
+	// --- Verify: files are ARCHIVE_CLOSED ---
 	var closedCount int
-	err = env.db.QueryRowContext(ctx,
+	err := env.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `"+pipelineTable+"` WHERE state = 'ARCHIVE_CLOSED'").
 		Scan(&closedCount)
 	if err != nil {
@@ -193,7 +186,7 @@ func TestPipeline_EndToEnd(t *testing.T) {
 		t.Errorf("ARCHIVE_CLOSED files = %d, want 3", closedCount)
 	}
 
-	// Verify archive exists in MinIO.
+	// --- Verify: archive exists in MinIO ---
 	var archivePath string
 	err = env.db.QueryRowContext(ctx,
 		"SELECT clp_archive_path FROM `"+pipelineTable+"` WHERE clp_archive_path IS NOT NULL AND clp_archive_path != '' LIMIT 1").
@@ -201,27 +194,24 @@ func TestPipeline_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if archivePath == "" {
-		t.Fatal("archive path not set on file record")
-	}
 	if !env.mio.ObjectExists(t, testutil.TestBucket, archivePath) {
 		t.Errorf("archive %q not found in MinIO", archivePath)
 	}
 
-	// Verify source IR files were deleted from MinIO.
+	// --- Verify: source IR files deleted from MinIO ---
 	for _, path := range irPaths {
 		if env.mio.ObjectExists(t, testutil.TestBucket, path) {
-			t.Errorf("source IR %q still exists in MinIO (should be deleted after finalization)", path)
+			t.Errorf("source IR %q still exists in MinIO (should be deleted)", path)
 		}
 	}
 
-	// Verify task row was deleted.
-	counts, err = tq2.GetTaskCounts(ctx, pipelineTable)
+	// --- Verify: task row deleted ---
+	counts, err := tq2.GetTaskCounts(ctx, pipelineTable)
 	if err != nil {
 		t.Fatal(err)
 	}
 	totalTasks := counts.Pending + counts.Processing + counts.Completed + counts.Failed
 	if totalTasks != 0 {
-		t.Errorf("remaining tasks = %d, want 0 (task should be deleted after finalization)", totalTasks)
+		t.Errorf("remaining tasks = %d, want 0", totalTasks)
 	}
 }

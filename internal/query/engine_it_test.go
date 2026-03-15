@@ -32,7 +32,7 @@ func insertTestRows(t *testing.T, db *sql.DB, count int) {
 	t.Helper()
 	baseTs := int64(1704067200000000000)
 	for i := 0; i < count; i++ {
-		query, args, _ := sq.Insert("`"+engineTable+"`").
+		query, args, err := sq.Insert("`"+engineTable+"`").
 			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 				"state", "record_count", "retention_days", "expires_at").
 			Values(
@@ -42,6 +42,9 @@ func insertTestRows(t *testing.T, db *sql.DB, count int) {
 				"IR_BUFFERING",
 				int64(10+i), 30, 0,
 			).ToSql()
+		if err != nil {
+			t.Fatalf("build insert SQL: %v", err)
+		}
 		if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 			t.Fatalf("insert row %d: %v", i, err)
 		}

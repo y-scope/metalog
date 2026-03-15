@@ -26,12 +26,48 @@ func setupTaskQueueIT(t *testing.T) (*testutil.MariaDBContainer, *taskqueue.Queu
 	return mc, tq
 }
 
+// mustCreateTask creates a task with a minimal payload, returning the task ID.
+func mustCreateTask(t *testing.T, tq *taskqueue.Queue, ctx context.Context) int64 {
+	t.Helper()
+	input, err := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	id, err := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	return id
+}
+
+// mustScanState queries the state of a task by ID.
+func mustScanState(t *testing.T, mc *testutil.MariaDBContainer, ctx context.Context, taskID int64) string {
+	t.Helper()
+	var state string
+	err := mc.DB.QueryRowContext(ctx,
+		"SELECT state FROM _task_queue WHERE task_id = ?", taskID).Scan(&state)
+	if err != nil {
+		t.Fatalf("query task %d state: %v", taskID, err)
+	}
+	return state
+}
+
+// mustScanCount queries the count of tasks matching the given query.
+func mustScanCount(t *testing.T, mc *testutil.MariaDBContainer, ctx context.Context, query string, args ...any) int {
+	t.Helper()
+	var count int
+	err := mc.DB.QueryRowContext(ctx, query, args...).Scan(&count)
+	if err != nil {
+		t.Fatalf("query count: %v", err)
+	}
+	return count
+}
+
 func TestQueue_CreateAndClaim(t *testing.T) {
 	mc, tq := setupTaskQueueIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Create a task
 	payload := &taskqueue.TaskPayload{
 		TableName: testTable,
 		Consolidation: &taskqueue.ConsolidationPayload{
@@ -52,7 +88,6 @@ func TestQueue_CreateAndClaim(t *testing.T) {
 		t.Errorf("CreateTask() returned taskID=%d, want > 0", taskID)
 	}
 
-	// Claim task
 	tasks, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10)
 	if err != nil {
 		t.Fatalf("ClaimTasks() error = %v", err)
@@ -71,9 +106,8 @@ func TestQueue_CreateAndClaim(t *testing.T) {
 func TestQueue_ClaimTasks_EmptyQueue(t *testing.T) {
 	mc, tq := setupTaskQueueIT(t)
 	defer mc.Teardown(t)
-	ctx := context.Background()
 
-	tasks, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10)
+	tasks, err := tq.ClaimTasks(context.Background(), testTable, "worker-1", 10)
 	if err != nil {
 		t.Fatalf("ClaimTasks() error = %v", err)
 	}
@@ -87,21 +121,20 @@ func TestQueue_CompleteTask(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Create and claim
-	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
-	tasks, _ := tq.ClaimTasks(ctx, testTable, "worker-1", 10)
-	if len(tasks) != 1 {
-		t.Fatal("expected 1 claimed task")
+	taskID := mustCreateTask(t, tq, ctx)
+	if _, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10); err != nil {
+		t.Fatal(err)
 	}
 
-	// Complete with output
 	result := &taskqueue.TaskResult{
 		ArchivePath:      "/data/archive.clp",
 		ArchiveSizeBytes: 1024,
 		CreatedAt:        time.Now().UnixNano(),
 	}
-	output, _ := taskqueue.MarshalResult(result)
+	output, err := taskqueue.MarshalResult(result)
+	if err != nil {
+		t.Fatal(err)
+	}
 	affected, err := tq.CompleteTask(ctx, taskID, output)
 	if err != nil {
 		t.Fatalf("CompleteTask() error = %v", err)
@@ -110,10 +143,7 @@ func TestQueue_CompleteTask(t *testing.T) {
 		t.Errorf("CompleteTask() affected = %d, want 1", affected)
 	}
 
-	// Verify state
-	var state string
-	mc.DB.QueryRowContext(ctx,
-		"SELECT state FROM _task_queue WHERE task_id = ?", taskID).Scan(&state)
+	state := mustScanState(t, mc, ctx, taskID)
 	if state != "completed" {
 		t.Errorf("task state = %q, want completed", state)
 	}
@@ -124,9 +154,10 @@ func TestQueue_FailTask(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
-	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
+	taskID := mustCreateTask(t, tq, ctx)
+	if _, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	affected, err := tq.FailTask(ctx, taskID)
 	if err != nil {
@@ -136,9 +167,7 @@ func TestQueue_FailTask(t *testing.T) {
 		t.Errorf("FailTask() affected = %d, want 1", affected)
 	}
 
-	var state string
-	mc.DB.QueryRowContext(ctx,
-		"SELECT state FROM _task_queue WHERE task_id = ?", taskID).Scan(&state)
+	state := mustScanState(t, mc, ctx, taskID)
 	if state != "failed" {
 		t.Errorf("task state = %q, want failed", state)
 	}
@@ -149,16 +178,10 @@ func TestQueue_ClaimTasks_BatchSize(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Create 5 tasks
 	for i := 0; i < 5; i++ {
-		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		_, err := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		mustCreateTask(t, tq, ctx)
 	}
 
-	// Claim with batch size 3
 	tasks, err := tq.ClaimTasks(ctx, testTable, "worker-1", 3)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +190,6 @@ func TestQueue_ClaimTasks_BatchSize(t *testing.T) {
 		t.Errorf("ClaimTasks(batchSize=3) returned %d tasks, want 3", len(tasks))
 	}
 
-	// Claim remaining
 	tasks2, err := tq.ClaimTasks(ctx, testTable, "worker-2", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -182,14 +204,12 @@ func TestQueue_GetTaskCounts(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	// Create 3 tasks
 	for i := 0; i < 3; i++ {
-		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
+		mustCreateTask(t, tq, ctx)
 	}
-
-	// Claim 1
-	tq.ClaimTasks(ctx, testTable, "worker-1", 1)
+	if _, err := tq.ClaimTasks(ctx, testTable, "worker-1", 1); err != nil {
+		t.Fatal(err)
+	}
 
 	counts, err := tq.GetTaskCounts(ctx, testTable)
 	if err != nil {
@@ -208,29 +228,22 @@ func TestQueue_ReclaimTask(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
-	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
+	taskID := mustCreateTask(t, tq, ctx)
+	if _, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10); err != nil {
+		t.Fatal(err)
+	}
 
-	// Reclaim the task (retry_count=0 in DB, below max retries)
-	err := tq.ReclaimTask(ctx, taskID)
-	if err != nil {
+	if err := tq.ReclaimTask(ctx, taskID); err != nil {
 		t.Fatalf("ReclaimTask() error = %v", err)
 	}
 
-	// Original task should be timed_out
-	var state string
-	mc.DB.QueryRowContext(ctx,
-		"SELECT state FROM _task_queue WHERE task_id = ?", taskID).Scan(&state)
+	state := mustScanState(t, mc, ctx, taskID)
 	if state != "timed_out" {
 		t.Errorf("original task state = %q, want timed_out", state)
 	}
 
-	// A new pending task should exist
-	var newCount int
-	mc.DB.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ? AND state = 'pending'",
-		testTable).Scan(&newCount)
+	newCount := mustScanCount(t, mc, ctx,
+		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ? AND state = 'pending'", testTable)
 	if newCount != 1 {
 		t.Errorf("pending count after reclaim = %d, want 1", newCount)
 	}
@@ -241,30 +254,27 @@ func TestQueue_ReclaimTask_DeadLetter(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-	taskID, _ := tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
-	tq.ClaimTasks(ctx, testTable, "worker-1", 10)
+	taskID := mustCreateTask(t, tq, ctx)
+	if _, err := tq.ClaimTasks(ctx, testTable, "worker-1", 10); err != nil {
+		t.Fatal(err)
+	}
 
-	// Set retry_count >= max retries in DB so reclaim triggers dead_letter.
-	mc.DB.ExecContext(ctx, "UPDATE _task_queue SET retry_count = ? WHERE task_id = ?",
-		taskqueue.DefaultMaxRetries, taskID)
-	err := tq.ReclaimTask(ctx, taskID)
-	if err != nil {
+	// Set retry_count >= max retries so reclaim triggers dead_letter.
+	if _, err := mc.DB.ExecContext(ctx, "UPDATE _task_queue SET retry_count = ? WHERE task_id = ?",
+		taskqueue.DefaultMaxRetries, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tq.ReclaimTask(ctx, taskID); err != nil {
 		t.Fatalf("ReclaimTask() error = %v", err)
 	}
 
-	// Should be dead_letter, no new pending task
-	var state string
-	mc.DB.QueryRowContext(ctx,
-		"SELECT state FROM _task_queue WHERE task_id = ?", taskID).Scan(&state)
+	state := mustScanState(t, mc, ctx, taskID)
 	if state != "dead_letter" {
 		t.Errorf("task state = %q, want dead_letter", state)
 	}
 
-	var pendingCount int
-	mc.DB.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ? AND state = 'pending'",
-		testTable).Scan(&pendingCount)
+	pendingCount := mustScanCount(t, mc, ctx,
+		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ? AND state = 'pending'", testTable)
 	if pendingCount != 0 {
 		t.Errorf("pending count = %d, want 0 (should not re-enqueue dead letter)", pendingCount)
 	}
@@ -276,8 +286,7 @@ func TestQueue_DeleteAllTasks(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		input, _ := taskqueue.MarshalPayload(&taskqueue.TaskPayload{TableName: testTable})
-		tq.CreateTask(ctx, testTable, taskqueue.TaskPayloadVersion, input)
+		mustCreateTask(t, tq, ctx)
 	}
 
 	deleted, err := tq.DeleteAllTasks(ctx, testTable)
@@ -288,9 +297,8 @@ func TestQueue_DeleteAllTasks(t *testing.T) {
 		t.Errorf("DeleteAllTasks() = %d, want 5", deleted)
 	}
 
-	var count int
-	mc.DB.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ?", testTable).Scan(&count)
+	count := mustScanCount(t, mc, ctx,
+		"SELECT COUNT(*) FROM _task_queue WHERE table_name = ?", testTable)
 	if count != 0 {
 		t.Errorf("remaining tasks = %d, want 0", count)
 	}

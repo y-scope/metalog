@@ -20,11 +20,14 @@ const testTable = "test_logs"
 // insertTestRecord inserts a file record with the most common column set.
 func insertTestRecord(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, state string) {
 	t.Helper()
-	query, args, _ := sq.Insert("`"+testTable+"`").
+	query, args, err := sq.Insert("`"+testTable+"`").
 		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 			"state", "record_count", "retention_days", "expires_at").
 		Values(minTs, maxTs, irPath, state, 10, 30, 0).
 		ToSql()
+	if err != nil {
+		t.Fatalf("build insert SQL: %v", err)
+	}
 	if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 		t.Fatalf("insert %s (state=%s): %v", irPath, state, err)
 	}
@@ -33,11 +36,14 @@ func insertTestRecord(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, stat
 // insertTestRecordWithExpiry is like insertTestRecord but also sets expires_at.
 func insertTestRecordWithExpiry(t *testing.T, db *sql.DB, minTs, maxTs int64, irPath, state string, expiresAt int64) {
 	t.Helper()
-	query, args, _ := sq.Insert("`"+testTable+"`").
+	query, args, err := sq.Insert("`"+testTable+"`").
 		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 			"state", "record_count", "retention_days", "expires_at").
 		Values(minTs, maxTs, irPath, state, 10, 30, expiresAt).
 		ToSql()
+	if err != nil {
+		t.Fatalf("build insert SQL: %v", err)
+	}
 	if _, err := db.ExecContext(context.Background(), query, args...); err != nil {
 		t.Fatalf("insert %s (state=%s): %v", irPath, state, err)
 	}
@@ -160,7 +166,7 @@ func TestFileRecords_UpsertBatch_GuardPreventsOverwrite(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert record in ARCHIVE_CLOSED state (guarded) with record_count=100.
-	query, args, _ := sq.Insert("`"+testTable+"`").
+	query, args, err := sq.Insert("`"+testTable+"`").
 		Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 			"state", "record_count", "retention_days", "expires_at").
 		Values(1704067200000000000, 1704067200100000000,

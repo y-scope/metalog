@@ -54,6 +54,9 @@ func TestFileRecords_TransitionExpiredToPurging_IROnly(t *testing.T) {
 			closed++
 		}
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if purging != 2 {
 		t.Errorf("IR_PURGING count = %d, want 2", purging)
 	}
