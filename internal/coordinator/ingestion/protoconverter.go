@@ -32,8 +32,9 @@ func FileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
 		RecordCount:   uint32(f.RecordCount),
 		RetentionDays: uint16(retentionDays),
 		ExpiresAt:     expiresAt,
-		Dims:          make(map[string]any),
-		Aggs:          make(map[string]any),
+		Dims:     make(map[string]any),
+		Aggs:     make(map[string]any),
+		Sketches: make(map[string][]byte),
 	}
 
 	if f.Ir != nil {

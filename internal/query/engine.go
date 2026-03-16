@@ -41,17 +41,18 @@ func NewSplitQueryEngine(db *sql.DB, log *zap.Logger) *SplitQueryEngine {
 
 // QueryParams holds the parameters for a split query.
 type QueryParams struct {
-	TableName      string
-	Columns        []string
-	StateFilter    []string
-	FilterExpr     string
-	OrderBy        []OrderBySpec
-	Limit          int
-	CursorValues   []any
-	CursorID       int64
-	HasCursor      bool
-	AllowUnindexed bool
-	Registry       *schema.ColumnRegistry
+	TableName        string
+	Columns          []string
+	StateFilter      []string
+	FilterExpr       string
+	OrderBy          []OrderBySpec
+	Limit            int
+	CursorValues     []any
+	CursorID         int64
+	HasCursor        bool
+	AllowUnindexed   bool
+	Registry         *schema.ColumnRegistry
+	SketchAcceleration []string // field names to accelerate via bloom filter sketches
 }
 
 // OrderBySpec defines a sort column and direction.
@@ -87,12 +88,14 @@ type SplitConsumer func(split *SplitWithCursor) (keepGoing bool, err error)
 // preparedQuery holds validated and resolved query components that are
 // reusable across multiple page fetches within a single streaming RPC.
 type preparedQuery struct {
-	tableName    string
-	cols         []string
-	orderBy      []OrderBySpec
-	filterExpr   string
-	stateFilter  []string
-	orderClauses []string
+	tableName        string
+	cols             []string
+	orderBy          []OrderBySpec
+	filterExpr       string
+	stateFilter      []string
+	orderClauses     []string
+	sketchPredicates []SketchPredicate // sketch predicates for bloom filter evaluation
+	sketchExtExpr    string            // e.g. "IF(FIND_IN_SET('s03',sketches)>0,ext,NULL)" or "" if no sketches
 }
 
 // Query executes a single-page query and returns rows. This is the original
@@ -115,9 +118,12 @@ func (e *SplitQueryEngine) Query(ctx context.Context, params *QueryParams) ([]*S
 		return nil, err
 	}
 
-	rows := make([]*SplitRow, len(swcs))
-	for i, swc := range swcs {
-		rows[i] = swc.Row
+	var rows []*SplitRow
+	for _, swc := range swcs {
+		if !passesSketchFilter(swc.Row, prepared.sketchPredicates) {
+			continue
+		}
+		rows = append(rows, swc.Row)
 	}
 	return rows, nil
 }
@@ -174,7 +180,11 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 				if remaining <= 0 {
 					return
 				}
-				if remaining < effectivePageSize {
+				// When sketch predicates are active, keep the full page size
+				// so the DB returns enough rows to compensate for client-side
+				// bloom filter pruning. Without this, the shrinking LIMIT would
+				// cause under-returning results.
+				if remaining < effectivePageSize && len(prepared.sketchPredicates) == 0 {
 					effectivePageSize = remaining
 				}
 			}
@@ -191,6 +201,10 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 			splitsScanned.Add(int64(len(page)))
 
 			for _, swc := range page {
+				if !passesSketchFilter(swc.Row, prepared.sketchPredicates) {
+					continue
+				}
+
 				select {
 				case ch <- swc:
 					totalSent++
@@ -319,6 +333,42 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 		filterExpr = rewritten
 	}
 
+	// Sketch acceleration: if the caller specified fields to accelerate,
+	// find equality predicates on those fields in the rewritten filter and
+	// extract their values for bloom filter evaluation. The predicates are
+	// NOT removed from the SQL — the DB still filters on them for correctness.
+	// The bloom filter provides additional pruning for rows that passed the
+	// DB filter but can be rejected before the caller opens the file.
+	var sketchPredicates []SketchPredicate
+	var sketchExtExpr string
+	if len(params.SketchAcceleration) > 0 && filterExpr != "" {
+		sketchPredicates = CollectSketchValues(filterExpr, params.SketchAcceleration, params.Registry)
+	}
+	if len(sketchPredicates) > 0 && params.Registry != nil {
+		var err error
+		sketchExtExpr, err = buildSketchExtExpr(sketchPredicates, params.Registry)
+		if err != nil {
+			return nil, fmt.Errorf("resolve sketch predicates: %w", err)
+		}
+	}
+
+	// When sketch predicates are present, replace any existing ext column with
+	// a conditional expression that only fetches the blob for rows that have
+	// the relevant SET members, emitting NULL otherwise to save transfer cost.
+	if sketchExtExpr != "" && len(cols) > 0 && cols[0] != "*" {
+		replaced := false
+		for i, c := range cols {
+			if c == metastore.ColExt {
+				cols[i] = sketchExtExpr
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			cols = append(cols, sketchExtExpr)
+		}
+	}
+
 	// Ensure sort columns and the id tiebreaker are in the projection.
 	// Without these, cursor extraction would produce nil values.
 	if len(cols) > 0 && cols[0] != "*" {
@@ -349,12 +399,14 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" ASC")
 
 	return &preparedQuery{
-		tableName:    params.TableName,
-		cols:         cols,
-		orderBy:      resolvedOrderBy,
-		filterExpr:   filterExpr,
-		stateFilter:  params.StateFilter,
-		orderClauses: orderClauses,
+		tableName:        params.TableName,
+		cols:             cols,
+		orderBy:          resolvedOrderBy,
+		filterExpr:       filterExpr,
+		stateFilter:      params.StateFilter,
+		orderClauses:     orderClauses,
+		sketchPredicates: sketchPredicates,
+		sketchExtExpr:    sketchExtExpr,
 	}, nil
 }
 
@@ -453,6 +505,20 @@ func (e *SplitQueryEngine) executePage(
 		return nil, fmt.Errorf("query: rows: %w", err)
 	}
 	return results, nil
+}
+
+// passesSketchFilter evaluates bloom filter predicates against a row's ext blob.
+// Returns true if the row should be kept (no predicates, or all pass).
+func passesSketchFilter(row *SplitRow, predicates []SketchPredicate) bool {
+	if len(predicates) == 0 {
+		return true
+	}
+	var extBytes []byte
+	if b, ok := row.Values[metastore.ColExt].([]byte); ok {
+		extBytes = b
+	}
+	pass, _ := evaluateSketchPredicatesFromRow(extBytes, predicates)
+	return pass
 }
 
 // buildKeysetWhere builds a keyset pagination WHERE clause using the

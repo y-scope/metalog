@@ -618,7 +618,25 @@ func baseColValues(rec *FileRecord) []any {
 		rec.ClpArchiveSizeBytes,
 		rec.RetentionDays,
 		rec.ExpiresAt,
+		nullableString(rec.SketchSetValue),
+		nullableBytes(rec.ExtData),
 	}
+}
+
+// nullableString returns nil for empty strings, otherwise the string itself.
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// nullableBytes returns nil for empty/nil byte slices, otherwise the slice.
+func nullableBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }
 
 func baseSelectCols() []string {

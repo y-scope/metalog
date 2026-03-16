@@ -316,22 +316,29 @@ Expressions are validated against a whitelist:
 
 Semicolons are rejected. Unknown column names cause `INVALID_ARGUMENT`.
 
-### Sketch filters
+### Sketch acceleration
 
-Use `__SKETCH.field` to filter files using probabilistic membership sketches.
+Use the `sketch_acceleration` field in `StreamSplitsRequest` to accelerate equality predicates
+using bloom filter sketches. The filter expression itself uses normal SQL — no special syntax.
+
+```protobuf
+StreamSplitsRequest {
+  filter_expression: "uuid = 'abc-123' AND min_timestamp > 1000"
+  sketch_acceleration: ["uuid"]
+}
+```
+
+The server transparently extracts the `uuid = 'abc-123'` predicate and evaluates it against
+bloom filter data in the `ext` column. Files whose bloom filter says "definitely not present"
+are pruned before returning. Files without a sketch for the field pass through normally.
+
 Available sketch fields: query `MetadataService/ListSketches`.
 
-| Syntax | Meaning |
-|--------|---------|
-| `__SKETCH.user_id = 'abc'` | Keep only files that might contain `user_id = abc` |
-| `__SKETCH.trace_id IN ('a', 'b', 'c')` | Keep only files that might contain any of the trace IDs |
-
-**Restrictions:**
-- Sketch predicates must appear as top-level AND conjuncts — not inside `OR` or `NOT`.
-  Violating this returns `INVALID_ARGUMENT`.
-- If a file has no sketch for the requested field, the file is kept (pruning hint only).
-- Sketch filtering is best-effort: the query engine always confirms results, so no false
-  negatives are possible.
+**Behavior:**
+- Only equality (`=`) predicates on the named fields are accelerated.
+- Non-equality predicates and predicates inside `OR` are left in the SQL filter as-is.
+- If a file has no sketch for the requested field, the file is kept (acceleration only).
+- Results are identical with or without `sketch_acceleration` — it only affects performance.
 
 ---
 

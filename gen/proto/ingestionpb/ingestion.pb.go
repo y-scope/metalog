@@ -740,19 +740,72 @@ func (x *SelfDescribingEntry) GetValue() string {
 	return ""
 }
 
+type SketchEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SketchKey     string                 `protobuf:"bytes,1,opt,name=sketch_key,json=sketchKey,proto3" json:"sketch_key,omitempty"` // logical field name, e.g. "uuid"
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`                            // msgpack-encoded BloomFilterSnapshot
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SketchEntry) Reset() {
+	*x = SketchEntry{}
+	mi := &file_ingestion_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SketchEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SketchEntry) ProtoMessage() {}
+
+func (x *SketchEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_ingestion_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SketchEntry.ProtoReflect.Descriptor instead.
+func (*SketchEntry) Descriptor() ([]byte, []int) {
+	return file_ingestion_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SketchEntry) GetSketchKey() string {
+	if x != nil {
+		return x.SketchKey
+	}
+	return ""
+}
+
+func (x *SketchEntry) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 type MetadataRecord struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	File             *FileFields            `protobuf:"bytes,1,opt,name=file,proto3" json:"file,omitempty"`
 	Agg              []*AggEntry            `protobuf:"bytes,2,rep,name=agg,proto3" json:"agg,omitempty"`
 	Dim              []*DimEntry            `protobuf:"bytes,3,rep,name=dim,proto3" json:"dim,omitempty"`
 	SelfDescribingKv []*SelfDescribingEntry `protobuf:"bytes,4,rep,name=self_describing_kv,json=selfDescribingKv,proto3" json:"self_describing_kv,omitempty"`
+	Sketch           []*SketchEntry         `protobuf:"bytes,5,rep,name=sketch,proto3" json:"sketch,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MetadataRecord) Reset() {
 	*x = MetadataRecord{}
-	mi := &file_ingestion_proto_msgTypes[8]
+	mi := &file_ingestion_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -764,7 +817,7 @@ func (x *MetadataRecord) String() string {
 func (*MetadataRecord) ProtoMessage() {}
 
 func (x *MetadataRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_ingestion_proto_msgTypes[8]
+	mi := &file_ingestion_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -777,7 +830,7 @@ func (x *MetadataRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataRecord.ProtoReflect.Descriptor instead.
 func (*MetadataRecord) Descriptor() ([]byte, []int) {
-	return file_ingestion_proto_rawDescGZIP(), []int{8}
+	return file_ingestion_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *MetadataRecord) GetFile() *FileFields {
@@ -808,6 +861,13 @@ func (x *MetadataRecord) GetSelfDescribingKv() []*SelfDescribingEntry {
 	return nil
 }
 
+func (x *MetadataRecord) GetSketch() []*SketchEntry {
+	if x != nil {
+		return x.Sketch
+	}
+	return nil
+}
+
 type IngestRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
@@ -818,7 +878,7 @@ type IngestRequest struct {
 
 func (x *IngestRequest) Reset() {
 	*x = IngestRequest{}
-	mi := &file_ingestion_proto_msgTypes[9]
+	mi := &file_ingestion_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -830,7 +890,7 @@ func (x *IngestRequest) String() string {
 func (*IngestRequest) ProtoMessage() {}
 
 func (x *IngestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ingestion_proto_msgTypes[9]
+	mi := &file_ingestion_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -843,7 +903,7 @@ func (x *IngestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestRequest.ProtoReflect.Descriptor instead.
 func (*IngestRequest) Descriptor() ([]byte, []int) {
-	return file_ingestion_proto_rawDescGZIP(), []int{9}
+	return file_ingestion_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *IngestRequest) GetTableName() string {
@@ -870,7 +930,7 @@ type IngestResponse struct {
 
 func (x *IngestResponse) Reset() {
 	*x = IngestResponse{}
-	mi := &file_ingestion_proto_msgTypes[10]
+	mi := &file_ingestion_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -882,7 +942,7 @@ func (x *IngestResponse) String() string {
 func (*IngestResponse) ProtoMessage() {}
 
 func (x *IngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ingestion_proto_msgTypes[10]
+	mi := &file_ingestion_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -895,7 +955,7 @@ func (x *IngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestResponse.ProtoReflect.Descriptor instead.
 func (*IngestResponse) Descriptor() ([]byte, []int) {
-	return file_ingestion_proto_rawDescGZIP(), []int{10}
+	return file_ingestion_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *IngestResponse) GetAccepted() bool {
@@ -965,12 +1025,17 @@ const file_ingestion_proto_rawDesc = "" +
 	"expires_at\x18\t \x01(\x03R\texpiresAt\"=\n" +
 	"\x13SelfDescribingEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\xbf\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"@\n" +
+	"\vSketchEntry\x12\x1d\n" +
+	"\n" +
+	"sketch_key\x18\x01 \x01(\tR\tsketchKey\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\x89\x03\n" +
 	"\x0eMetadataRecord\x12C\n" +
 	"\x04file\x18\x01 \x01(\v2/.com.yscope.metalog.coordinator.grpc.FileFieldsR\x04file\x12?\n" +
 	"\x03agg\x18\x02 \x03(\v2-.com.yscope.metalog.coordinator.grpc.AggEntryR\x03agg\x12?\n" +
 	"\x03dim\x18\x03 \x03(\v2-.com.yscope.metalog.coordinator.grpc.DimEntryR\x03dim\x12f\n" +
-	"\x12self_describing_kv\x18\x04 \x03(\v28.com.yscope.metalog.coordinator.grpc.SelfDescribingEntryR\x10selfDescribingKv\"{\n" +
+	"\x12self_describing_kv\x18\x04 \x03(\v28.com.yscope.metalog.coordinator.grpc.SelfDescribingEntryR\x10selfDescribingKv\x12H\n" +
+	"\x06sketch\x18\x05 \x03(\v20.com.yscope.metalog.coordinator.grpc.SketchEntryR\x06sketch\"{\n" +
 	"\rIngestRequest\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12K\n" +
@@ -1005,7 +1070,7 @@ func file_ingestion_proto_rawDescGZIP() []byte {
 }
 
 var file_ingestion_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_ingestion_proto_goTypes = []any{
 	(AggType)(0),                // 0: com.yscope.metalog.coordinator.grpc.AggType
 	(*StringDimension)(nil),     // 1: com.yscope.metalog.coordinator.grpc.StringDimension
@@ -1016,9 +1081,10 @@ var file_ingestion_proto_goTypes = []any{
 	(*ArchiveFileInfo)(nil),     // 6: com.yscope.metalog.coordinator.grpc.ArchiveFileInfo
 	(*FileFields)(nil),          // 7: com.yscope.metalog.coordinator.grpc.FileFields
 	(*SelfDescribingEntry)(nil), // 8: com.yscope.metalog.coordinator.grpc.SelfDescribingEntry
-	(*MetadataRecord)(nil),      // 9: com.yscope.metalog.coordinator.grpc.MetadataRecord
-	(*IngestRequest)(nil),       // 10: com.yscope.metalog.coordinator.grpc.IngestRequest
-	(*IngestResponse)(nil),      // 11: com.yscope.metalog.coordinator.grpc.IngestResponse
+	(*SketchEntry)(nil),         // 9: com.yscope.metalog.coordinator.grpc.SketchEntry
+	(*MetadataRecord)(nil),      // 10: com.yscope.metalog.coordinator.grpc.MetadataRecord
+	(*IngestRequest)(nil),       // 11: com.yscope.metalog.coordinator.grpc.IngestRequest
+	(*IngestResponse)(nil),      // 12: com.yscope.metalog.coordinator.grpc.IngestResponse
 }
 var file_ingestion_proto_depIdxs = []int32{
 	1,  // 0: com.yscope.metalog.coordinator.grpc.DimensionValue.str:type_name -> com.yscope.metalog.coordinator.grpc.StringDimension
@@ -1031,14 +1097,15 @@ var file_ingestion_proto_depIdxs = []int32{
 	4,  // 7: com.yscope.metalog.coordinator.grpc.MetadataRecord.agg:type_name -> com.yscope.metalog.coordinator.grpc.AggEntry
 	3,  // 8: com.yscope.metalog.coordinator.grpc.MetadataRecord.dim:type_name -> com.yscope.metalog.coordinator.grpc.DimEntry
 	8,  // 9: com.yscope.metalog.coordinator.grpc.MetadataRecord.self_describing_kv:type_name -> com.yscope.metalog.coordinator.grpc.SelfDescribingEntry
-	9,  // 10: com.yscope.metalog.coordinator.grpc.IngestRequest.record:type_name -> com.yscope.metalog.coordinator.grpc.MetadataRecord
-	10, // 11: com.yscope.metalog.coordinator.grpc.MetadataIngestionService.Ingest:input_type -> com.yscope.metalog.coordinator.grpc.IngestRequest
-	11, // 12: com.yscope.metalog.coordinator.grpc.MetadataIngestionService.Ingest:output_type -> com.yscope.metalog.coordinator.grpc.IngestResponse
-	12, // [12:13] is the sub-list for method output_type
-	11, // [11:12] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	9,  // 10: com.yscope.metalog.coordinator.grpc.MetadataRecord.sketch:type_name -> com.yscope.metalog.coordinator.grpc.SketchEntry
+	10, // 11: com.yscope.metalog.coordinator.grpc.IngestRequest.record:type_name -> com.yscope.metalog.coordinator.grpc.MetadataRecord
+	11, // 12: com.yscope.metalog.coordinator.grpc.MetadataIngestionService.Ingest:input_type -> com.yscope.metalog.coordinator.grpc.IngestRequest
+	12, // 13: com.yscope.metalog.coordinator.grpc.MetadataIngestionService.Ingest:output_type -> com.yscope.metalog.coordinator.grpc.IngestResponse
+	13, // [13:14] is the sub-list for method output_type
+	12, // [12:13] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_ingestion_proto_init() }
@@ -1063,7 +1130,7 @@ func file_ingestion_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ingestion_proto_rawDesc), len(file_ingestion_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

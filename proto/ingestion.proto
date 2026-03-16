@@ -96,6 +96,15 @@ message SelfDescribingEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Sketch types
+// ---------------------------------------------------------------------------
+
+message SketchEntry {
+  string sketch_key = 1;  // logical field name, e.g. "uuid"
+  bytes  data       = 2;  // msgpack-encoded BloomFilterSnapshot
+}
+
+// ---------------------------------------------------------------------------
 // Top-level record and RPC messages
 // ---------------------------------------------------------------------------
 
@@ -104,6 +113,7 @@ message MetadataRecord {
   repeated AggEntry            agg                = 2;
   repeated DimEntry            dim                = 3;
   repeated SelfDescribingEntry self_describing_kv = 4;
+  repeated SketchEntry         sketch             = 5;
 }
 
 message IngestRequest {

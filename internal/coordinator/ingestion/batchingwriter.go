@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/vmihailenco/msgpack/v5"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/internal/config"
+	"github.com/y-scope/metalog/internal/encoding"
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/schema"
 )
@@ -336,6 +340,29 @@ func (tw *tableWriter) resolveAndRemapBatch(ctx context.Context, reg *schema.Col
 		}
 	}
 
+	// Collect unique sketch keys across the batch.
+	sketchSeen := make(map[string]struct{})
+	var sketchKeys []string
+	for _, rec := range batch {
+		for key := range rec.Sketches {
+			if _, ok := sketchSeen[key]; ok {
+				continue
+			}
+			sketchSeen[key] = struct{}{}
+			sketchKeys = append(sketchKeys, key)
+		}
+	}
+
+	// Batch-resolve sketch keys to SET member names.
+	var sketchMap map[string]string // logical key → SET member (e.g. "s03")
+	if len(sketchKeys) > 0 {
+		var err error
+		sketchMap, err = reg.ResolveOrAllocateSketches(ctx, sketchKeys)
+		if err != nil {
+			return fmt.Errorf("resolve sketches: %w", err)
+		}
+	}
+
 	// Remap each record from logical keys to physical column names.
 	for _, rec := range batch {
 		if len(rec.Dims) > 0 {
@@ -356,8 +383,70 @@ func (tw *tableWriter) resolveAndRemapBatch(ctx context.Context, reg *schema.Col
 			}
 			rec.Aggs = phys
 		}
+
+		// Build SketchSetValue and ExtData for records with sketches.
+		if len(rec.Sketches) > 0 {
+			if err := encodeSketchExt(rec, sketchMap); err != nil {
+				return fmt.Errorf("encode sketch ext: %w", err)
+			}
+		}
 	}
 
+	return nil
+}
+
+// encodeSketchExt builds the SketchSetValue (comma-joined SET members) and
+// ExtData (LZ4-compressed msgpack) for a record's sketch data.
+//
+// The ext payload structure is:
+//
+//	{"sketches": {"uuid": {"type": "parquet_sbbf_xxhash64", "data": <bytes>}, ...}}
+//
+// Each sketch entry is decoded from the proto's msgpack-encoded BloomFilterSnapshot
+// and nested under its logical key so readers can inspect the type field without
+// full deserialization.
+func encodeSketchExt(rec *metastore.FileRecord, sketchMap map[string]string) error {
+	// Build SET value string from resolved member names.
+	var members []string
+	for key := range rec.Sketches {
+		if member, ok := sketchMap[key]; ok {
+			members = append(members, member)
+		}
+	}
+	sort.Strings(members)
+	rec.SketchSetValue = strings.Join(members, ",")
+
+	// Build ext payload: decode each snapshot into a typed struct and nest
+	// under sketches.<key>. Using a typed struct ensures the "type" and "data"
+	// field names are preserved exactly through the msgpack round-trip.
+	type sketchSnapshot struct {
+		Type string `msgpack:"type"`
+		Data []byte `msgpack:"data"`
+	}
+	sketchPayload := make(map[string]*sketchSnapshot, len(rec.Sketches))
+	for key, data := range rec.Sketches {
+		if _, ok := sketchMap[key]; !ok {
+			continue // skip unresolved sketch keys
+		}
+		var snap sketchSnapshot
+		if err := msgpack.Unmarshal(data, &snap); err != nil {
+			return fmt.Errorf("decode sketch %q: %w", key, err)
+		}
+		sketchPayload[key] = &snap
+	}
+
+	type extPayloadType struct {
+		Sketches map[string]*sketchSnapshot `msgpack:"sketches"`
+	}
+	extPayload := &extPayloadType{Sketches: sketchPayload}
+
+	// Encode as LZ4-compressed msgpack using the shared codec.
+	extData, err := encoding.Marshal(extPayload)
+	if err != nil {
+		return fmt.Errorf("encode ext: %w", err)
+	}
+
+	rec.ExtData = extData
 	return nil
 }
 

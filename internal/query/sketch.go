@@ -1,168 +1,159 @@
 package query
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
-	"go.uber.org/zap"
 	"vitess.io/vitess/go/vt/sqlparser"
 
-	"github.com/y-scope/metalog/internal/db"
 	"github.com/y-scope/metalog/internal/metastore"
+	"github.com/y-scope/metalog/internal/schema"
 )
 
-const sketchPrefix = "__SKETCH."
-
-// SketchEvaluator evaluates sketch (bloom/cuckoo) filters to prune query splits.
-type SketchEvaluator struct {
-	db  *sql.DB
-	log *zap.Logger
-}
-
-// NewSketchEvaluator creates a SketchEvaluator.
-func NewSketchEvaluator(db *sql.DB, log *zap.Logger) *SketchEvaluator {
-	return &SketchEvaluator{db: db, log: log}
-}
-
-// MayContain checks whether the sketch column for a table might contain the given value.
-// Sketch columns are SET types with up to 32 members representing hash buckets.
-// Returns true if the value's hash bucket is present in the sketch (possible match),
-// false if definitely not present.
-func (e *SketchEvaluator) MayContain(ctx context.Context, tableName, sketchColumn, value string, recordID int64) (bool, error) {
-	if err := db.ValidateSQLIdentifier(tableName); err != nil {
-		return false, err
-	}
-	if err := db.ValidateSQLIdentifier(sketchColumn); err != nil {
-		return false, err
-	}
-
-	// Compute the bucket index for this value (1-32)
-	bucket := hashToBucket(value, 32)
-	member := fmt.Sprintf("s%02d", bucket+1)
-
-	// FIND_IN_SET with mixed parameter ordering is awkward in squirrel, use raw SQL.
-	rawQuery := fmt.Sprintf(
-		"SELECT 1 FROM %s WHERE %s = ? AND FIND_IN_SET(?, %s) > 0 LIMIT 1",
-		db.QuoteIdentifier(tableName),
-		metastore.ColID,
-		db.QuoteIdentifier(sketchColumn),
-	)
-
-	var exists int
-	err := e.db.QueryRowContext(ctx, rawQuery, recordID, member).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("sketch may contain: %w", err)
-	}
-	return true, nil
-}
-
 // SketchPredicate is a sketch-based filter extracted from a WHERE clause.
-// __SKETCH.<sketch_col> = '<value>' predicates are extracted from the filter,
-// evaluated client-side via MayContain, and removed from the SQL filter.
+// The caller specifies which fields to accelerate; the engine finds equality
+// predicates on those fields and evaluates them against bloom filter data
+// in the ext column.
 type SketchPredicate struct {
-	SketchColumn string
-	Value        string
+	SketchKey string // logical key (e.g. "uuid")
+	Value     string // search value
 }
 
-// ExtractSketchPredicates scans a filter expression for __SKETCH.<col> = '<value>'
-// predicates. Returns the predicates and the rewritten filter with sketch predicates removed.
-func ExtractSketchPredicates(expr string) ([]SketchPredicate, string, error) {
-	if expr == "" {
-		return nil, "", nil
+// CollectSketchValues scans a filter expression for equality predicates on
+// the specified field names and returns the values. The filter expression is
+// NOT modified — predicates remain in the SQL for correctness. The bloom filter
+// provides additional pruning on top of the DB filter.
+func CollectSketchValues(expr string, fields []string, registry *schema.ColumnRegistry) []SketchPredicate {
+	if expr == "" || len(fields) == 0 {
+		return nil
+	}
+
+	// Build a set of physical column names to look for.
+	// The filter expression has already been rewritten to physical names,
+	// so we need to resolve dim keys to their physical equivalents.
+	targetCols := make(map[string]string) // physical col → sketch key
+	for _, field := range fields {
+		physCol := field
+		if registry != nil {
+			if resolved := registry.ResolveDim(field); resolved != "" {
+				physCol = resolved
+			}
+		}
+		targetCols[physCol] = field
 	}
 
 	stmt, err := sqlParser.Parse("SELECT 1 FROM t WHERE " + expr)
 	if err != nil {
-		return nil, expr, nil // don't fail; let the SQL engine handle it
+		return nil
 	}
 	sel, ok := stmt.(*sqlparser.Select)
 	if !ok || sel.Where == nil {
-		return nil, expr, nil
+		return nil
 	}
 
 	var predicates []SketchPredicate
-	remaining := extractSketchFromExpr(sel.Where.Expr, &predicates)
-
-	if len(predicates) == 0 {
-		return nil, expr, nil
-	}
-
-	if remaining == nil {
-		return predicates, "", nil
-	}
-	return predicates, sqlparser.String(remaining), nil
+	collectValuesFromExpr(sel.Where.Expr, targetCols, &predicates)
+	return predicates
 }
 
-// extractSketchFromExpr recursively removes __SKETCH predicates from an expression tree.
-// Returns the remaining expression (nil if everything was extracted).
-func extractSketchFromExpr(node sqlparser.Expr, out *[]SketchPredicate) sqlparser.Expr {
+// collectValuesFromExpr recursively finds equality predicates on target columns
+// and collects their values. Does not modify the expression tree.
+func collectValuesFromExpr(node sqlparser.Expr, targets map[string]string, out *[]SketchPredicate) {
 	switch n := node.(type) {
 	case *sqlparser.AndExpr:
-		left := extractSketchFromExpr(n.Left, out)
-		right := extractSketchFromExpr(n.Right, out)
-		if left == nil && right == nil {
-			return nil
-		}
-		if left == nil {
-			return right
-		}
-		if right == nil {
-			return left
-		}
-		n.Left = left
-		n.Right = right
-		return n
+		collectValuesFromExpr(n.Left, targets, out)
+		collectValuesFromExpr(n.Right, targets, out)
 
 	case *sqlparser.ComparisonExpr:
 		if n.Operator == sqlparser.EqualOp {
 			if col, ok := n.Left.(*sqlparser.ColName); ok {
-				name := colNameToString(col)
-				if strings.HasPrefix(name, sketchPrefix) {
-					sketchCol := name[len(sketchPrefix):]
+				colName := col.Name.String()
+				if sketchKey, found := targets[colName]; found {
 					if lit, ok := n.Right.(*sqlparser.Literal); ok && lit.Type == sqlparser.StrVal {
 						*out = append(*out, SketchPredicate{
-							SketchColumn: sketchCol,
-							Value:        lit.Val,
+							SketchKey: sketchKey,
+							Value:     lit.Val,
 						})
-						return nil
 					}
 				}
 			}
 		}
-		return n
-
-	default:
-		return n
 	}
 }
 
-// EvaluateSketchPredicates checks each sketch predicate against the given record ID.
-// Returns true if all predicates pass (may contain), false if any definitely don't match.
-func (e *SketchEvaluator) EvaluateSketchPredicates(ctx context.Context, tableName string, recordID int64, predicates []SketchPredicate) (bool, error) {
+// buildSketchExtExpr resolves sketch keys to SET members via the registry and
+// builds a SQL expression that conditionally fetches the ext blob only for rows
+// that have at least one of the relevant SET members. This avoids transferring
+// MEDIUMBLOB data for rows that can't be pruned.
+//
+// For a single predicate on "uuid" -> "s03", produces:
+//
+//	IF(FIND_IN_SET('s03',sketches)>0,ext,NULL) AS `ext`
+//
+// For multiple predicates (uuid->s03, session_id->s07), produces:
+//
+//	IF(FIND_IN_SET('s03',sketches)>0 OR FIND_IN_SET('s07',sketches)>0,ext,NULL) AS `ext`
+//
+// OR is used because any one matching sketch is worth decoding the blob for.
+func buildSketchExtExpr(predicates []SketchPredicate, registry *schema.ColumnRegistry) (string, error) {
+	var conditions []string
 	for _, p := range predicates {
-		match, err := e.MayContain(ctx, tableName, p.SketchColumn, p.Value, recordID)
-		if err != nil {
-			return false, err
+		entry := registry.ResolveSketch(p.SketchKey)
+		if entry == nil {
+			// Unknown sketch key — no SET member exists, skip the condition.
+			// The predicate still evaluates server-side (ext will be NULL → pass through).
+			continue
 		}
-		if !match {
+		// Validate sketch name before interpolating into SQL.
+		if !isValidSketchName(entry.SketchName) {
+			return "", fmt.Errorf("invalid sketch name %q", entry.SketchName)
+		}
+		conditions = append(conditions,
+			fmt.Sprintf("FIND_IN_SET('%s',%s)>0", entry.SketchName, metastore.ColSketches))
+	}
+
+	if len(conditions) == 0 {
+		// No resolvable sketch keys — just select raw ext.
+		return metastore.ColExt, nil
+	}
+
+	return fmt.Sprintf("IF(%s,%s,NULL) AS `%s`",
+		strings.Join(conditions, " OR "),
+		metastore.ColExt,
+		metastore.ColExt,
+	), nil
+}
+
+// isValidSketchName checks that a sketch name matches the expected s01..s64 pattern.
+func isValidSketchName(name string) bool {
+	if len(name) != 3 || name[0] != 's' {
+		return false
+	}
+	if name[1] < '0' || name[1] > '9' || name[2] < '0' || name[2] > '9' {
+		return false
+	}
+	n := int(name[1]-'0')*10 + int(name[2]-'0')
+	return n >= 1 && n <= 64
+}
+
+// evaluateSketchPredicatesFromRow checks all sketch predicates against a row's
+// ext blob data. Returns true if no sketch says "definitely not present".
+// Rows without ext data or without a sketch for a given key pass through —
+// the sketch is an acceleration, not a filter requirement.
+func evaluateSketchPredicatesFromRow(extData []byte, predicates []SketchPredicate) (bool, error) {
+	if len(extData) == 0 || len(predicates) == 0 {
+		return true, nil
+	}
+
+	ext, err := decodeExtBlob(extData)
+	if err != nil {
+		return true, nil // can't decode → don't prune
+	}
+
+	for _, p := range predicates {
+		if !evaluateSketchFromExt(ext, p.SketchKey, p.Value) {
 			return false, nil
 		}
 	}
 	return true, nil
-}
-
-// hashToBucket computes a simple hash bucket index for a string value.
-// Uses FNV-1a-like hashing to distribute across numBuckets.
-func hashToBucket(value string, numBuckets int) int {
-	h := uint32(2166136261) // FNV offset basis
-	for i := 0; i < len(value); i++ {
-		h ^= uint32(value[i])
-		h *= 16777619 // FNV prime
-	}
-	return int(h % uint32(numBuckets))
 }

@@ -60,6 +60,14 @@ type AggRegistryEntry struct {
 	Status          string
 }
 
+// SketchRegistryEntry represents an active sketch SET member mapping.
+type SketchRegistryEntry struct {
+	TableName  string
+	SketchName string // SET member name (e.g. "s01")
+	SketchKey  string // logical field name (e.g. "uuid")
+	Status     string
+}
+
 // ColumnRegistry maps physical placeholder columns (dim_fNN, agg_fNN) to field metadata.
 // Thread-safe: RWMutex guards map reads/writes; a separate Mutex serializes slot allocation.
 //
@@ -86,6 +94,9 @@ type ColumnRegistry struct {
 	// columnName -> AggRegistryEntry
 	aggByColumn map[string]*AggRegistryEntry
 
+	// sketchKey -> SketchRegistryEntry (ACTIVE entries only)
+	sketchByKey map[string]*SketchRegistryEntry
+
 	nextDimSlot int
 	nextAggSlot int
 
@@ -103,6 +114,7 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 		dimByColumn: make(map[string]*DimRegistryEntry),
 		aggByKey:    make(map[string]*AggRegistryEntry),
 		aggByColumn: make(map[string]*AggRegistryEntry),
+		sketchByKey: make(map[string]*SketchRegistryEntry),
 		nextDimSlot: 1,
 		nextAggSlot: 1,
 	}
@@ -113,6 +125,7 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 		zap.String("table", tableName),
 		zap.Int("dims", len(cr.dimByKey)),
 		zap.Int("aggs", len(cr.aggByKey)),
+		zap.Int("sketches", len(cr.sketchByKey)),
 	)
 	return cr, nil
 }
@@ -182,7 +195,29 @@ func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
 		cr.aggByKey[key] = e
 		cr.aggByColumn[e.ColumnName] = e
 	}
-	return rows2.Err()
+	if err := rows2.Err(); err != nil {
+		return err
+	}
+
+	// Load ACTIVE sketches into in-memory map.
+	sketchQuery, sketchArgs, _ := sq.Select("sketch_name", "sketch_key").
+		From(metastore.SketchRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "state": statusActive}).
+		ToSql()
+	rows3, err := cr.db.QueryContext(ctx, sketchQuery, sketchArgs...)
+	if err != nil {
+		return fmt.Errorf("load sketch registry: %w", err)
+	}
+	defer rows3.Close()
+
+	for rows3.Next() {
+		e := &SketchRegistryEntry{TableName: cr.tableName, Status: statusActive}
+		if err := rows3.Scan(&e.SketchName, &e.SketchKey); err != nil {
+			return err
+		}
+		cr.sketchByKey[e.SketchKey] = e
+	}
+	return rows3.Err()
 }
 
 // loadSlotHighWaterMarks queries all registry entries (any state) to find the
@@ -244,6 +279,13 @@ func (cr *ColumnRegistry) ResolveAgg(aggKey, aggValue, aggType string) string {
 		return e.ColumnName
 	}
 	return ""
+}
+
+// ResolveSketch returns the registry entry for a sketch key, or nil if not found.
+func (cr *ColumnRegistry) ResolveSketch(sketchKey string) *SketchRegistryEntry {
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	return cr.sketchByKey[sketchKey]
 }
 
 // ResolveOrAllocateDim resolves an existing dim mapping or allocates a new slot.
@@ -841,6 +883,115 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 
 	cr.log.Info("batch allocated agg slots", zap.Int("count", len(slots)))
 	return result, nil
+}
+
+// ResolveOrAllocateSketches resolves logical sketch keys to SET member names
+// (s01..s64). Unlike dims/aggs, sketch slots are pre-allocated in the table
+// schema — no ALTER TABLE is needed. Resolution claims AVAILABLE rows in
+// _sketch_registry via UPDATE.
+//
+// Returns a map from sketch key (e.g. "uuid") to SET member name (e.g. "s03").
+func (cr *ColumnRegistry) ResolveOrAllocateSketches(ctx context.Context, keys []string) (map[string]string, error) {
+	result := make(map[string]string, len(keys))
+	var unresolved []string
+
+	// Fast path: check cache.
+	cr.mu.RLock()
+	for _, key := range keys {
+		if e, ok := cr.sketchByKey[key]; ok {
+			result[key] = e.SketchName
+		} else {
+			unresolved = append(unresolved, key)
+		}
+	}
+	cr.mu.RUnlock()
+
+	if len(unresolved) == 0 {
+		return result, nil
+	}
+
+	// Slow path: claim AVAILABLE slots.
+	cr.allocMu.Lock()
+	defer cr.allocMu.Unlock()
+
+	// Double-check after acquiring lock.
+	var stillUnresolved []string
+	cr.mu.RLock()
+	for _, key := range unresolved {
+		if e, ok := cr.sketchByKey[key]; ok {
+			result[key] = e.SketchName
+		} else {
+			stillUnresolved = append(stillUnresolved, key)
+		}
+	}
+	cr.mu.RUnlock()
+
+	if len(stillUnresolved) == 0 {
+		return result, nil
+	}
+
+	now := time.Now().UnixNano()
+	for _, key := range stillUnresolved {
+		sketchName, err := cr.claimSketchSlot(ctx, key, now)
+		if err != nil {
+			return nil, err
+		}
+
+		entry := &SketchRegistryEntry{
+			TableName:  cr.tableName,
+			SketchName: sketchName,
+			SketchKey:  key,
+			Status:     statusActive,
+		}
+		cr.mu.Lock()
+		cr.sketchByKey[key] = entry
+		cr.mu.Unlock()
+
+		result[key] = sketchName
+		cr.log.Info("claimed sketch slot", zap.String("sketchKey", key), zap.String("slot", sketchName))
+	}
+
+	return result, nil
+}
+
+// claimSketchSlot claims the first AVAILABLE sketch slot in a transaction,
+// sets it to ACTIVE with the given key, and returns the slot name.
+func (cr *ColumnRegistry) claimSketchSlot(ctx context.Context, key string, now int64) (string, error) {
+	tx, err := cr.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("claim sketch slot: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Claim the first AVAILABLE slot.
+	claimQuery := fmt.Sprintf(
+		"UPDATE %s SET sketch_key = ?, state = ?, created_at = ? WHERE table_name = ? AND state = ? ORDER BY sketch_name LIMIT 1",
+		metastore.SketchRegistryTable,
+	)
+	res, err := tx.ExecContext(ctx, claimQuery, key, statusActive, now, cr.tableName, statusAvailable)
+	if err != nil {
+		return "", fmt.Errorf("claim sketch slot for %q: %w", key, err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return "", fmt.Errorf("sketch slots exhausted: no AVAILABLE slots for key %q", key)
+	}
+
+	// Read back the claimed slot name within the same transaction.
+	var sketchName string
+	readQuery, readArgs, _ := sq.Select("sketch_name").
+		From(metastore.SketchRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "sketch_key": key, "state": statusActive}).
+		Limit(1).
+		ToSql()
+	if err := tx.QueryRowContext(ctx, readQuery, readArgs...).Scan(&sketchName); err != nil {
+		return "", fmt.Errorf("read claimed sketch slot for %q: %w", key, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("claim sketch slot: commit: %w", err)
+	}
+	return sketchName, nil
 }
 
 // ActiveDimColumns returns the column names of all active dimension entries.

@@ -60,10 +60,11 @@ func (s *Service) IngestWithCallback(ctx context.Context, tableName string, reco
 	}
 	rec.Flushed = flushed
 
-	// Extract dim/agg values and type metadata from proto. Physical column
+	// Extract dim/agg/sketch values and type metadata from proto. Physical column
 	// resolution happens at batch flush time (BatchingWriter.flushBatch).
 	extractDims(record.Dim, rec)
 	extractAggs(record.Agg, rec)
+	extractSketches(record.Sketch, rec)
 
 	return s.writer.Submit(ctx, tableName, rec)
 }
@@ -145,6 +146,16 @@ func extractAggs(aggs []*pb.AggEntry, rec *metastore.FileRecord) {
 			ValueType: valueType,
 			AliasCol:  a.AliasColumn,
 		})
+	}
+}
+
+// extractSketches populates FileRecord.Sketches with logical keys.
+func extractSketches(sketches []*pb.SketchEntry, rec *metastore.FileRecord) {
+	for _, s := range sketches {
+		if s.SketchKey == "" || len(s.Data) == 0 {
+			continue
+		}
+		rec.Sketches[s.SketchKey] = s.Data
 	}
 }
 

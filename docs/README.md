@@ -40,6 +40,7 @@ Understanding-oriented explanations of how the system works, organized by subsys
 **Cross-cutting:**
 - [Data Model](concepts/data-model.md) — What data CLP handles, file formats, deployment modes
 - [Architecture Overview](concepts/overview.md) — System overview, data lifecycle, goroutine model, components
+- [Sketches](concepts/sketches.md) — Bloom filter acceleration for high-cardinality fields
 - [Semantic Extraction](concepts/semantic-extraction.md) — log-surgeon, MPT, ERTs, LLM-powered schema generation
 - [Glossary](concepts/glossary.md) — CLP terminology: data formats, schema columns, lifecycle states
 

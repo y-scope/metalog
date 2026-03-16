@@ -95,6 +95,16 @@ type FileRecord struct {
 	DimMeta []DimMeta
 	AggMeta []AggMeta
 
+	// Sketch data: keyed by logical field name (e.g. "uuid"), values are
+	// msgpack-encoded BloomFilterSnapshot bytes from clp-ffi-go.
+	Sketches map[string][]byte
+
+	// Populated at batch flush time after sketch registry resolution.
+	// SketchSetValue is the comma-joined SET members (e.g. "s01,s03").
+	// ExtData is the LZ4-compressed msgpack ext blob containing sketch data.
+	SketchSetValue string
+	ExtData        []byte
+
 	// Flushed receives nil after this record has been successfully written to the
 	// database, or an error if the flush failed. Used by the Kafka consumer to
 	// know when it's safe to commit offsets. Buffered (cap 1) so the writer

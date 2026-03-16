@@ -56,6 +56,10 @@ func newTestRegistry(t *testing.T) *schema.ColumnRegistry {
 		AddRow("agg_f04", "latency", nil, "AVG", "FLOAT", nil)
 	mock.ExpectQuery("SELECT").WillReturnRows(aggRows)
 
+	// Mock ACTIVE sketch registry query
+	sketchRows := sqlmock.NewRows([]string{"sketch_name", "sketch_key"})
+	mock.ExpectQuery("SELECT").WillReturnRows(sketchRows)
+
 	registry, err := schema.NewColumnRegistry(context.Background(), db, "test_table", false, zap.NewNop())
 	require.NoError(t, err)
 	return registry

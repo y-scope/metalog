@@ -89,6 +89,28 @@ Float aggregations — metrics (`SUM`, `AVG`, `MIN`, `MAX`):
 
 The `{type}` component in the wire key is lowercase (e.g., `eq`, `gte`); `BatchingWriter` uppercases it when looking up the `AggregationType` enum.
 
+### Sketch Entries (SET slots `s01`–`s64`)
+
+Sketch entries carry bloom filter data for high-cardinality fields. The **`_sketch_registry`** table maps each SET slot to its logical metadata:
+
+| Field | Description | Examples |
+|-------|-------------|---------|
+| `sketch_name` | SET member (pre-allocated) | `s01`, `s02`, ..., `s64` |
+| `sketch_key` | Logical field name | `uuid`, `trace_id` |
+| `state` | ACTIVE, INVALIDATED, AVAILABLE | `ACTIVE` |
+
+Unlike dims/aggs, sketch slots are pre-allocated in the table schema — no `ALTER TABLE` is needed. The registry uses `UPDATE ... SET state='ACTIVE'` to claim AVAILABLE slots.
+
+**Wire format (transformer API):**
+
+| Wire key format | `sketch_key` | `type` | Example |
+|-----------------|-------------|--------|---------|
+| `sketch/{type}/{field}` | `{field}` | `{type}` | `sketch/parquet_sbbf_xxhash64/uuid` |
+
+The value is base64-encoded raw SBBF block bytes (not msgpack). The Kafka consumer reconstructs the msgpack snapshot `{type, data}` from the key components.
+
+See [Sketches](../concepts/sketches.md) for the full ingestion and query pipeline.
+
 See [Schema Evolution](../guides/evolve-schema.md) for column lifecycle (ACTIVE → INVALIDATED → AVAILABLE), online DDL details, and the slot allocation algorithm.
 
 ---

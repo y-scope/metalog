@@ -7,6 +7,6 @@
 // and supports cursor-based pagination for large result sets.
 //
 // Additional facilities include an LRU [Cache] for resolved column mappings
-// and a [SketchEvaluator] for approximate query planning using HyperLogLog
-// sketches.
+// and bloom filter (SBBF) sketch evaluation for accelerating queries on
+// high-cardinality fields.
 package query

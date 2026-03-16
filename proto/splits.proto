@@ -41,6 +41,7 @@ message StreamSplitsRequest {
     bool include_cursor = 15;
     int64 stream_idle_timeout_ms = 16;
     bool allow_unindexed_sort = 17;
+    repeated string sketch_acceleration = 18;  // field names to accelerate via bloom filter sketches
 }
 
 message StreamSplitsResponse {

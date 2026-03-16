@@ -16,6 +16,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/mariadb v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/minio v0.40.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	github.com/y-scope/clp-ffi-go v0.0.9-beta.0.20260116054246-96f4db7096cc
 	go.uber.org/zap v1.27.1
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
@@ -37,6 +38,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.19 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
+	github.com/axiomhq/splitblockbloom v0.0.0-20240329191902-fb525502070b // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect

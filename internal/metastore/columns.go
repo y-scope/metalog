@@ -50,6 +50,8 @@ func baseCols() []string {
 		ColClpArchiveSizeBytes,
 		ColRetentionDays,
 		ColExpiresAt,
+		ColSketches,
+		ColExt,
 	}
 }
 
@@ -72,6 +74,8 @@ func guardedUpdateCols() []string {
 		ColClpArchiveSizeBytes,
 		ColRetentionDays,
 		ColExpiresAt,
+		ColSketches,
+		ColExt,
 	}
 }
 
