@@ -46,7 +46,7 @@ Consolidation is a full data transformation pipeline — not just compression or
 | **PII detection** _(if configured)_ | Identify sensitive data via patterns, NER, and ML models |
 | **PII obfuscation** _(if configured)_ | Mask, redact, or tokenize detected sensitive fields |
 | **Encryption** _(if configured)_ | Encrypt sensitive content for compliance requirements |
-| **Filter computation** | Build probabilistic filters (bloom and cuckoo) for search |
+| **Filter computation** | Build bloom filters for search acceleration |
 | **Grouping** | Combine files by dimensions (app_id, service, time window) |
 | **Compression** (CLP encoding) | Columnar encoding, cross-file deduplication, entropy coding |
 

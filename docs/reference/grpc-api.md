@@ -116,14 +116,15 @@ rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse)
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `table` | string | Yes | Metadata table name (e.g., `"clp_spark"`) |
+| `projection` | repeated string | No | Columns to include in results. Empty (default) = all columns. See [Column Projection](#column-projection). |
+| `filter_expression` | string | No | SQL WHERE fragment for hard filtering (e.g., `state = 'ARCHIVE_CLOSED'`). See [Filter Expressions](#filter-expressions). |
+| `sketch_expression` | string | No | SQL WHERE fragment for bloom filter pruning (`=` and `IN` only). See [Sketch Pruning](#sketch-pruning). |
 | `order_by` | repeated OrderBy | Yes | Sort specification. At least one entry required. `"id"` is not allowed — it is always the implicit final tiebreaker. |
 | `limit` | int32 | No | Maximum results to return. `0` (default) = unlimited. |
-| `filter_expression` | string | No | SQL WHERE fragment for filtering (including state, e.g., `state = 'ARCHIVE_CLOSED'`). See [Filter Expressions](#filter-expressions). |
 | `cursor` | KeysetCursor | No | Resume token from a previous stream. Must have the same `order_by` as the original request. |
 | `include_cursor` | bool | No | If true, each response message includes a continuation `cursor`. Default false. |
-| `allow_unindexed_sort` | bool | No | If true, allow sorting on non-indexed columns (causes a full table scan per page). Default false — the server rejects unindexed sort columns. |
-| `projection` | repeated string | No | Columns to include in results. Empty (default) = all columns. See [Column Projection](#column-projection). |
-| `stream_idle_timeout_ms` | int64 | No | Max milliseconds to wait when the client's receive buffer is full. Only triggers for completely stuck/frozen clients, not slow ones. `0` = server default (60 000 ms). |
+| `stream_idle_timeout_ms` | int64 | No | Max milliseconds to wait when the client's receive buffer is full. `0` = server default (60 000 ms). |
+| `allow_unindexed_sort` | bool | No | If true, allow sorting on non-indexed columns (full table scan per page). Default false. |
 
 #### Response fields
 
@@ -189,9 +190,9 @@ message StreamSplitsRequest {
   string          table                  = 1;   // e.g., "clp_spark"
   repeated string projection             = 2;   // column projection (empty = all)
   string          filter_expression      = 3;   // WHERE fragment (server-validated)
-  repeated OrderBy order_by              = 4;   // sort spec (required, ≥1 entry; "id" not allowed)
-  int32           limit                  = 5;   // 0 = unlimited
-  string          sketch_expression      = 6;   // SQL WHERE for bloom filter pruning (= and IN only)
+  string          sketch_expression      = 4;   // WHERE fragment for bloom filter pruning (= and IN only)
+  repeated OrderBy order_by              = 5;   // sort spec (required, ≥1 entry; "id" not allowed)
+  int32           limit                  = 6;   // 0 = unlimited
 
   reserved 7 to 15;
 
@@ -801,7 +802,7 @@ internal/
 │   ├── cache.go            — TTL-based in-memory cache
 │   ├── cursor.go           — keyset cursor encoding/decoding
 │   ├── resolve.go          — column resolution and projection
-│   └── sketch.go           — bloom/cuckoo sketch evaluation
+│   └── sketch.go           — bloom filter sketch evaluation
 proto/
 ├── splits.proto            — SplitQueryService + Split messages
 ├── metadata.proto          — MetadataService messages

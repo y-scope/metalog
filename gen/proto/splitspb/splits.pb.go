@@ -295,9 +295,9 @@ type StreamSplitsRequest struct {
 	Table               string                 `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
 	Projection          []string               `protobuf:"bytes,2,rep,name=projection,proto3" json:"projection,omitempty"`
 	FilterExpression    string                 `protobuf:"bytes,3,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"`
-	OrderBy             []*OrderBy             `protobuf:"bytes,4,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	Limit               int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
-	SketchExpression    string                 `protobuf:"bytes,6,opt,name=sketch_expression,json=sketchExpression,proto3" json:"sketch_expression,omitempty"`
+	SketchExpression    string                 `protobuf:"bytes,4,opt,name=sketch_expression,json=sketchExpression,proto3" json:"sketch_expression,omitempty"`
+	OrderBy             []*OrderBy             `protobuf:"bytes,5,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
+	Limit               int32                  `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
 	Cursor              *KeysetCursor          `protobuf:"bytes,16,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	IncludeCursor       bool                   `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`
 	StreamIdleTimeoutMs int64                  `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"`

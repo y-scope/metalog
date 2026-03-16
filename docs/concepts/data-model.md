@@ -55,7 +55,7 @@ Each CLP file contains:
 - **Time bounds** (`min_timestamp`, `max_timestamp`) — enables overlap-based pruning
 - **Dimensions** — file-level constants (e.g., service, host) that apply to every record
 - **Counts** — pre-computed subset counts for common filter values
-- **Sketches** — probabilistic membership filters (bloom, cuckoo)
+- **Sketches** — probabilistic membership filters (bloom filters)
 - **Semantic model** — auto-discovered structure (log types, field types, relationships)
 
 This metadata enables the query engine to skip files without opening them. See [Query Execution](query-execution.md) for how pruning and early termination work.

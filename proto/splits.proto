@@ -37,9 +37,9 @@ message StreamSplitsRequest {
     string table = 1;
     repeated string projection = 2;             // columns to return (empty = all)
     string filter_expression = 3;               // SQL WHERE fragment (server-validated)
-    repeated OrderBy order_by = 4;              // sort specification
-    int32 limit = 5;                            // max results (0 = unlimited)
-    string sketch_expression = 6;                   // SQL WHERE for bloom filter pruning (= and IN only)
+    string sketch_expression = 4;               // SQL WHERE for bloom filter pruning (= and IN only)
+    repeated OrderBy order_by = 5;              // sort specification
+    int32 limit = 6;                            // max results (0 = unlimited)
 
     reserved 7 to 15;                           // reserved for future core fields
 

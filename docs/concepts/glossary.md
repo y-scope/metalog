@@ -40,7 +40,7 @@ Pre-computed aggregate stored at the file level. Supports threshold comparisons 
 Virtual column storing MD5 hash of a path. `clp_ir_path_hash` has a UNIQUE index (each IR path appears exactly once); `clp_archive_path_hash` has a non-unique index (one archive contains many IR files). Enables O(1) point lookups without indexing long path strings directly. See [Metadata Tables](../reference/metadata-tables.md).
 
 ### Sketch Column (`sketches` / `ext`)
-Probabilistic data structure stored per file. The `sketches` SET column declares which sketch slots contain data; the `ext` MEDIUMBLOB stores the filter data as LZ4-compressed msgpack. Bloom filters or Cuckoo filters answer "definitely not" vs. "maybe" membership queries for high-cardinality values. Used in split pruning to eliminate files before opening them. See [Metadata Tables](../reference/metadata-tables.md).
+Probabilistic data structure stored per file. The `sketches` SET column declares which sketch slots contain data; the `ext` MEDIUMBLOB stores the filter data as LZ4-compressed msgpack. Bloom filters answer "definitely not" vs. "maybe" membership queries for high-cardinality values. Used in split pruning to eliminate files before opening them. See [Metadata Tables](../reference/metadata-tables.md).
 
 ---
 
