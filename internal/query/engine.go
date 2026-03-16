@@ -50,8 +50,8 @@ type QueryParams struct {
 	CursorID         int64
 	HasCursor        bool
 	AllowUnindexed   bool
-	Registry         *schema.ColumnRegistry
-	SketchAcceleration []string // field names to accelerate via bloom filter sketches
+	Registry       *schema.ColumnRegistry
+	SketchExpr     string // SQL WHERE for bloom filter pruning (= and IN only)
 }
 
 // OrderBySpec defines a sort column and direction.
@@ -339,8 +339,12 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 	// DB filter but can be rejected before the caller opens the file.
 	var sketchPredicates []SketchPredicate
 	var sketchExtExpr string
-	if len(params.SketchAcceleration) > 0 && filterExpr != "" {
-		sketchPredicates = CollectSketchValues(filterExpr, params.SketchAcceleration, params.Registry)
+	if params.SketchExpr != "" {
+		var err error
+		sketchPredicates, err = ParseSketchExpression(params.SketchExpr, params.Registry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sketch_expression: %w", err)
+		}
 	}
 	if len(sketchPredicates) > 0 && params.Registry != nil {
 		var err error

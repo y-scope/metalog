@@ -297,7 +297,7 @@ type StreamSplitsRequest struct {
 	FilterExpression    string                 `protobuf:"bytes,3,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"`
 	OrderBy             []*OrderBy             `protobuf:"bytes,4,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
 	Limit               int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
-	SketchAcceleration  []string               `protobuf:"bytes,6,rep,name=sketch_acceleration,json=sketchAcceleration,proto3" json:"sketch_acceleration,omitempty"`
+	SketchExpression    string                 `protobuf:"bytes,6,opt,name=sketch_expression,json=sketchExpression,proto3" json:"sketch_expression,omitempty"`
 	Cursor              *KeysetCursor          `protobuf:"bytes,16,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	IncludeCursor       bool                   `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`
 	StreamIdleTimeoutMs int64                  `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"`
@@ -399,11 +399,11 @@ func (x *StreamSplitsRequest) GetAllowUnindexedSort() bool {
 	return false
 }
 
-func (x *StreamSplitsRequest) GetSketchAcceleration() []string {
+func (x *StreamSplitsRequest) GetSketchExpression() string {
 	if x != nil {
-		return x.SketchAcceleration
+		return x.SketchExpression
 	}
-	return nil
+	return ""
 }
 
 type StreamSplitsResponse struct {

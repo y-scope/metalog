@@ -137,7 +137,7 @@ func TestEvaluateSketchFromExt_UnknownType(t *testing.T) {
 }
 
 func TestEvaluateSketchPredicatesFromRow_NilExt(t *testing.T) {
-	preds := []SketchPredicate{{SketchKey: "uuid", Value: "abc"}}
+	preds := []SketchPredicate{{SketchKey: "uuid", Values: []string{"abc"}}}
 	pass, err := evaluateSketchPredicatesFromRow(nil, preds)
 	assert.NoError(t, err)
 	assert.True(t, pass) // no ext → pass through
@@ -147,7 +147,7 @@ func TestEvaluateSketchPredicatesFromRow_Match(t *testing.T) {
 	filterData := buildTestFilter([]string{"abc-123"}, 128)
 	blob := buildTestExtBlob(t, "uuid", filterData)
 
-	preds := []SketchPredicate{{SketchKey: "uuid", Value: "abc-123"}}
+	preds := []SketchPredicate{{SketchKey: "uuid", Values: []string{"abc-123"}}}
 	pass, err := evaluateSketchPredicatesFromRow(blob, preds)
 	assert.NoError(t, err)
 	assert.True(t, pass)
@@ -157,7 +157,7 @@ func TestEvaluateSketchPredicatesFromRow_Prune(t *testing.T) {
 	filterData := buildTestFilter([]string{"abc-123"}, 128)
 	blob := buildTestExtBlob(t, "uuid", filterData)
 
-	preds := []SketchPredicate{{SketchKey: "uuid", Value: "not-present"}}
+	preds := []SketchPredicate{{SketchKey: "uuid", Values: []string{"not-present"}}}
 	pass, err := evaluateSketchPredicatesFromRow(blob, preds)
 	assert.NoError(t, err)
 	assert.False(t, pass) // bloom filter says definitely not → prune
@@ -194,8 +194,8 @@ func TestEvaluateSketchPredicatesFromRow_MultiplePredicates(t *testing.T) {
 
 	// Both match → pass
 	preds := []SketchPredicate{
-		{SketchKey: "uuid", Value: "abc"},
-		{SketchKey: "trace_id", Value: "xyz"},
+		{SketchKey: "uuid", Values: []string{"abc"}},
+		{SketchKey: "trace_id", Values: []string{"xyz"}},
 	}
 	pass, err := evaluateSketchPredicatesFromRow(blob, preds)
 	assert.NoError(t, err)
@@ -203,8 +203,8 @@ func TestEvaluateSketchPredicatesFromRow_MultiplePredicates(t *testing.T) {
 
 	// One doesn't match → prune
 	preds = []SketchPredicate{
-		{SketchKey: "uuid", Value: "abc"},
-		{SketchKey: "trace_id", Value: "not-present"},
+		{SketchKey: "uuid", Values: []string{"abc"}},
+		{SketchKey: "trace_id", Values: []string{"not-present"}},
 	}
 	pass, err = evaluateSketchPredicatesFromRow(blob, preds)
 	assert.NoError(t, err)

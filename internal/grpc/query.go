@@ -78,10 +78,10 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 	// Build query params
 	params := &query.QueryParams{
 		TableName:        req.GetTable(),
-		FilterExpr:       req.GetFilterExpression(),
-		AllowUnindexed:   req.GetAllowUnindexedSort(),
-		Registry:         h.registryLookup(req.GetTable()),
-		SketchAcceleration: req.GetSketchAcceleration(),
+		FilterExpr:     req.GetFilterExpression(),
+		AllowUnindexed: req.GetAllowUnindexedSort(),
+		Registry:       h.registryLookup(req.GetTable()),
+		SketchExpr:     req.GetSketchExpression(),
 	}
 
 	// Columns (projection)

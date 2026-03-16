@@ -7,64 +7,84 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- CollectSketchValues tests ---
+// --- ParseSketchExpression tests ---
 
-func TestCollectSketchValues_Empty(t *testing.T) {
-	preds := CollectSketchValues("", []string{"uuid"}, nil)
+func TestParseSketchExpression_Empty(t *testing.T) {
+	preds, err := ParseSketchExpression("", nil)
+	assert.NoError(t, err)
 	assert.Nil(t, preds)
 }
 
-func TestCollectSketchValues_NoFields(t *testing.T) {
-	preds := CollectSketchValues("min_timestamp > 1000", nil, nil)
-	assert.Nil(t, preds)
-}
-
-func TestCollectSketchValues_NoMatchingPredicates(t *testing.T) {
-	preds := CollectSketchValues("min_timestamp > 1000 AND state = 'IR_CLOSED'", []string{"uuid"}, nil)
-	assert.Nil(t, preds)
-}
-
-func TestCollectSketchValues_SingleEquality(t *testing.T) {
-	preds := CollectSketchValues("uuid = 'abc-123'", []string{"uuid"}, nil)
+func TestParseSketchExpression_SingleEquality(t *testing.T) {
+	preds, err := ParseSketchExpression("uuid = 'abc-123'", nil)
+	require.NoError(t, err)
 	require.Len(t, preds, 1)
 	assert.Equal(t, "uuid", preds[0].SketchKey)
-	assert.Equal(t, "abc-123", preds[0].Value)
+	assert.Equal(t, []string{"abc-123"}, preds[0].Values)
 }
 
-func TestCollectSketchValues_MixedAcceleratedAndRegular(t *testing.T) {
-	preds := CollectSketchValues("uuid = 'abc' AND min_timestamp > 1000", []string{"uuid"}, nil)
+func TestParseSketchExpression_IN(t *testing.T) {
+	preds, err := ParseSketchExpression("uuid IN ('abc', 'def', 'ghi')", nil)
+	require.NoError(t, err)
 	require.Len(t, preds, 1)
 	assert.Equal(t, "uuid", preds[0].SketchKey)
-	assert.Equal(t, "abc", preds[0].Value)
+	assert.Equal(t, []string{"abc", "def", "ghi"}, preds[0].Values)
 }
 
-func TestCollectSketchValues_MultipleAcceleratedFields(t *testing.T) {
-	preds := CollectSketchValues("uuid = 'val1' AND trace_id = 'val2'", []string{"uuid", "trace_id"}, nil)
+func TestParseSketchExpression_MultipleFieldsAND(t *testing.T) {
+	preds, err := ParseSketchExpression("uuid = 'val1' AND trace_id = 'val2'", nil)
+	require.NoError(t, err)
 	require.Len(t, preds, 2)
 
-	cols := map[string]string{}
+	keys := map[string][]string{}
 	for _, p := range preds {
-		cols[p.SketchKey] = p.Value
+		keys[p.SketchKey] = p.Values
 	}
-	assert.Equal(t, "val1", cols["uuid"])
-	assert.Equal(t, "val2", cols["trace_id"])
+	assert.Equal(t, []string{"val1"}, keys["uuid"])
+	assert.Equal(t, []string{"val2"}, keys["trace_id"])
 }
 
-func TestCollectSketchValues_NonEqualityIgnored(t *testing.T) {
-	preds := CollectSketchValues("uuid > 'value'", []string{"uuid"}, nil)
-	assert.Nil(t, preds)
+func TestParseSketchExpression_MixedEqualityAndIN(t *testing.T) {
+	preds, err := ParseSketchExpression("uuid = 'abc' AND trace_id IN ('x', 'y')", nil)
+	require.NoError(t, err)
+	require.Len(t, preds, 2)
 }
 
-func TestCollectSketchValues_OrNotCollected(t *testing.T) {
-	// Predicates inside OR must NOT be collected — pruning based on one side
-	// of an OR would incorrectly reject rows matching the other side.
-	preds := CollectSketchValues("uuid = 'abc' OR state = 'IR_CLOSED'", []string{"uuid"}, nil)
-	assert.Nil(t, preds)
+// --- Rejected expressions ---
+
+func TestParseSketchExpression_RejectsOR(t *testing.T) {
+	_, err := ParseSketchExpression("uuid = 'abc' OR trace_id = 'def'", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "OR")
 }
 
-func TestCollectSketchValues_NonAcceleratedFieldNotCollected(t *testing.T) {
-	preds := CollectSketchValues("uuid = 'abc' AND min_timestamp > 1000", []string{"trace_id"}, nil)
-	assert.Nil(t, preds)
+func TestParseSketchExpression_RejectsNotEqual(t *testing.T) {
+	_, err := ParseSketchExpression("uuid != 'abc'", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operator")
+}
+
+func TestParseSketchExpression_RejectsGreaterThan(t *testing.T) {
+	_, err := ParseSketchExpression("uuid > 'abc'", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operator")
+}
+
+func TestParseSketchExpression_RejectsLIKE(t *testing.T) {
+	_, err := ParseSketchExpression("uuid LIKE '%abc%'", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operator")
+}
+
+func TestParseSketchExpression_RejectsNonStringLiteral(t *testing.T) {
+	_, err := ParseSketchExpression("uuid = 123", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "string literal")
+}
+
+func TestParseSketchExpression_RejectsInvalidSQL(t *testing.T) {
+	_, err := ParseSketchExpression("not valid sql !!!", nil)
+	assert.Error(t, err)
 }
 
 // --- SBBF Contains tests ---

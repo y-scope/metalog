@@ -10,74 +10,113 @@ import (
 	"github.com/y-scope/metalog/internal/schema"
 )
 
-// SketchPredicate is a sketch-based filter extracted from a WHERE clause.
-// The caller specifies which fields to accelerate; the engine finds equality
-// predicates on those fields and evaluates them against bloom filter data
-// in the ext column.
+// SketchPredicate is a bloom filter check extracted from a sketch expression.
+// Multiple predicates are ANDed: all must pass for a file to be kept.
 type SketchPredicate struct {
-	SketchKey string // logical key (e.g. "uuid")
-	Value     string // search value
+	SketchKey string   // logical key (e.g. "uuid")
+	Values    []string // search values (any match → keep file)
 }
 
-// CollectSketchValues scans a filter expression for equality predicates on
-// the specified field names and returns the values. The filter expression is
-// NOT modified — predicates remain in the SQL for correctness. The bloom filter
-// provides additional pruning on top of the DB filter.
-func CollectSketchValues(expr string, fields []string, registry *schema.ColumnRegistry) []SketchPredicate {
-	if expr == "" || len(fields) == 0 {
-		return nil
-	}
-
-	// Build a set of physical column names to look for.
-	// The filter expression has already been rewritten to physical names,
-	// so we need to resolve dim keys to their physical equivalents.
-	targetCols := make(map[string]string) // physical col → sketch key
-	for _, field := range fields {
-		physCol := field
-		if registry != nil {
-			if resolved := registry.ResolveDim(field); resolved != "" {
-				physCol = resolved
-			}
-		}
-		targetCols[physCol] = field
+// ParseSketchExpression parses a SQL WHERE fragment and extracts bloom filter
+// predicates. Only equality (=) and IN operators on string literals are
+// supported. AND is supported for combining predicates across fields.
+//
+// Supported:
+//
+//	field = 'value'
+//	field IN ('a', 'b', 'c')
+//	field1 = 'x' AND field2 IN ('y', 'z')
+//
+// Rejected with error:
+//
+//	!=, NOT IN, <, >, <=, >=, LIKE, OR, NOT
+func ParseSketchExpression(expr string, registry *schema.ColumnRegistry) ([]SketchPredicate, error) {
+	if expr == "" {
+		return nil, nil
 	}
 
 	stmt, err := sqlParser.Parse("SELECT 1 FROM t WHERE " + expr)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("parse sketch expression: %w", err)
 	}
 	sel, ok := stmt.(*sqlparser.Select)
 	if !ok || sel.Where == nil {
-		return nil
+		return nil, fmt.Errorf("invalid sketch expression")
 	}
 
 	var predicates []SketchPredicate
-	collectValuesFromExpr(sel.Where.Expr, targetCols, &predicates)
-	return predicates
+	if err := extractSketchPredicates(sel.Where.Expr, registry, &predicates); err != nil {
+		return nil, err
+	}
+	if len(predicates) == 0 {
+		return nil, fmt.Errorf("sketch expression contains no usable predicates")
+	}
+	return predicates, nil
 }
 
-// collectValuesFromExpr recursively finds equality predicates on target columns
-// and collects their values. Does not modify the expression tree.
-func collectValuesFromExpr(node sqlparser.Expr, targets map[string]string, out *[]SketchPredicate) {
+// extractSketchPredicates recursively walks the AST and extracts equality/IN
+// predicates. Returns an error for unsupported operators.
+func extractSketchPredicates(node sqlparser.Expr, registry *schema.ColumnRegistry, out *[]SketchPredicate) error {
 	switch n := node.(type) {
 	case *sqlparser.AndExpr:
-		collectValuesFromExpr(n.Left, targets, out)
-		collectValuesFromExpr(n.Right, targets, out)
+		if err := extractSketchPredicates(n.Left, registry, out); err != nil {
+			return err
+		}
+		return extractSketchPredicates(n.Right, registry, out)
+
+	case *sqlparser.OrExpr:
+		return fmt.Errorf("OR is not supported in sketch expressions (use AND to combine predicates)")
+
+	case *sqlparser.NotExpr:
+		return fmt.Errorf("NOT is not supported in sketch expressions")
 
 	case *sqlparser.ComparisonExpr:
-		if n.Operator == sqlparser.EqualOp {
-			if col, ok := n.Left.(*sqlparser.ColName); ok {
-				colName := col.Name.String()
-				if sketchKey, found := targets[colName]; found {
-					if lit, ok := n.Right.(*sqlparser.Literal); ok && lit.Type == sqlparser.StrVal {
-						*out = append(*out, SketchPredicate{
-							SketchKey: sketchKey,
-							Value:     lit.Val,
-						})
-					}
-				}
+		col, ok := n.Left.(*sqlparser.ColName)
+		if !ok {
+			return fmt.Errorf("unsupported left-hand side in sketch expression: %s", sqlparser.String(n.Left))
+		}
+		colName := col.Name.String()
+
+		// Resolve logical name to sketch key.
+		sketchKey := colName
+		if registry != nil {
+			if resolved := registry.ResolveDim(colName); resolved != "" {
+				// colName is a logical dim key → use it as sketch key.
+				sketchKey = colName
 			}
 		}
+
+		switch n.Operator {
+		case sqlparser.EqualOp:
+			lit, ok := n.Right.(*sqlparser.Literal)
+			if !ok || lit.Type != sqlparser.StrVal {
+				return fmt.Errorf("sketch expression: = requires a string literal, got %s", sqlparser.String(n.Right))
+			}
+			*out = append(*out, SketchPredicate{SketchKey: sketchKey, Values: []string{lit.Val}})
+			return nil
+
+		case sqlparser.InOp:
+			tuple, ok := n.Right.(sqlparser.ValTuple)
+			if !ok {
+				return fmt.Errorf("sketch expression: IN requires a value list")
+			}
+			var values []string
+			for _, v := range tuple {
+				lit, ok := v.(*sqlparser.Literal)
+				if !ok || lit.Type != sqlparser.StrVal {
+					return fmt.Errorf("sketch expression: IN values must be string literals, got %s", sqlparser.String(v))
+				}
+				values = append(values, lit.Val)
+			}
+			*out = append(*out, SketchPredicate{SketchKey: sketchKey, Values: values})
+			return nil
+
+		default:
+			return fmt.Errorf("unsupported operator %q in sketch expression (only = and IN are supported)", n.Operator.ToString())
+		}
+
+	default:
+		return fmt.Errorf("unsupported expression type %T in sketch expression", node)
 	}
 }
 
@@ -100,11 +139,8 @@ func buildSketchExtExpr(predicates []SketchPredicate, registry *schema.ColumnReg
 	for _, p := range predicates {
 		entry := registry.ResolveSketch(p.SketchKey)
 		if entry == nil {
-			// Unknown sketch key — no SET member exists, skip the condition.
-			// The predicate still evaluates server-side (ext will be NULL → pass through).
 			continue
 		}
-		// Validate sketch name before interpolating into SQL.
 		if !isValidSketchName(entry.SketchName) {
 			return "", fmt.Errorf("invalid sketch name %q", entry.SketchName)
 		}
@@ -113,7 +149,6 @@ func buildSketchExtExpr(predicates []SketchPredicate, registry *schema.ColumnReg
 	}
 
 	if len(conditions) == 0 {
-		// No resolvable sketch keys — just select raw ext.
 		return metastore.ColExt, nil
 	}
 
@@ -138,6 +173,7 @@ func isValidSketchName(name string) bool {
 
 // evaluateSketchPredicatesFromRow checks all sketch predicates against a row's
 // ext blob data. Returns true if no sketch says "definitely not present".
+// For multi-value predicates (IN), at least one value must pass.
 // Rows without ext data or without a sketch for a given key pass through —
 // the sketch is an acceleration, not a filter requirement.
 func evaluateSketchPredicatesFromRow(extData []byte, predicates []SketchPredicate) (bool, error) {
@@ -151,7 +187,15 @@ func evaluateSketchPredicatesFromRow(extData []byte, predicates []SketchPredicat
 	}
 
 	for _, p := range predicates {
-		if !evaluateSketchFromExt(ext, p.SketchKey, p.Value) {
+		// For multi-value (IN), any match means the file might contain a match.
+		anyMatch := false
+		for _, v := range p.Values {
+			if evaluateSketchFromExt(ext, p.SketchKey, v) {
+				anyMatch = true
+				break
+			}
+		}
+		if !anyMatch {
 			return false, nil
 		}
 	}

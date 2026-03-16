@@ -191,7 +191,7 @@ message StreamSplitsRequest {
   string          filter_expression      = 3;   // WHERE fragment (server-validated)
   repeated OrderBy order_by              = 4;   // sort spec (required, ≥1 entry; "id" not allowed)
   int32           limit                  = 5;   // 0 = unlimited
-  repeated string sketch_acceleration    = 6;   // bloom filter acceleration fields
+  string          sketch_expression      = 6;   // SQL WHERE for bloom filter pruning (= and IN only)
 
   reserved 7 to 15;
 
@@ -320,29 +320,37 @@ Expressions are validated against a whitelist:
 
 Semicolons are rejected. Unknown column names cause `INVALID_ARGUMENT`.
 
-### Sketch acceleration
+### Sketch pruning
 
-Use the `sketch_acceleration` field in `StreamSplitsRequest` to accelerate equality predicates
-using bloom filter sketches. The filter expression itself uses normal SQL — no special syntax.
+Use `sketch_expression` to prune files using bloom filter sketches. This is a separate
+SQL WHERE fragment evaluated against bloom filter data — not a hard filter.
 
 ```protobuf
 StreamSplitsRequest {
   filter_expression: "uuid = 'abc-123' AND min_timestamp > 1000"
-  sketch_acceleration: ["uuid"]
+  sketch_expression: "uuid = 'abc-123'"
 }
 ```
 
-The server transparently extracts the `uuid = 'abc-123'` predicate and evaluates it against
-bloom filter data in the `ext` column. Files whose bloom filter says "definitely not present"
-are pruned before returning. Files without a sketch for the field pass through normally.
+The server parses `sketch_expression`, checks each file's bloom filter, and drops files
+where the bloom filter says "definitely not present". Files without a sketch for the
+field pass through normally.
 
-Available sketch fields: query `MetadataService/ListSketches`.
+**Supported syntax:**
+- `field = 'value'` — single equality check
+- `field IN ('a', 'b', 'c')` — any-match check
+- `field1 = 'x' AND field2 = 'y'` — multiple fields (all must pass)
+
+**Rejected (returns INVALID_ARGUMENT):**
+- `!=`, `NOT IN`, `<`, `>`, `<=`, `>=`, `LIKE` — bloom filters can't prove absence or ranges
+- `OR` — ambiguous pruning semantics across fields
+- `NOT (...)` — negation not supported
 
 **Behavior:**
-- Only equality (`=`) predicates on the named fields are accelerated.
-- Non-equality predicates and predicates inside `OR` are left in the SQL filter as-is.
-- If a file has no sketch for the requested field, the file is kept (acceleration only).
-- Results are identical with or without `sketch_acceleration` — it only affects performance.
+- `sketch_expression` is for pruning only — it does NOT filter results
+- If a file has no sketch for a field, the file is kept
+- Results are identical with or without `sketch_expression` — it only affects performance
+- Available sketch fields: query `MetadataService/ListSketches`
 
 ---
 
