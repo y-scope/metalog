@@ -291,17 +291,19 @@ func (*CursorValue_FloatVal) isCursorValue_Value() {}
 func (*CursorValue_StrVal) isCursorValue_Value() {}
 
 type StreamSplitsRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Table               string                 `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
-	Projection          []string               `protobuf:"bytes,2,rep,name=projection,proto3" json:"projection,omitempty"`
-	FilterExpression    string                 `protobuf:"bytes,3,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"`
-	SketchExpression    string                 `protobuf:"bytes,4,opt,name=sketch_expression,json=sketchExpression,proto3" json:"sketch_expression,omitempty"`
-	OrderBy             []*OrderBy             `protobuf:"bytes,5,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	Limit               int32                  `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
-	Cursor              *KeysetCursor          `protobuf:"bytes,16,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	IncludeCursor       bool                   `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`
-	StreamIdleTimeoutMs int64                  `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"`
-	AllowUnindexedSort  bool                   `protobuf:"varint,19,opt,name=allow_unindexed_sort,json=allowUnindexedSort,proto3" json:"allow_unindexed_sort,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// --- Core query fields ---
+	Table            string     `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
+	Projection       []string   `protobuf:"bytes,2,rep,name=projection,proto3" json:"projection,omitempty"`                                     // columns to return (empty = all)
+	FilterExpression string     `protobuf:"bytes,3,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"` // SQL WHERE fragment (server-validated)
+	SketchExpression string     `protobuf:"bytes,4,opt,name=sketch_expression,json=sketchExpression,proto3" json:"sketch_expression,omitempty"` // SQL WHERE for bloom filter pruning (= and IN only)
+	OrderBy          []*OrderBy `protobuf:"bytes,5,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`                            // sort specification
+	Limit            int32      `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`                                              // max results (0 = unlimited)
+	// --- Pagination & streaming ---
+	Cursor              *KeysetCursor `protobuf:"bytes,16,opt,name=cursor,proto3" json:"cursor,omitempty"`                                                           // resume token from a previous stream
+	IncludeCursor       bool          `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`                       // include continuation cursor in responses
+	StreamIdleTimeoutMs int64         `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"` // max idle wait before server closes stream (0 = default 60s)
+	AllowUnindexedSort  bool          `protobuf:"varint,19,opt,name=allow_unindexed_sort,json=allowUnindexedSort,proto3" json:"allow_unindexed_sort,omitempty"`      // allow sorting on non-indexed columns (full scan)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -343,13 +345,6 @@ func (x *StreamSplitsRequest) GetTable() string {
 	return ""
 }
 
-func (x *StreamSplitsRequest) GetLimit() int32 {
-	if x != nil {
-		return x.Limit
-	}
-	return 0
-}
-
 func (x *StreamSplitsRequest) GetProjection() []string {
 	if x != nil {
 		return x.Projection
@@ -364,16 +359,30 @@ func (x *StreamSplitsRequest) GetFilterExpression() string {
 	return ""
 }
 
-func (x *StreamSplitsRequest) GetCursor() *KeysetCursor {
+func (x *StreamSplitsRequest) GetSketchExpression() string {
 	if x != nil {
-		return x.Cursor
+		return x.SketchExpression
 	}
-	return nil
+	return ""
 }
 
 func (x *StreamSplitsRequest) GetOrderBy() []*OrderBy {
 	if x != nil {
 		return x.OrderBy
+	}
+	return nil
+}
+
+func (x *StreamSplitsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *StreamSplitsRequest) GetCursor() *KeysetCursor {
+	if x != nil {
+		return x.Cursor
 	}
 	return nil
 }
@@ -397,13 +406,6 @@ func (x *StreamSplitsRequest) GetAllowUnindexedSort() bool {
 		return x.AllowUnindexedSort
 	}
 	return false
-}
-
-func (x *StreamSplitsRequest) GetSketchExpression() string {
-	if x != nil {
-		return x.SketchExpression
-	}
-	return ""
 }
 
 type StreamSplitsResponse struct {
@@ -852,21 +854,20 @@ const file_splits_proto_rawDesc = "" +
 	"\aint_val\x18\x01 \x01(\x03H\x00R\x06intVal\x12\x1d\n" +
 	"\tfloat_val\x18\x02 \x01(\x01H\x00R\bfloatVal\x12\x19\n" +
 	"\astr_val\x18\x03 \x01(\tH\x00R\x06strValB\a\n" +
-	"\x05value\"\x8c\x04\n" +
+	"\x05value\"\xeb\x03\n" +
 	"\x13StreamSplitsRequest\x12\x14\n" +
-	"\x05table\x18\x01 \x01(\tR\x05table\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x1e\n" +
+	"\x05table\x18\x01 \x01(\tR\x05table\x12\x1e\n" +
 	"\n" +
-	"projection\x18\x04 \x03(\tR\n" +
-	"projection\x12!\n" +
-	"\fstate_filter\x18\v \x03(\tR\vstateFilter\x12+\n" +
-	"\x11filter_expression\x18\f \x01(\tR\x10filterExpression\x12M\n" +
-	"\x06cursor\x18\r \x01(\v25.com.yscope.metalog.query.api.proto.grpc.KeysetCursorR\x06cursor\x12K\n" +
-	"\border_by\x18\x0e \x03(\v20.com.yscope.metalog.query.api.proto.grpc.OrderByR\aorderBy\x12%\n" +
-	"\x0einclude_cursor\x18\x0f \x01(\bR\rincludeCursor\x123\n" +
-	"\x16stream_idle_timeout_ms\x18\x10 \x01(\x03R\x13streamIdleTimeoutMs\x120\n" +
-	"\x14allow_unindexed_sort\x18\x11 \x01(\bR\x12allowUnindexedSort\x12/\n" +
-	"\x13sketch_acceleration\x18\x12 \x03(\tR\x12sketchAcceleration\"\xa6\x02\n" +
+	"projection\x18\x02 \x03(\tR\n" +
+	"projection\x12+\n" +
+	"\x11filter_expression\x18\x03 \x01(\tR\x10filterExpression\x12+\n" +
+	"\x11sketch_expression\x18\x04 \x01(\tR\x10sketchExpression\x12K\n" +
+	"\border_by\x18\x05 \x03(\v20.com.yscope.metalog.query.api.proto.grpc.OrderByR\aorderBy\x12\x14\n" +
+	"\x05limit\x18\x06 \x01(\x05R\x05limit\x12M\n" +
+	"\x06cursor\x18\x10 \x01(\v25.com.yscope.metalog.query.api.proto.grpc.KeysetCursorR\x06cursor\x12%\n" +
+	"\x0einclude_cursor\x18\x11 \x01(\bR\rincludeCursor\x123\n" +
+	"\x16stream_idle_timeout_ms\x18\x12 \x01(\x03R\x13streamIdleTimeoutMs\x120\n" +
+	"\x14allow_unindexed_sort\x18\x13 \x01(\bR\x12allowUnindexedSortJ\x04\b\a\x10\x10\"\xa6\x02\n" +
 	"\x14StreamSplitsResponse\x12D\n" +
 	"\x05split\x18\x01 \x01(\v2..com.yscope.metalog.query.api.proto.grpc.SplitR\x05split\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x05R\bsequence\x12I\n" +
@@ -959,8 +960,8 @@ var file_splits_proto_goTypes = []any{
 }
 var file_splits_proto_depIdxs = []int32{
 	0,  // 0: com.yscope.metalog.query.api.proto.grpc.OrderBy.order:type_name -> com.yscope.metalog.query.api.proto.grpc.Order
-	7,  // 1: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
-	2,  // 2: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.order_by:type_name -> com.yscope.metalog.query.api.proto.grpc.OrderBy
+	2,  // 1: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.order_by:type_name -> com.yscope.metalog.query.api.proto.grpc.OrderBy
+	7,  // 2: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
 	6,  // 3: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.split:type_name -> com.yscope.metalog.query.api.proto.grpc.Split
 	9,  // 4: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.stats:type_name -> com.yscope.metalog.query.api.proto.grpc.QueryStats
 	7,  // 5: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor

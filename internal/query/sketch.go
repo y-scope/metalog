@@ -30,7 +30,7 @@ type SketchPredicate struct {
 // Rejected with error:
 //
 //	!=, NOT IN, <, >, <=, >=, LIKE, OR, NOT
-func ParseSketchExpression(expr string, registry *schema.ColumnRegistry) ([]SketchPredicate, error) {
+func ParseSketchExpression(expr string) ([]SketchPredicate, error) {
 	if expr == "" {
 		return nil, nil
 	}
@@ -45,7 +45,7 @@ func ParseSketchExpression(expr string, registry *schema.ColumnRegistry) ([]Sket
 	}
 
 	var predicates []SketchPredicate
-	if err := extractSketchPredicates(sel.Where.Expr, registry, &predicates); err != nil {
+	if err := extractSketchPredicates(sel.Where.Expr, &predicates); err != nil {
 		return nil, err
 	}
 	if len(predicates) == 0 {
@@ -56,13 +56,13 @@ func ParseSketchExpression(expr string, registry *schema.ColumnRegistry) ([]Sket
 
 // extractSketchPredicates recursively walks the AST and extracts equality/IN
 // predicates. Returns an error for unsupported operators.
-func extractSketchPredicates(node sqlparser.Expr, registry *schema.ColumnRegistry, out *[]SketchPredicate) error {
+func extractSketchPredicates(node sqlparser.Expr, out *[]SketchPredicate) error {
 	switch n := node.(type) {
 	case *sqlparser.AndExpr:
-		if err := extractSketchPredicates(n.Left, registry, out); err != nil {
+		if err := extractSketchPredicates(n.Left, out); err != nil {
 			return err
 		}
-		return extractSketchPredicates(n.Right, registry, out)
+		return extractSketchPredicates(n.Right, out)
 
 	case *sqlparser.OrExpr:
 		return fmt.Errorf("OR is not supported in sketch expressions (use AND to combine predicates)")
@@ -77,14 +77,9 @@ func extractSketchPredicates(node sqlparser.Expr, registry *schema.ColumnRegistr
 		}
 		colName := col.Name.String()
 
-		// Resolve logical name to sketch key.
+		// The sketch key is the logical field name (e.g. "uuid"), not the
+		// physical column name. The ext blob is keyed by logical name.
 		sketchKey := colName
-		if registry != nil {
-			if resolved := registry.ResolveDim(colName); resolved != "" {
-				// colName is a logical dim key → use it as sketch key.
-				sketchKey = colName
-			}
-		}
 
 		switch n.Operator {
 		case sqlparser.EqualOp:

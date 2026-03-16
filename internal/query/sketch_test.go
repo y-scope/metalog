@@ -10,13 +10,13 @@ import (
 // --- ParseSketchExpression tests ---
 
 func TestParseSketchExpression_Empty(t *testing.T) {
-	preds, err := ParseSketchExpression("", nil)
+	preds, err := ParseSketchExpression("")
 	assert.NoError(t, err)
 	assert.Nil(t, preds)
 }
 
 func TestParseSketchExpression_SingleEquality(t *testing.T) {
-	preds, err := ParseSketchExpression("uuid = 'abc-123'", nil)
+	preds, err := ParseSketchExpression("uuid = 'abc-123'")
 	require.NoError(t, err)
 	require.Len(t, preds, 1)
 	assert.Equal(t, "uuid", preds[0].SketchKey)
@@ -24,7 +24,7 @@ func TestParseSketchExpression_SingleEquality(t *testing.T) {
 }
 
 func TestParseSketchExpression_IN(t *testing.T) {
-	preds, err := ParseSketchExpression("uuid IN ('abc', 'def', 'ghi')", nil)
+	preds, err := ParseSketchExpression("uuid IN ('abc', 'def', 'ghi')")
 	require.NoError(t, err)
 	require.Len(t, preds, 1)
 	assert.Equal(t, "uuid", preds[0].SketchKey)
@@ -32,7 +32,7 @@ func TestParseSketchExpression_IN(t *testing.T) {
 }
 
 func TestParseSketchExpression_MultipleFieldsAND(t *testing.T) {
-	preds, err := ParseSketchExpression("uuid = 'val1' AND trace_id = 'val2'", nil)
+	preds, err := ParseSketchExpression("uuid = 'val1' AND trace_id = 'val2'")
 	require.NoError(t, err)
 	require.Len(t, preds, 2)
 
@@ -45,7 +45,7 @@ func TestParseSketchExpression_MultipleFieldsAND(t *testing.T) {
 }
 
 func TestParseSketchExpression_MixedEqualityAndIN(t *testing.T) {
-	preds, err := ParseSketchExpression("uuid = 'abc' AND trace_id IN ('x', 'y')", nil)
+	preds, err := ParseSketchExpression("uuid = 'abc' AND trace_id IN ('x', 'y')")
 	require.NoError(t, err)
 	require.Len(t, preds, 2)
 }
@@ -53,37 +53,37 @@ func TestParseSketchExpression_MixedEqualityAndIN(t *testing.T) {
 // --- Rejected expressions ---
 
 func TestParseSketchExpression_RejectsOR(t *testing.T) {
-	_, err := ParseSketchExpression("uuid = 'abc' OR trace_id = 'def'", nil)
+	_, err := ParseSketchExpression("uuid = 'abc' OR trace_id = 'def'")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "OR")
 }
 
 func TestParseSketchExpression_RejectsNotEqual(t *testing.T) {
-	_, err := ParseSketchExpression("uuid != 'abc'", nil)
+	_, err := ParseSketchExpression("uuid != 'abc'")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported operator")
 }
 
 func TestParseSketchExpression_RejectsGreaterThan(t *testing.T) {
-	_, err := ParseSketchExpression("uuid > 'abc'", nil)
+	_, err := ParseSketchExpression("uuid > 'abc'")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported operator")
 }
 
 func TestParseSketchExpression_RejectsLIKE(t *testing.T) {
-	_, err := ParseSketchExpression("uuid LIKE '%abc%'", nil)
+	_, err := ParseSketchExpression("uuid LIKE '%abc%'")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported operator")
 }
 
 func TestParseSketchExpression_RejectsNonStringLiteral(t *testing.T) {
-	_, err := ParseSketchExpression("uuid = 123", nil)
+	_, err := ParseSketchExpression("uuid = 123")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "string literal")
 }
 
 func TestParseSketchExpression_RejectsInvalidSQL(t *testing.T) {
-	_, err := ParseSketchExpression("not valid sql !!!", nil)
+	_, err := ParseSketchExpression("not valid sql !!!")
 	assert.Error(t, err)
 }
 

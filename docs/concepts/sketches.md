@@ -137,44 +137,50 @@ The self-describing format puts the type in the key and the raw filter bytes (no
 
 ### Usage
 
-Sketch acceleration is opt-in via the `sketch_acceleration` field in `StreamSplitsRequest`. The filter expression uses normal SQL — no special syntax:
+Sketch pruning is opt-in via the `sketch_expression` field in `StreamSplitsRequest`. It uses a separate SQL WHERE fragment from `filter_expression`:
 
 ```protobuf
 StreamSplitsRequest {
   filter_expression: "uuid = 'abc-123' AND min_timestamp > 1000"
-  sketch_acceleration: ["uuid"]
+  sketch_expression: "uuid = 'abc-123'"
 }
 ```
 
-Without `sketch_acceleration`, the query works normally. With it, the server transparently uses bloom filters to prune files that definitely don't contain the value.
+`filter_expression` is a hard filter (rows that don't match are excluded). `sketch_expression` is a pruning hint (files whose bloom filter says "definitely not" are dropped before the caller opens them). Without `sketch_expression`, the query works normally — no pruning, same results.
+
+**Supported syntax** (in `sketch_expression`):
+- `field = 'value'` — single equality
+- `field IN ('a', 'b', 'c')` — any-match
+- `field1 = 'x' AND field2 = 'y'` — multiple fields (all must pass)
+
+**Rejected** (returns `INVALID_ARGUMENT`):
+- `!=`, `NOT IN`, `<`, `>`, `<=`, `>=`, `LIKE` — bloom filters can't prove absence or ranges
+- `OR` — ambiguous pruning semantics
+- `NOT (...)` — negation not supported
 
 ### Execution Flow
 
 ```
 Request:
   filter_expression: "uuid = 'abc-123' AND min_timestamp > 1000"
-  sketch_acceleration: ["uuid"]
+  sketch_expression: "uuid = 'abc-123'"
 
-1. Rewrite filter to physical column names
-   uuid → dim_f05 (or stays as-is if bare column)
+1. Parse sketch_expression
+   predicates: [{SketchKey: "uuid", Values: ["abc-123"]}]
 
-2. Extract accelerated equality predicates
-   predicates: [{SketchKey: "uuid", Value: "abc-123"}]
-   remaining SQL: min_timestamp > 1000
-
-3. Resolve sketch key via registry
+2. Resolve sketch key via registry
    "uuid" → SET member "s03"
 
-4. Build conditional ext projection
+3. Build conditional ext projection
    IF(FIND_IN_SET('s03',sketches)>0, ext, NULL) AS `ext`
    Avoids transferring the MEDIUMBLOB for rows without the sketch.
 
-5. Execute SQL
+4. Execute SQL (filter_expression applied as WHERE clause)
    SELECT ..., IF(FIND_IN_SET('s03',sketches)>0,ext,NULL) AS `ext`
    FROM table
-   WHERE min_timestamp > 1000
+   WHERE uuid = 'abc-123' AND min_timestamp > 1000
 
-6. Bloom filter evaluation (per row, in query API server)
+5. Bloom filter evaluation (per row, in query API server)
    ext is NULL  → no sketch for this field → pass through
    ext has data → decompress LZ4 → decode msgpack → load SBBF
      → hash 'abc-123' with xxHash64
@@ -182,19 +188,19 @@ Request:
      → false: prune (definitely not present)
      → true: pass through (might be present)
 
-7. QueryStats
+6. QueryStats
    SplitsScanned: total rows from DB
    SplitsMatched: rows after bloom filter pruning
 ```
 
-### Acceleration, Not Filtering
+### Pruning, Not Filtering
 
-Sketches are **acceleration structures, not filters**. A row without a sketch for the queried field is not excluded — it simply doesn't benefit from pruning:
+Sketches are **pruning hints, not filters**. A row without a sketch for the queried field is not excluded — it simply doesn't benefit from pruning:
 
 - Files ingested before sketches were configured still appear in results
 - Files from producers that don't send sketch data are not penalized
-- Results are identical with or without `sketch_acceleration` — it only affects performance
-- The query engine always confirms results in the actual log data
+- Results are identical with or without `sketch_expression` — it only affects performance
+- The query engine always confirms results via `filter_expression`
 
 The `SplitsScanned` vs `SplitsMatched` gap in `QueryStats` shows the pruning benefit.
 

@@ -341,7 +341,7 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 	var sketchExtExpr string
 	if params.SketchExpr != "" {
 		var err error
-		sketchPredicates, err = ParseSketchExpression(params.SketchExpr, params.Registry)
+		sketchPredicates, err = ParseSketchExpression(params.SketchExpr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid sketch_expression: %w", err)
 		}
