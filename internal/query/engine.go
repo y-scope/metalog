@@ -43,7 +43,6 @@ func NewSplitQueryEngine(db *sql.DB, log *zap.Logger) *SplitQueryEngine {
 type QueryParams struct {
 	TableName        string
 	Columns          []string
-	StateFilter      []string
 	FilterExpr       string
 	OrderBy          []OrderBySpec
 	Limit            int
@@ -92,7 +91,6 @@ type preparedQuery struct {
 	cols             []string
 	orderBy          []OrderBySpec
 	filterExpr       string
-	stateFilter      []string
 	orderClauses     []string
 	sketchPredicates []SketchPredicate // sketch predicates for bloom filter evaluation
 	sketchExtExpr    string            // e.g. "IF(FIND_IN_SET('s03',sketches)>0,ext,NULL)" or "" if no sketches
@@ -403,7 +401,6 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 		cols:             cols,
 		orderBy:          resolvedOrderBy,
 		filterExpr:       filterExpr,
-		stateFilter:      params.StateFilter,
 		orderClauses:     orderClauses,
 		sketchPredicates: sketchPredicates,
 		sketchExtExpr:    sketchExtExpr,
@@ -423,10 +420,6 @@ func (e *SplitQueryEngine) executePage(
 
 	if pq.filterExpr != "" {
 		builder = builder.Where(pq.filterExpr)
-	}
-
-	if len(pq.stateFilter) > 0 {
-		builder = builder.Where(sq.Eq{metastore.ColState: pq.stateFilter})
 	}
 
 	// Keyset cursor

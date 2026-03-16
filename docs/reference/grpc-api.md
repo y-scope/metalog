@@ -118,8 +118,7 @@ rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse)
 | `table` | string | Yes | Metadata table name (e.g., `"clp_spark"`) |
 | `order_by` | repeated OrderBy | Yes | Sort specification. At least one entry required. `"id"` is not allowed — it is always the implicit final tiebreaker. |
 | `limit` | int32 | No | Maximum results to return. `0` (default) = unlimited. |
-| `state_filter` | repeated string | No | Filter by split state (e.g., `["ARCHIVE_CLOSED"]`). Empty = no state filter. |
-| `filter_expression` | string | No | SQL WHERE fragment for additional filtering. See [Filter Expressions](#filter-expressions). |
+| `filter_expression` | string | No | SQL WHERE fragment for filtering (including state, e.g., `state = 'ARCHIVE_CLOSED'`). See [Filter Expressions](#filter-expressions). |
 | `cursor` | KeysetCursor | No | Resume token from a previous stream. Must have the same `order_by` as the original request. |
 | `include_cursor` | bool | No | If true, each response message includes a continuation `cursor`. Default false. |
 | `allow_unindexed_sort` | bool | No | If true, allow sorting on non-indexed columns (causes a full table scan per page). Default false — the server rejects unindexed sort columns. |
@@ -189,8 +188,8 @@ message StreamSplitsRequest {
   string          table               = 1;   // e.g., "clp_spark"
   int32           limit               = 2;   // 0 = unlimited
   repeated string projection          = 4;   // column projection (empty = all)
-  repeated string state_filter        = 11;  // e.g., ["IR_ARCHIVE_BUFFERING"]
-  string          filter_expression   = 12;  // WHERE fragment (server-validated WHERE fragment)
+  // field 11 reserved (was state_filter)
+  string          filter_expression   = 12;  // WHERE fragment (server-validated, including state filters)
   KeysetCursor    cursor              = 13;  // optional continuation cursor
   repeated OrderBy order_by           = 14;  // sort spec (required, ≥1 entry; "id" not allowed)
   bool            include_cursor      = 15;  // if true, each response includes a cursor
@@ -451,7 +450,7 @@ The Query Service caches rewritten filter expressions to avoid repeated SQL pars
 grpcurl -plaintext -d '{
   "table": "clp_spark",
   "limit": 10,
-  "state_filter": ["ARCHIVE_CLOSED"],
+  "filter_expression": "state = 'ARCHIVE_CLOSED'",
   "order_by": [{"column": "max_timestamp", "order": "DESC"}]
 }' localhost:9090 \
   com.yscope.metalog.query.api.proto.grpc.SplitQueryService/StreamSplits
@@ -463,7 +462,7 @@ grpcurl -plaintext -d '{
 grpcurl -plaintext -d '{
   "table": "clp_spark",
   "limit": 10,
-  "state_filter": ["ARCHIVE_CLOSED"],
+  "filter_expression": "state = 'ARCHIVE_CLOSED'",
   "order_by": [{"column": "max_timestamp", "order": "DESC"}],
   "cursor": {"values": [{"int_val": 1704067200}], "id": 42}
 }' localhost:9090 \

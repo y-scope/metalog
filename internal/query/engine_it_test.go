@@ -135,11 +135,11 @@ func TestSplitQueryEngine_StateFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Query only IR_BUFFERING
+	// Query only IR_BUFFERING via filter_expression
 	rows, err := engine.Query(ctx, &query.QueryParams{
-		TableName:   engineTable,
-		StateFilter: []string{"IR_BUFFERING"},
-		Limit:       10,
+		TableName:  engineTable,
+		FilterExpr: "state = 'IR_BUFFERING'",
+		Limit:      10,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -34,7 +34,7 @@ message StreamSplitsRequest {
     string table = 1;
     int32 limit = 2;
     repeated string projection = 4;
-    repeated string state_filter = 11;
+    reserved 11; // was state_filter (use filter_expression instead)
     string filter_expression = 12;
     KeysetCursor cursor = 13;
     repeated OrderBy order_by = 14;
