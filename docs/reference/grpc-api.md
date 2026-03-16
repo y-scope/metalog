@@ -185,16 +185,21 @@ Cursors are query-scoped: a cursor produced by one `order_by` is only valid for 
 
 ```protobuf
 message StreamSplitsRequest {
-  string          table               = 1;   // e.g., "clp_spark"
-  int32           limit               = 2;   // 0 = unlimited
-  repeated string projection          = 4;   // column projection (empty = all)
-  // field 11 reserved (was state_filter)
-  string          filter_expression   = 12;  // WHERE fragment (server-validated, including state filters)
-  KeysetCursor    cursor              = 13;  // optional continuation cursor
-  repeated OrderBy order_by           = 14;  // sort spec (required, ≥1 entry; "id" not allowed)
-  bool            include_cursor      = 15;  // if true, each response includes a cursor
-  int64           stream_idle_timeout_ms = 16;  // 0 = server default
-  bool            allow_unindexed_sort   = 17;  // allow full-table-scan sorts (default false)
+  // Core query fields
+  string          table                  = 1;   // e.g., "clp_spark"
+  repeated string projection             = 2;   // column projection (empty = all)
+  string          filter_expression      = 3;   // WHERE fragment (server-validated)
+  repeated OrderBy order_by              = 4;   // sort spec (required, ≥1 entry; "id" not allowed)
+  int32           limit                  = 5;   // 0 = unlimited
+  repeated string sketch_acceleration    = 6;   // bloom filter acceleration fields
+
+  reserved 7 to 15;
+
+  // Pagination & streaming
+  KeysetCursor    cursor                 = 16;  // optional continuation cursor
+  bool            include_cursor         = 17;  // if true, each response includes a cursor
+  int64           stream_idle_timeout_ms = 18;  // 0 = server default (60s)
+  bool            allow_unindexed_sort   = 19;  // allow full-table-scan sorts (default false)
 }
 ```
 

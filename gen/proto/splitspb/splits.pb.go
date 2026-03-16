@@ -293,16 +293,15 @@ func (*CursorValue_StrVal) isCursorValue_Value() {}
 type StreamSplitsRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Table               string                 `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
-	Limit               int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	Projection          []string               `protobuf:"bytes,4,rep,name=projection,proto3" json:"projection,omitempty"`
-	StateFilter         []string               `protobuf:"bytes,11,rep,name=state_filter,json=stateFilter,proto3" json:"state_filter,omitempty"`
-	FilterExpression    string                 `protobuf:"bytes,12,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"`
-	Cursor              *KeysetCursor          `protobuf:"bytes,13,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	OrderBy             []*OrderBy             `protobuf:"bytes,14,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	IncludeCursor       bool                   `protobuf:"varint,15,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`
-	StreamIdleTimeoutMs int64                  `protobuf:"varint,16,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"`
-	AllowUnindexedSort  bool                   `protobuf:"varint,17,opt,name=allow_unindexed_sort,json=allowUnindexedSort,proto3" json:"allow_unindexed_sort,omitempty"`
-	SketchAcceleration  []string               `protobuf:"bytes,18,rep,name=sketch_acceleration,json=sketchAcceleration,proto3" json:"sketch_acceleration,omitempty"` // field names to accelerate via bloom filter sketches
+	Projection          []string               `protobuf:"bytes,2,rep,name=projection,proto3" json:"projection,omitempty"`
+	FilterExpression    string                 `protobuf:"bytes,3,opt,name=filter_expression,json=filterExpression,proto3" json:"filter_expression,omitempty"`
+	OrderBy             []*OrderBy             `protobuf:"bytes,4,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
+	Limit               int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
+	SketchAcceleration  []string               `protobuf:"bytes,6,rep,name=sketch_acceleration,json=sketchAcceleration,proto3" json:"sketch_acceleration,omitempty"`
+	Cursor              *KeysetCursor          `protobuf:"bytes,16,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	IncludeCursor       bool                   `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`
+	StreamIdleTimeoutMs int64                  `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"`
+	AllowUnindexedSort  bool                   `protobuf:"varint,19,opt,name=allow_unindexed_sort,json=allowUnindexedSort,proto3" json:"allow_unindexed_sort,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -354,13 +353,6 @@ func (x *StreamSplitsRequest) GetLimit() int32 {
 func (x *StreamSplitsRequest) GetProjection() []string {
 	if x != nil {
 		return x.Projection
-	}
-	return nil
-}
-
-func (x *StreamSplitsRequest) GetStateFilter() []string {
-	if x != nil {
-		return x.StateFilter
 	}
 	return nil
 }

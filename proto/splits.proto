@@ -31,17 +31,23 @@ service SplitQueryService {
 }
 
 message StreamSplitsRequest {
+    // Fields 1-15 use 1-byte wire tags (core fields); 16+ use 2-byte tags (optional/advanced).
+
+    // --- Core query fields ---
     string table = 1;
-    int32 limit = 2;
-    repeated string projection = 4;
-    reserved 11; // was state_filter (use filter_expression instead)
-    string filter_expression = 12;
-    KeysetCursor cursor = 13;
-    repeated OrderBy order_by = 14;
-    bool include_cursor = 15;
-    int64 stream_idle_timeout_ms = 16;
-    bool allow_unindexed_sort = 17;
-    repeated string sketch_acceleration = 18;  // field names to accelerate via bloom filter sketches
+    repeated string projection = 2;         // columns to return (empty = all)
+    string filter_expression = 3;           // SQL WHERE fragment (server-validated)
+    repeated OrderBy order_by = 4;          // sort specification
+    int32 limit = 5;                        // max results (0 = unlimited)
+    repeated string sketch_acceleration = 6; // field names to accelerate via bloom filter sketches
+
+    reserved 7 to 15;                       // reserved for future core fields
+
+    // --- Pagination & streaming ---
+    KeysetCursor cursor = 16;               // resume token from a previous stream
+    bool include_cursor = 17;               // include continuation cursor in responses
+    int64 stream_idle_timeout_ms = 18;      // max idle wait before server closes stream (0 = default 60s)
+    bool allow_unindexed_sort = 19;         // allow sorting on non-indexed columns (full scan)
 }
 
 message StreamSplitsResponse {
