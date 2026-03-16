@@ -266,7 +266,7 @@ func (c *Consumer) drainFlushesBlocking() {
 		return
 	}
 	deadline := time.After(5 * time.Second)
-	for _, pf := range c.pendingFlushes {
+	for i, pf := range c.pendingFlushes {
 		select {
 		case err := <-pf.flushed:
 			if err != nil {
@@ -284,7 +284,7 @@ func (c *Consumer) drainFlushesBlocking() {
 			})
 		case <-deadline:
 			c.log.Error("shutdown drain timeout, uncommitted flushes remain",
-				zap.Int("remaining", len(c.pendingFlushes)))
+				zap.Int("remaining", len(c.pendingFlushes)-i))
 			c.pendingFlushes = nil
 			return
 		}

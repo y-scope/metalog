@@ -439,16 +439,7 @@ Set `include_cursor=true` in `StreamSplitsRequest`. Each `StreamSplitsResponse` 
 
 ## Caching
 
-The Query Service checks cache before querying the database. Invalidation is TTL-based.
-
-| Query Type | Cache | TTL | Rationale |
-|------------|-------|-----|-----------|
-| Schema | `schemaCache` | 5 min | Rarely changes |
-| File by ID | `fileCache` | 30 sec | May update during lifecycle |
-| Query results | `queryCache` | 10 sec | Frequently changing |
-| Sketch results | `sketchCache` | 60 sec | Probabilistic structures change rarely |
-
-**Per-query override:** `cache=false` (bypass), `cache_ttl=60s` (custom TTL).
+The Query Service caches rewritten filter expressions to avoid repeated SQL parsing. The cache is TTL-based (5 min) and keyed by table name, registry version, and filter expression. Schema changes (new dim/agg columns) automatically invalidate stale entries via the registry version.
 
 ---
 
@@ -770,7 +761,7 @@ metalog admin register-table \
 
 | gRPC Status | Cause |
 |-------------|-------|
-| `INVALID_ARGUMENT` | Missing `order_by`, unknown column in filter, sort, or projection, cursor size mismatch, `"id"` in `order_by`, unindexed sort without `allow_unindexed_sort=true`, sketch predicate inside `OR`/`NOT`, missing required `RegisterTable` fields |
+| `INVALID_ARGUMENT` | Missing `order_by`, unknown column in filter, sort, or projection, cursor size mismatch, `"id"` in `order_by`, unindexed sort without `allow_unindexed_sort=true`, missing required `RegisterTable` fields |
 | `CANCELLED` | Client cancelled the stream |
 | `INTERNAL` | Database error or unexpected server failure |
 
