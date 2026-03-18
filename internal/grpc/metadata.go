@@ -69,10 +69,16 @@ func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 
 	pbAggs := make([]*metapb.AggInfo, len(aggs))
 	for i, a := range aggs {
+		aggTypeName := "AGGREGATION_TYPE_" + a.AggregationType
+		aggTypeVal, ok := splitspb.AggregationType_value[aggTypeName]
+		if !ok {
+			h.log.Warn("unknown aggregation_type, defaulting to UNSPECIFIED",
+				zap.String("raw_value", a.AggregationType))
+		}
 		aggInfo := &metapb.AggInfo{
 			Name:            a.Name,
 			Value:           a.Value,
-			AggregationType: splitspb.AggregationType(splitspb.AggregationType_value["AGGREGATION_TYPE_"+a.AggregationType]),
+			AggregationType: splitspb.AggregationType(aggTypeVal),
 			AliasColumn:     a.AliasColumn,
 		}
 		if a.ValueType == "FLOAT" || a.ValueType == "float" {

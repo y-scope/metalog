@@ -65,10 +65,13 @@ func (s *TableRegistration) RegisterTable(
 	}
 
 	// Check if table already exists
-	existsQuery, existsArgs, _ := sq.Select("COUNT(*) > 0").
+	existsQuery, existsArgs, err := sq.Select("COUNT(*) > 0").
 		From(metastore.TableRegistry).
 		Where(sq.Eq{"table_name": tableName}).
 		ToSql()
+	if err != nil {
+		return false, fmt.Errorf("build exists query: %w", err)
+	}
 	var exists bool
 	if err := s.db.QueryRowContext(ctx, existsQuery, existsArgs...).Scan(&exists); err != nil {
 		return false, err
@@ -81,10 +84,13 @@ func (s *TableRegistration) RegisterTable(
 
 	// Update display name if provided
 	if displayName != "" {
-		updateQuery, updateArgs, _ := sq.Update(metastore.TableRegistry).
+		updateQuery, updateArgs, err := sq.Update(metastore.TableRegistry).
 			Set("display_name", displayName).
 			Where(sq.Eq{"table_name": tableName}).
 			ToSql()
+		if err != nil {
+			return false, fmt.Errorf("build display name update: %w", err)
+		}
 		if _, err := s.db.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
 			return false, err
 		}
@@ -111,10 +117,13 @@ func (s *TableRegistration) updateTableConfig(ctx context.Context, tableName str
 	}
 
 	// Read existing config blob.
-	query, args, _ := sq.Select("config").
+	query, args, err := sq.Select("config").
 		From(metastore.TableRegistryConfig).
 		Where(sq.Eq{"table_name": tableName}).
 		ToSql()
+	if err != nil {
+		return fmt.Errorf("build config select: %w", err)
+	}
 	var blob []byte
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&blob); err != nil && err != sql.ErrNoRows {
 		return err
@@ -139,10 +148,13 @@ func (s *TableRegistration) updateTableConfig(ctx context.Context, tableName str
 		return err
 	}
 
-	updateQuery, updateArgs, _ := sq.Update(metastore.TableRegistryConfig).
+	updateQuery, updateArgs, err := sq.Update(metastore.TableRegistryConfig).
 		Set("config", newBlob).
 		Where(sq.Eq{"table_name": tableName}).
 		ToSql()
+	if err != nil {
+		return fmt.Errorf("build config update: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, updateQuery, updateArgs...)
 	return err
 }
@@ -193,10 +205,13 @@ func (s *TableRegistration) SetColumnAlias(ctx context.Context, tableName, colNa
 	if alias != "" {
 		aliasVal = alias
 	}
-	updateQuery, updateArgs, _ := sq.Update(registryTable).
+	updateQuery, updateArgs, err := sq.Update(registryTable).
 		Set("alias_column", aliasVal).
 		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
 		ToSql()
+	if err != nil {
+		return "", fmt.Errorf("build alias update: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx, updateQuery, updateArgs...)
 	if err != nil {
 		return "", fmt.Errorf("update alias: %w", err)
@@ -228,10 +243,13 @@ func (s *TableRegistration) InvalidateColumn(ctx context.Context, tableName, col
 
 	// Read the current key before invalidating.
 	var previousKey string
-	selectQuery, selectArgs, _ := sq.Select(keyColumn).
+	selectQuery, selectArgs, err := sq.Select(keyColumn).
 		From(registryTable).
 		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
 		ToSql()
+	if err != nil {
+		return "", fmt.Errorf("build select query: %w", err)
+	}
 	if err := s.db.QueryRowContext(ctx, selectQuery, selectArgs...).Scan(&previousKey); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("%w: no ACTIVE column %s in table %s", ErrColumnNotFound, colName, tableName)
@@ -241,11 +259,14 @@ func (s *TableRegistration) InvalidateColumn(ctx context.Context, tableName, col
 
 	// Transition ACTIVE → INVALIDATED.
 	now := time.Now().UnixNano()
-	updateQuery, updateArgs, _ := sq.Update(registryTable).
+	updateQuery, updateArgs, err := sq.Update(registryTable).
 		Set("state", "INVALIDATED").
 		Set("invalidated_at", now).
 		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
 		ToSql()
+	if err != nil {
+		return "", fmt.Errorf("build invalidate update: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx, updateQuery, updateArgs...)
 	if err != nil {
 		return "", fmt.Errorf("invalidate column: %w", err)

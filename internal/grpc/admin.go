@@ -58,6 +58,7 @@ func (h *AdminHandler) SetColumnAlias(ctx context.Context, req *pb.SetColumnAlia
 
 	alias, err := h.registration.SetColumnAlias(ctx, req.GetTableName(), req.GetColumnName(), req.GetAliasColumn())
 	if err != nil {
+		h.log.Error("set column alias failed", zap.String("table", req.GetTableName()), zap.String("column", req.GetColumnName()), zap.Error(err))
 		return nil, mapAdminError(err)
 	}
 
@@ -78,6 +79,7 @@ func (h *AdminHandler) InvalidateColumn(ctx context.Context, req *pb.InvalidateC
 
 	previousKey, err := h.registration.InvalidateColumn(ctx, req.GetTableName(), req.GetColumnName())
 	if err != nil {
+		h.log.Error("invalidate column failed", zap.String("table", req.GetTableName()), zap.String("column", req.GetColumnName()), zap.Error(err))
 		return nil, mapAdminError(err)
 	}
 

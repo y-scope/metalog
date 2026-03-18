@@ -85,6 +85,8 @@ func unmarshalJSONToProto(payload []byte) (*pb.MetadataRecord, error) {
 		if a.Type != "" {
 			if v, ok := pb.IngestAggType_value[a.Type]; ok {
 				aggType = pb.IngestAggType(v)
+			} else {
+				return nil, fmt.Errorf("unrecognized agg type %q for field %q", a.Type, a.Field)
 			}
 		}
 		record.Agg = append(record.Agg, &pb.IngestAggEntry{
@@ -269,6 +271,8 @@ func parseSelfDescribingAgg(remainder, value, valueType string, record *pb.Metad
 	aggType := pb.IngestAggType_GTE
 	if v, ok := pb.IngestAggType_value[aggTypeStr]; ok {
 		aggType = pb.IngestAggType(v)
+	} else {
+		return fmt.Errorf("unrecognized agg type %q for field %q", aggTypeStr, field)
 	}
 
 	entry := &pb.IngestAggEntry{

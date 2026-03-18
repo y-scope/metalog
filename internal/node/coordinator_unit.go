@@ -136,10 +136,14 @@ func NewCoordinatorUnit(
 	var kc kafkaconsumer.MessageSource
 	if tableCfg.Kafka.Enabled &&
 		tableCfg.Kafka.Topic != "" && tableCfg.Kafka.BootstrapServers != "" {
+		transformer, err := kafkaconsumer.NewTransformer(tableCfg.Kafka.RecordTransformer)
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: %w", err)
+		}
 		groupID := kafkaGroupPrefix + tableName + "-" + tableID
 		kc = kafkaconsumer.NewConsumer(
 			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
-			kafkaconsumer.NewTransformer(tableCfg.Kafka.RecordTransformer),
+			transformer,
 			ingestSvc,
 			log,
 		)

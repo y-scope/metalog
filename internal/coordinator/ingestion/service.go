@@ -132,8 +132,7 @@ func extractAggs(aggs []*pb.IngestAggEntry, rec *metastore.FileRecord) {
 			valueType = "FLOAT"
 			val = v.FloatVal
 		default:
-			valueType = "INT"
-			val = int64(0)
+			continue
 		}
 
 		// Key by logical composite key so batch flush can resolve to physical.

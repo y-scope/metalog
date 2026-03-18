@@ -365,7 +365,7 @@ type ConsumerConfig struct {
 }
 
 // BuildConfigMap constructs a kafka.ConfigMap from ConsumerConfig.
-func BuildConfigMap(cfg ConsumerConfig) *kafka.ConfigMap {
+func BuildConfigMap(cfg ConsumerConfig) (*kafka.ConfigMap, error) {
 	cm := &kafka.ConfigMap{
 		"bootstrap.servers":  cfg.BootstrapServers,
 		"group.id":           cfg.GroupID,
@@ -373,9 +373,11 @@ func BuildConfigMap(cfg ConsumerConfig) *kafka.ConfigMap {
 		"enable.auto.commit": false,
 	}
 	for k, v := range cfg.ExtraConfig {
-		cm.SetKey(k, v)
+		if err := cm.SetKey(k, v); err != nil {
+			return nil, fmt.Errorf("invalid kafka config key %q: %w", k, err)
+		}
 	}
-	return cm
+	return cm, nil
 }
 
 // ParseBootstrapServers splits a comma-separated bootstrap servers string.

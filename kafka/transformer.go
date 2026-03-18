@@ -21,15 +21,15 @@ func RegisterTransformer(name string, factory func() MessageTransformer) {
 	transformerRegistry[name] = factory
 }
 
-// NewTransformer creates a transformer by name. Falls back to AutoDetectTransformer.
-func NewTransformer(name string) MessageTransformer {
+// NewTransformer creates a transformer by name. Returns an error for unregistered names.
+func NewTransformer(name string) (MessageTransformer, error) {
 	transformerMu.RLock()
 	factory, ok := transformerRegistry[name]
 	transformerMu.RUnlock()
-	if ok {
-		return factory()
+	if !ok {
+		return nil, fmt.Errorf("unknown message transformer %q", name)
 	}
-	return &AutoDetectTransformer{}
+	return factory(), nil
 }
 
 func init() {

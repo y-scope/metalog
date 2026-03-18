@@ -218,7 +218,10 @@ func TestBuildConfigMap(t *testing.T) {
 		},
 	}
 
-	cm := BuildConfigMap(cfg)
+	cm, err := BuildConfigMap(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	bs, err := cm.Get("bootstrap.servers", "")
 	if err != nil {
