@@ -2,33 +2,26 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"regexp"
-	"strings"
-	"time"
 
-	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
 	"github.com/y-scope/metalog/internal/coordinator"
-	"github.com/y-scope/metalog/internal/metastore"
 )
 
 // AdminHandler implements the AdminService gRPC interface.
 type AdminHandler struct {
 	pb.UnimplementedAdminServiceServer
 	registration *coordinator.TableRegistration
-	db           *sql.DB
 	log          *zap.Logger
 }
 
 // NewAdminHandler creates an AdminHandler.
-func NewAdminHandler(reg *coordinator.TableRegistration, db *sql.DB, log *zap.Logger) *AdminHandler {
-	return &AdminHandler{registration: reg, db: db, log: log}
+func NewAdminHandler(reg *coordinator.TableRegistration, log *zap.Logger) *AdminHandler {
+	return &AdminHandler{registration: reg, log: log}
 }
 
 // RegisterTable handles runtime table registration requests.
@@ -54,153 +47,56 @@ func (h *AdminHandler) RegisterTable(ctx context.Context, req *pb.RegisterTableR
 	}, nil
 }
 
-// maxAliasLength is the maximum length of an alias column value.
-const maxAliasLength = 128
-
-// aliasPattern is the allowed pattern for alias values: alphanumeric, underscores, dots, hyphens, slashes.
-var aliasPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_./-]*$`)
-
 // SetColumnAlias sets or clears the alias for a dimension or aggregation column.
-// Updates the database only — nodes pick up changes via periodic alias refresh.
 func (h *AdminHandler) SetColumnAlias(ctx context.Context, req *pb.SetColumnAliasRequest) (*pb.SetColumnAliasResponse, error) {
-	tableName := req.GetTableName()
-	colName := req.GetColumnName()
-	alias := strings.TrimSpace(req.GetAliasColumn())
-
-	if tableName == "" {
+	if req.GetTableName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_name is required")
 	}
-	if colName == "" {
+	if req.GetColumnName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "column_name is required")
 	}
-	if alias != "" {
-		if len(alias) > maxAliasLength {
-			return nil, status.Errorf(codes.InvalidArgument,
-				"alias_column exceeds max length of %d characters", maxAliasLength)
-		}
-		if !aliasPattern.MatchString(alias) {
-			return nil, status.Error(codes.InvalidArgument,
-				"alias_column must match [a-zA-Z_][a-zA-Z0-9_./-]*")
-		}
-	}
 
-	// Determine which registry table to update based on column prefix.
-	var registryTable string
-	if strings.HasPrefix(colName, metastore.DimColumnPrefix) {
-		registryTable = metastore.DimRegistryTable
-	} else if strings.HasPrefix(colName, metastore.AggColumnPrefix) {
-		registryTable = metastore.AggRegistryTable
-	} else {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"column_name must start with %q or %q", metastore.DimColumnPrefix, metastore.AggColumnPrefix)
-	}
-
-	// Atomic update — only touches ACTIVE rows, eliminating the TOCTOU race
-	// of a separate SELECT followed by UPDATE.
-	var aliasVal any
-	if alias != "" {
-		aliasVal = alias
-	}
-	updateQuery, updateArgs, _ := sq.Update(registryTable).
-		Set("alias_column", aliasVal).
-		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
-		ToSql()
-	res, err := h.db.ExecContext(ctx, updateQuery, updateArgs...)
+	alias, err := h.registration.SetColumnAlias(ctx, req.GetTableName(), req.GetColumnName(), req.GetAliasColumn())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "update alias: %v", err)
+		return nil, mapAdminError(err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
-	}
-	if affected == 0 {
-		return nil, status.Errorf(codes.NotFound,
-			"no ACTIVE column %s in table %s", colName, tableName)
-	}
-
-	h.log.Info("column alias updated",
-		zap.String("table", tableName),
-		zap.String("column", colName),
-		zap.String("alias", alias),
-	)
 
 	return &pb.SetColumnAliasResponse{
-		ColumnName:  colName,
+		ColumnName:  req.GetColumnName(),
 		AliasColumn: alias,
 	}, nil
 }
 
 // InvalidateColumn marks a dimension or aggregation column as INVALIDATED.
-// The column immediately stops receiving new data and is excluded from queries.
-// A background recycler will eventually clear remaining data and make the slot
-// available for reuse once records have aged past retention.
 func (h *AdminHandler) InvalidateColumn(ctx context.Context, req *pb.InvalidateColumnRequest) (*pb.InvalidateColumnResponse, error) {
-	tableName := req.GetTableName()
-	colName := req.GetColumnName()
-
-	if tableName == "" {
+	if req.GetTableName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_name is required")
 	}
-	if colName == "" {
+	if req.GetColumnName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "column_name is required")
 	}
 
-	// Determine registry table and key column from prefix.
-	var registryTable, keyColumn string
-	if strings.HasPrefix(colName, metastore.DimColumnPrefix) {
-		registryTable = metastore.DimRegistryTable
-		keyColumn = "dim_key"
-	} else if strings.HasPrefix(colName, metastore.AggColumnPrefix) {
-		registryTable = metastore.AggRegistryTable
-		keyColumn = "agg_key"
-	} else {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"column_name must start with %q or %q", metastore.DimColumnPrefix, metastore.AggColumnPrefix)
-	}
-
-	// Read the current key before invalidating (low-frequency admin op, no TOCTOU concern).
-	var previousKey string
-	selectQuery, selectArgs, _ := sq.Select(keyColumn).
-		From(registryTable).
-		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
-		ToSql()
-	if err := h.db.QueryRowContext(ctx, selectQuery, selectArgs...).Scan(&previousKey); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.NotFound,
-				"no ACTIVE column %s in table %s", colName, tableName)
-		}
-		return nil, status.Errorf(codes.Internal, "lookup column: %v", err)
-	}
-
-	// Transition ACTIVE → INVALIDATED.
-	now := time.Now().UnixNano()
-	updateQuery, updateArgs, _ := sq.Update(registryTable).
-		Set("state", "INVALIDATED").
-		Set("invalidated_at", now).
-		Where(sq.Eq{"table_name": tableName, "column_name": colName, "state": "ACTIVE"}).
-		ToSql()
-	res, err := h.db.ExecContext(ctx, updateQuery, updateArgs...)
+	previousKey, err := h.registration.InvalidateColumn(ctx, req.GetTableName(), req.GetColumnName())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "invalidate column: %v", err)
+		return nil, mapAdminError(err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
-	}
-	if affected == 0 {
-		// Race: another request invalidated it between our SELECT and UPDATE.
-		return nil, status.Errorf(codes.NotFound,
-			"no ACTIVE column %s in table %s (may have been invalidated concurrently)", colName, tableName)
-	}
-
-	h.log.Info("column invalidated",
-		zap.String("table", tableName),
-		zap.String("column", colName),
-		zap.String("previousKey", previousKey),
-	)
 
 	return &pb.InvalidateColumnResponse{
-		ColumnName:  colName,
+		ColumnName:  req.GetColumnName(),
 		PreviousKey: previousKey,
 	}, nil
+}
+
+// mapAdminError converts coordinator sentinel errors to gRPC status errors.
+func mapAdminError(err error) error {
+	switch {
+	case errors.Is(err, coordinator.ErrInvalidColumnPrefix):
+		return status.Errorf(codes.InvalidArgument, "%v", err)
+	case errors.Is(err, coordinator.ErrInvalidAlias):
+		return status.Errorf(codes.InvalidArgument, "%v", err)
+	case errors.Is(err, coordinator.ErrColumnNotFound):
+		return status.Errorf(codes.NotFound, "%v", err)
+	default:
+		return status.Errorf(codes.Internal, "%v", err)
+	}
 }
