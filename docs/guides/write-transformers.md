@@ -28,7 +28,7 @@ Kafka Message (bytes)
 
 ### MessageTransformer (Kafka Layer)
 
-Defined in `internal/kafka/consumer.go`. Converts raw Kafka message bytes into a protobuf `MetadataRecord`.
+Defined in `kafka/transformer.go`. Converts raw Kafka message bytes into a protobuf `MetadataRecord`. JSON unmarshal logic lives in `kafka/jsonunmarshal.go`.
 
 ```go
 type MessageTransformer interface {
@@ -36,9 +36,12 @@ type MessageTransformer interface {
 }
 ```
 
-The built-in `AutoDetectTransformer` auto-detects JSON vs protobuf:
-- JSON payloads (starting with `{`) are parsed as JSON
-- Everything else is treated as protobuf
+Built-in transformers are registered via `RegisterTransformer` and looked up by name with `NewTransformer(name)`. An unrecognized name returns an error (no silent fallback).
+
+| Name | Behaviour |
+|------|-----------|
+| `""` / `"auto"` | `AutoDetectTransformer` — JSON if payload starts with `{`, protobuf otherwise |
+| `"proto"` | `ProtoTransformer` — protobuf only |
 
 ### RecordTransformer (Ingestion Layer)
 
@@ -56,7 +59,8 @@ type RecordTransformer interface {
 |------|------|-------------|
 | `default` | `RecordTransformer` | Maps all key-value data entries directly to dimensions |
 | `json` | `RecordTransformer` | Parses a JSON payload field and flattens nested keys into dimensions |
-| (auto-detect) | `MessageTransformer` | Auto-detects JSON or protobuf Kafka payloads |
+| `""` / `auto` | `MessageTransformer` | Auto-detects JSON or protobuf Kafka payloads |
+| `proto` | `MessageTransformer` | Protobuf-only deserialization |
 
 ## Configuration
 

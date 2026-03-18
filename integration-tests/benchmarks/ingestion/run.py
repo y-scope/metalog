@@ -288,15 +288,25 @@ def main():
     else:
         log_warn("Skipping infrastructure startup")
 
-    # Step 3: Clean table
+    # Step 3: Clean table and registry entries from prior runs.
+    # Without this, a prior run's config (e.g. kafka.enabled=false from a gRPC run)
+    # persists in _table_config and the coordinator starts with stale settings.
     if not args.skip_clean:
-        log_info("Dropping benchmark table...")
+        log_info("Dropping benchmark table and registry entries...")
         subprocess.run(
             dc + ["exec", "-T", "mariadb", "mariadb", "-h", "127.0.0.1", "-uroot", "-ppassword", "metalog_metastore",
-                  "-e", "DROP TABLE IF EXISTS clp_spark;"],
+                  "-e", """
+                    DROP TABLE IF EXISTS clp_spark;
+                    DELETE FROM _table_assignment WHERE table_name = 'clp_spark';
+                    DELETE FROM _table_config WHERE table_name = 'clp_spark';
+                    DELETE FROM _sketch_registry WHERE table_name = 'clp_spark';
+                    DELETE FROM _dim_registry WHERE table_name = 'clp_spark';
+                    DELETE FROM _agg_registry WHERE table_name = 'clp_spark';
+                    DELETE FROM _table WHERE table_name = 'clp_spark';
+                  """],
             capture_output=True, text=True,
         )
-        log_success("Table dropped")
+        log_success("Table and registry cleaned")
     else:
         log_warn("Skipping database cleanup")
 
@@ -355,7 +365,10 @@ worker:
         log_success(f"All {args.records} records produced to Kafka")
 
     # Step 6: Start coordinator
+    # Kill anything holding the gRPC port — fuser for local processes,
+    # docker for containers that bind to the host port.
     subprocess.run(["fuser", "-k", f"{grpc_port}/tcp"], capture_output=True)
+    _kill_docker_on_port(grpc_port)
     if not wait_for_port_free(grpc_port, timeout=15):
         log_error(f"gRPC port {grpc_port} still in use")
         sys.exit(1)
@@ -499,6 +512,27 @@ def _wait_for_db(dc, initial_count, target_records, timeout):
     print(f"  Records in DB : {total} / {target_records}")
     print()
     return False
+
+
+def _kill_docker_on_port(port):
+    """Stop any Docker container that has published the given host port."""
+    try:
+        r = subprocess.run(
+            ["docker", "ps", "--format", "{{.ID}}\t{{.Ports}}", "--no-trunc"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            log_warn(f"docker ps failed (rc={r.returncode}), skipping port cleanup")
+            return
+        needle = f":{port}->"
+        for line in r.stdout.strip().splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2 and needle in parts[1]:
+                cid = parts[0]
+                log_warn(f"Stopping Docker container {cid[:12]} bound to port {port}")
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+    except (FileNotFoundError, OSError):
+        pass
 
 
 def _stop_coordinator():

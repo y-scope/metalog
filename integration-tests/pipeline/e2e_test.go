@@ -1,8 +1,8 @@
 //go:build e2e
 
-// Package e2e runs end-to-end tests using the real clp-s binary.
+// Package pipeline runs end-to-end tests using the real clp-s binary.
 // Requires clp-s in $PATH. IR test data is generated using clp-ffi-go (KV-IR).
-package e2e
+package pipeline
 
 import (
 	"context"

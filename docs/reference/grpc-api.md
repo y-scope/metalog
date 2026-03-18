@@ -794,8 +794,12 @@ internal/
 │   ├── server.go           — unified gRPC server (all services on one port)
 │   ├── ingestion.go        — implements MetadataIngestionService
 │   ├── query.go            — implements SplitQueryService
-│   ├── metadata.go         — implements MetadataService
-│   └── admin.go            — implements AdminService
+│   ├── metadata.go         — thin gRPC adapter for MetadataService
+│   └── admin.go            — thin gRPC adapter for AdminService
+├── coordinator/
+│   └── tableregistration.go — domain logic for RegisterTable, SetColumnAlias, InvalidateColumn
+├── metastore/
+│   └── metadata_queries.go — transport-agnostic MetadataReader (ListTables, ListDims, etc.)
 ├── query/
 │   ├── engine.go           — split query engine (keyset pagination, streaming)
 │   ├── filter.go           — filter expression validation
@@ -803,6 +807,10 @@ internal/
 │   ├── cursor.go           — keyset cursor encoding/decoding
 │   ├── resolve.go          — column resolution and projection
 │   └── sketch.go           — bloom filter sketch evaluation
+kafka/
+├── consumer.go             — Kafka consumer with offset watermark tracking
+├── transformer.go          — MessageTransformer interface and registry
+└── jsonunmarshal.go        — JSON → protobuf MetadataRecord conversion
 proto/
 ├── splits.proto            — SplitQueryService + Split messages
 ├── metadata.proto          — MetadataService messages

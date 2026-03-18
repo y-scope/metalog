@@ -97,20 +97,20 @@ def build_request(raw):
             ),
         ],
         agg=[
-            ingestion_pb2.AggEntry(
+            ingestion_pb2.IngestAggEntry(
                 field='level', qualifier='info',
                 agg_type=ingestion_pb2.GTE, int_val=n,
                 alias_column='record_count',
             ),
-            ingestion_pb2.AggEntry(
+            ingestion_pb2.IngestAggEntry(
                 field='level', qualifier='warn',
                 agg_type=ingestion_pb2.GTE, int_val=int(n * 0.05),
             ),
-            ingestion_pb2.AggEntry(
+            ingestion_pb2.IngestAggEntry(
                 field='level', qualifier='error',
                 agg_type=ingestion_pb2.GTE, int_val=int(n * 0.02),
             ),
-            ingestion_pb2.AggEntry(
+            ingestion_pb2.IngestAggEntry(
                 field='level', qualifier='fatal',
                 agg_type=ingestion_pb2.GTE, int_val=int(n * 0.002),
             ),

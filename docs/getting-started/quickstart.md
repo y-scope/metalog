@@ -195,7 +195,7 @@ docker compose -f docker/docker-compose.yml exec minio mc ls local/
 For a thorough automated check — HA fight-for-master, Kafka ingestion, and single-owner enforcement — use the E2E validation script:
 
 ```bash
-./integration-tests/functional/coordinator/validate-e2e.sh
+./integration-tests/coordination/validate-e2e.sh
 ```
 
 What it tests:

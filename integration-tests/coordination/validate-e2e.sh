@@ -10,7 +10,7 @@
 #   5. Periodic reconciliation: table added after startup is picked up within seconds
 #
 # Usage:
-#   ./integration-tests/functional/coordinator/validate-e2e.sh
+#   ./integration-tests/coordination/validate-e2e.sh
 #
 # Prerequisites:
 #   - Docker and docker compose
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_DIR"
 
 # Auto-detect docker compose command
@@ -87,14 +87,32 @@ wait_for_condition() {
 
 cleanup() {
     info "Cleaning up..."
-    $COMPOSE down -v 2>/dev/null || true
+    timeout 30 $COMPOSE down -v --timeout 10 2>/dev/null || true
 }
 
 # =========================================================================
 # Setup
 # =========================================================================
 info "Cleaning up previous runs..."
-$COMPOSE down -v 2>/dev/null || true
+timeout 30 $COMPOSE down -v --timeout 10 2>/dev/null || true
+
+# Force-remove named containers from this compose file (handles partial cleanup
+# from prior failed runs where compose down didn't finish).
+docker rm -f metalog-mariadb metalog-kafka metalog-zookeeper metalog-minio \
+    metalog-minio-init metalog-log-viewer-setup 2>/dev/null || true
+docker ps -a --format '{{.Names}}' | grep '^docker-coordinator-node-' | xargs -r docker rm -f 2>/dev/null || true
+
+# Kill stale containers from other stacks (e.g. presto) that may hold our ports.
+for port in "$DB_PORT" 9090 8081 9092 9000 9001 2181; do
+    cid=$(docker ps --format '{{.ID}}\t{{.Ports}}' 2>/dev/null | grep ":${port}->" | awk '{print $1}' || true)
+    if [ -n "$cid" ]; then
+        info "Removing stale container $cid bound to port $port"
+        docker rm -f "$cid" 2>/dev/null || true
+    fi
+done
+
+# Clean up orphaned networks/volumes from prior failed runs.
+docker network rm docker_metalog-network 2>/dev/null || true
 
 # Ensure CLP core .deb package is available for Docker image build
 if ! ls "$PROJECT_DIR"/clp-core_*.deb >/dev/null 2>&1; then
@@ -206,66 +224,72 @@ docker exec metalog-kafka kafka-topics --create --if-not-exists \
 info "Producing 3 test records to 'clp_spark' topic..."
 
 kafka_produce "clp_spark" '{
-  "ir_storage_backend": "s3",
-  "ir_bucket": "clp-ir",
-  "ir_path": "s3://clp-ir/app-001/executor-0/file-001.clp.zst",
+  "ir": {
+    "storage_backend": "s3",
+    "bucket": "clp-ir",
+    "path": "s3://clp-ir/app-001/executor-0/file-001.clp.zst",
+    "size_bytes": 1048576
+  },
   "state": "IR_ARCHIVE_BUFFERING",
   "min_timestamp": 1704067200,
   "max_timestamp": 1704067500,
   "record_count": 1000,
-  "counts": {
-    "agg_int/gte/level/debug": 900,
-    "agg_int/gte/level/info": 700,
-    "agg_int/gte/level/warn": 100,
-    "agg_int/gte/level/error": 10,
-    "agg_int/gte/level/fatal": 1
-  },
   "raw_size_bytes": 5242880,
-  "ir_size_bytes": 1048576,
   "retention_days": 30,
-  "expires_at": 0
+  "expires_at": 0,
+  "self_describing_kv": [
+    {"key": "agg_int/GTE/level/debug", "value": "900"},
+    {"key": "agg_int/GTE/level/info", "value": "700"},
+    {"key": "agg_int/GTE/level/warn", "value": "100"},
+    {"key": "agg_int/GTE/level/error", "value": "10"},
+    {"key": "agg_int/GTE/level/fatal", "value": "1"}
+  ]
 }'
 
 kafka_produce "clp_spark" '{
-  "ir_storage_backend": "s3",
-  "ir_bucket": "clp-ir",
-  "ir_path": "s3://clp-ir/app-001/executor-0/file-002.clp.zst",
+  "ir": {
+    "storage_backend": "s3",
+    "bucket": "clp-ir",
+    "path": "s3://clp-ir/app-001/executor-0/file-002.clp.zst",
+    "size_bytes": 2097152
+  },
   "state": "IR_ARCHIVE_BUFFERING",
   "min_timestamp": 1704067200,
   "max_timestamp": 1704067800,
   "record_count": 2500,
-  "counts": {
-    "agg_int/gte/level/debug": 2200,
-    "agg_int/gte/level/info": 1800,
-    "agg_int/gte/level/warn": 300,
-    "agg_int/gte/level/error": 25,
-    "agg_int/gte/level/fatal": 0
-  },
   "raw_size_bytes": 10485760,
-  "ir_size_bytes": 2097152,
   "retention_days": 30,
-  "expires_at": 0
+  "expires_at": 0,
+  "self_describing_kv": [
+    {"key": "agg_int/GTE/level/debug", "value": "2200"},
+    {"key": "agg_int/GTE/level/info", "value": "1800"},
+    {"key": "agg_int/GTE/level/warn", "value": "300"},
+    {"key": "agg_int/GTE/level/error", "value": "25"},
+    {"key": "agg_int/GTE/level/fatal", "value": "0"}
+  ]
 }'
 
 kafka_produce "clp_spark" '{
-  "ir_storage_backend": "minio",
-  "ir_bucket": "clp-ir",
-  "ir_path": "s3://clp-ir/app-002/executor-1/file-003.clp.zst",
+  "ir": {
+    "storage_backend": "minio",
+    "bucket": "clp-ir",
+    "path": "s3://clp-ir/app-002/executor-1/file-003.clp.zst",
+    "size_bytes": 524288
+  },
   "state": "IR_ARCHIVE_CONSOLIDATION_PENDING",
   "min_timestamp": 1704153600,
   "max_timestamp": 1704154200,
   "record_count": 500,
-  "counts": {
-    "agg_int/gte/level/debug": 480,
-    "agg_int/gte/level/info": 400,
-    "agg_int/gte/level/warn": 50,
-    "agg_int/gte/level/error": 5,
-    "agg_int/gte/level/fatal": 0
-  },
   "raw_size_bytes": 2621440,
-  "ir_size_bytes": 524288,
   "retention_days": 7,
-  "expires_at": 0
+  "expires_at": 0,
+  "self_describing_kv": [
+    {"key": "agg_int/GTE/level/debug", "value": "480"},
+    {"key": "agg_int/GTE/level/info", "value": "400"},
+    {"key": "agg_int/GTE/level/warn", "value": "50"},
+    {"key": "agg_int/GTE/level/error", "value": "5"},
+    {"key": "agg_int/GTE/level/fatal", "value": "0"}
+  ]
 }'
 
 info "Waiting for records to appear in clp_spark table..."
@@ -376,7 +400,7 @@ if wait_for_condition "coordinator for clp_flink started" \
     pass "CoordinatorUnit started for clp_flink after reconciliation"
 else
     fail "No coordinator started for clp_flink"
-    grep -i "clp_flink" "$FLINK_LOG" | tail -10
+    grep -i "clp_flink" "$FLINK_LOG" | tail -10 || true
 fi
 rm -f "$FLINK_LOG"
 
@@ -396,11 +420,16 @@ echo "========================================="
 # Cleanup
 # =========================================================================
 echo ""
-read -rp "Tear down the stack? [Y/n] " answer
-if [ "${answer:-Y}" != "n" ] && [ "${answer:-Y}" != "N" ]; then
-    cleanup
+if [ -t 0 ]; then
+    read -rp "Tear down the stack? [Y/n] " answer
+    if [ "${answer:-Y}" != "n" ] && [ "${answer:-Y}" != "N" ]; then
+        cleanup
+    else
+        info "Stack left running. Tear down manually with: $COMPOSE down -v"
+    fi
 else
-    info "Stack left running. Tear down manually with: $COMPOSE down -v"
+    # Non-interactive (CI / piped) — always clean up.
+    cleanup
 fi
 
 exit "$FAILURES"
