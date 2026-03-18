@@ -172,8 +172,10 @@ func TestFileRecords_UpsertBatch_GuardPreventsOverwrite(t *testing.T) {
 		Values(1704067200000000000, 1704067200100000000,
 			"/data/protected.ir", "ARCHIVE_CLOSED", 100, 30, 0).
 		ToSql()
-	_, err := mc.DB.ExecContext(ctx, query, args...)
 	if err != nil {
+		t.Fatalf("build insert SQL: %v", err)
+	}
+	if _, err := mc.DB.ExecContext(ctx, query, args...); err != nil {
 		t.Fatal(err)
 	}
 

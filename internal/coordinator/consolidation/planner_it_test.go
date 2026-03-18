@@ -169,23 +169,25 @@ func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
 	plannerCtx, cancel := context.WithCancel(ctx)
 	go planner.Run(plannerCtx)
 
-	// Wait until all files are promoted (none remain in BUFFERING).
-	testutil.WaitFor(t, 15*time.Second, "stuck files to be promoted", func() bool {
-		var bufferingCount int
-		err := mc.DB.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM `"+plannerTable+"` WHERE state = 'IR_ARCHIVE_BUFFERING'").
-			Scan(&bufferingCount)
-		return err == nil && bufferingCount == 0
+	// Wait for the full pipeline: promote stuck files AND create tasks.
+	// We must not cancel before task creation completes — the planner promotes
+	// files and creates tasks in the same planOnce() call, so cancelling after
+	// promotion but before task creation causes a race.
+	testutil.WaitFor(t, 15*time.Second, "planner to create tasks from stuck files", func() bool {
+		counts, err := taskQueue.GetTaskCounts(context.Background(), plannerTable)
+		return err == nil && counts.Pending >= 1
 	})
 	cancel()
 
-	// Verify tasks were created (5 files with min 2 per group).
-	counts, err := taskQueue.GetTaskCounts(context.Background(), plannerTable)
-	if err != nil {
+	// Verify all files were promoted out of BUFFERING.
+	var bufferingCount int
+	if err := mc.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `"+plannerTable+"` WHERE state = 'IR_ARCHIVE_BUFFERING'").
+		Scan(&bufferingCount); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Pending < 1 {
-		t.Errorf("pending tasks = %d, want >= 1", counts.Pending)
+	if bufferingCount != 0 {
+		t.Errorf("buffering count = %d, want 0", bufferingCount)
 	}
 }
 
