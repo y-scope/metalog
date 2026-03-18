@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	coordinatorpb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
-	ingestionpb "github.com/y-scope/metalog/gen/proto/ingestionpb"
+	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	metadatapb "github.com/y-scope/metalog/gen/proto/metadatapb"
 	splitspb "github.com/y-scope/metalog/gen/proto/splitspb"
 	"github.com/y-scope/metalog/internal/config"
@@ -60,7 +60,7 @@ func Server() {
 
 		if cfg.GRPC.Ingestion {
 			ingestionGrpc := grpcserver.NewIngestionHandler(n.IngestionService(), log)
-			ingestionpb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
+			ingestiongrpc.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionGrpc)
 			log.Info("gRPC service registered", zap.String("service", "ingestion"))
 		}
 

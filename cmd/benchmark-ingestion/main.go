@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
+	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 )
 
@@ -84,7 +85,7 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 	}
 	defer conn.Close()
 
-	client := pb.NewMetadataIngestionServiceClient(conn)
+	client := ingestiongrpc.NewMetadataIngestionServiceClient(conn)
 
 	var (
 		accepted atomic.Int64

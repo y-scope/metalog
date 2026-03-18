@@ -5,8 +5,6 @@ import "github.com/y-scope/metalog/gen/proto/ingestionpb"
 // Ingestion record types — used by MessageTransformer implementations.
 
 type MetadataRecord = ingestionpb.MetadataRecord
-type IngestRequest = ingestionpb.IngestRequest
-type IngestResponse = ingestionpb.IngestResponse
 
 // File-level fields.
 

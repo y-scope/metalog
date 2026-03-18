@@ -5,13 +5,14 @@ import (
 
 	"go.uber.org/zap"
 
+	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
 )
 
 // IngestionHandler implements the MetadataIngestionService gRPC interface.
 type IngestionHandler struct {
-	pb.UnimplementedMetadataIngestionServiceServer
+	ingestiongrpc.UnimplementedMetadataIngestionServiceServer
 	service *ingestion.Service
 	log     *zap.Logger
 }

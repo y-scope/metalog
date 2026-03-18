@@ -28,7 +28,10 @@ proto:
 	$(PROTOC) \
 		--proto_path=$(PROTO_DIR) \
 		--go_out=$(GEN_DIR)/ingestionpb --go_opt=paths=source_relative \
-		--go-grpc_out=$(GEN_DIR)/ingestionpb --go-grpc_opt=paths=source_relative \
+		$(PROTO_DIR)/ingestion.proto
+	$(PROTOC) \
+		--proto_path=$(PROTO_DIR) \
+		--go-grpc_out=$(GEN_DIR)/ingestiongrpc --go-grpc_opt=paths=source_relative \
 		$(PROTO_DIR)/ingestion.proto
 	$(PROTOC) \
 		--proto_path=$(PROTO_DIR) \
