@@ -84,10 +84,9 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	}
 	dbType, versionStr, err := db.DetectDatabaseType(context.Background(), detectPool)
 	if err != nil {
-		log.Warn("failed to detect database type, assuming MySQL", zap.Error(err))
-	} else {
-		log.Info("detected database", zap.String("type", dbType.String()), zap.String("version", versionStr))
+		return nil, fmt.Errorf("detect database type: %w", err)
 	}
+	log.Info("detected database", zap.String("type", dbType.String()), zap.String("version", versionStr))
 	isMariaDB := dbType == db.DatabaseTypeMariaDB
 
 	// Set up storage registry
@@ -99,7 +98,10 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		}
 		backend, err := storage.CreateBackend(typeName, backendCfg.ToMap())
 		if err != nil {
-			log.Warn("failed to create storage backend", zap.String("name", name), zap.Error(err))
+			if name == cfg.Storage.DefaultBackend {
+				return nil, fmt.Errorf("create default storage backend %q: %w", name, err)
+			}
+			log.Warn("failed to create storage backend, skipping", zap.String("name", name), zap.Error(err))
 			continue
 		}
 		storageReg.Register(name, backend)

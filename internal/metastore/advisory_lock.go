@@ -3,8 +3,12 @@ package metastore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
+
+// ErrLockNotAcquired is returned when GET_LOCK times out or another session holds the lock.
+var ErrLockNotAcquired = errors.New("advisory lock not acquired")
 
 // AdvisoryLock wraps MySQL GET_LOCK/RELEASE_LOCK on a dedicated connection.
 // The lock is connection-scoped: it is automatically released if the connection
@@ -32,7 +36,7 @@ func AcquireAdvisoryLock(ctx context.Context, db *sql.DB, name string, timeoutSe
 
 	if !result.Valid || result.Int64 != 1 {
 		conn.Close()
-		return nil, fmt.Errorf("GET_LOCK(%s): timeout or error (result=%v)", name, result)
+		return nil, fmt.Errorf("GET_LOCK(%s): %w (result=%v)", name, ErrLockNotAcquired, result)
 	}
 
 	return &AdvisoryLock{conn: conn, name: name, held: true}, nil

@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,11 +48,18 @@ func (pm *PartitionManager) RunMaintenance(ctx context.Context) error {
 	lockName := "pm_" + pm.tableName
 	lock, err := metastore.AcquireAdvisoryLock(ctx, pm.db, lockName, 0)
 	if err != nil {
-		pm.log.Debug("partition maintenance lock held by another node, skipping",
-			zap.String("table", pm.tableName))
-		return nil
+		if errors.Is(err, metastore.ErrLockNotAcquired) {
+			pm.log.Debug("partition maintenance lock held by another node, skipping",
+				zap.String("table", pm.tableName))
+			return nil
+		}
+		return fmt.Errorf("acquire partition maintenance lock: %w", err)
 	}
-	defer lock.Release(ctx)
+	defer func() {
+		if err := lock.Release(ctx); err != nil {
+			pm.log.Warn("release partition maintenance lock failed", zap.Error(err))
+		}
+	}()
 
 	pm.log.Debug("starting partition maintenance", zap.String("table", pm.tableName))
 
@@ -75,10 +83,17 @@ func (pm *PartitionManager) EnsureLookaheadPartitions(ctx context.Context) (int,
 	lockName := "pm_" + pm.tableName
 	lock, err := metastore.AcquireAdvisoryLock(ctx, pm.db, lockName, 5)
 	if err != nil {
+		if !errors.Is(err, metastore.ErrLockNotAcquired) {
+			return 0, fmt.Errorf("acquire lookahead lock: %w", err)
+		}
 		pm.log.Warn("advisory lock held by another node, proceeding without lock",
 			zap.String("table", pm.tableName))
 	} else {
-		defer lock.Release(ctx)
+		defer func() {
+			if err := lock.Release(ctx); err != nil {
+				pm.log.Warn("release lookahead lock failed", zap.Error(err))
+			}
+		}()
 	}
 
 	return pm.createLookaheadPartitions(ctx)

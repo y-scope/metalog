@@ -73,12 +73,13 @@ func TestUpsertGuardStates(t *testing.T) {
 		StateArchiveClosed:                 true,
 		StateArchivePurging:                true,
 	}
-	if len(UpsertGuardStates) != len(expected) {
-		t.Errorf("len(UpsertGuardStates) = %d, want %d", len(UpsertGuardStates), len(expected))
+	got := UpsertGuardStates()
+	if len(got) != len(expected) {
+		t.Errorf("len(UpsertGuardStates()) = %d, want %d", len(got), len(expected))
 	}
-	for _, state := range UpsertGuardStates {
+	for _, state := range got {
 		if !expected[state] {
-			t.Errorf("unexpected state in UpsertGuardStates: %q", state)
+			t.Errorf("unexpected state in UpsertGuardStates(): %q", state)
 		}
 	}
 }

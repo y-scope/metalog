@@ -87,8 +87,9 @@ func BuildGuardedUpsertSQL(
 	b.WriteString(" ON DUPLICATE KEY UPDATE ")
 
 	// Guard condition — generated from UpsertGuardStates to stay in sync.
-	guardStates := make([]string, len(UpsertGuardStates))
-	for i, s := range UpsertGuardStates {
+	states := UpsertGuardStates()
+	guardStates := make([]string, len(states))
+	for i, s := range states {
 		guardStates[i] = "'" + string(s) + "'"
 	}
 

@@ -55,14 +55,17 @@ func (s FileState) CanTransitionTo(target FileState) bool {
 	}
 }
 
-// UpsertGuardStates are states that should NOT be overwritten by an UPSERT.
+// UpsertGuardStates returns states that should NOT be overwritten by an UPSERT.
 // If a record is in one of these states, the guarded UPSERT preserves the
 // existing row instead of applying new values.
-var UpsertGuardStates = []FileState{
-	StateIRPurging,
-	StateIRArchiveConsolidationPending,
-	StateArchiveClosed,
-	StateArchivePurging,
+// Returns a fresh slice each call to prevent accidental mutation.
+func UpsertGuardStates() []FileState {
+	return []FileState{
+		StateIRPurging,
+		StateIRArchiveConsolidationPending,
+		StateArchiveClosed,
+		StateArchivePurging,
+	}
 }
 
 // FileRecord represents a single row in a metadata table.
