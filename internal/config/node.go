@@ -118,7 +118,10 @@ func (c *NodeConfig) ResolveNodeID() string {
 	if v := os.Getenv(envVar); v != "" {
 		return v
 	}
-	h, _ := os.Hostname()
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return ""
+	}
 	return h
 }
 

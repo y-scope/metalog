@@ -207,13 +207,16 @@ const MaxStuckBufferingBatch = 1000
 // Returns the number of rows promoted. Files that raced ahead to another state
 // are naturally skipped by the WHERE clause.
 func (fr *FileRecords) PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error) {
-	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(StateIRArchiveConsolidationPending)).
 		Where(sq.Eq{ColState: string(StateIRArchiveBuffering)}).
 		Where(sq.Gt{ColMaxTimestamp: 0}).
 		Where(sq.Lt{ColMaxTimestamp: staleBeforeNanos}).
 		Limit(MaxStuckBufferingBatch).
 		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("promote stuck buffering: build query: %w", err)
+	}
 
 	res, err := fr.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -300,7 +303,7 @@ func (fr *FileRecords) MarkArchiveClosed(
 	for i, p := range validPaths {
 		or[i] = sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", p)
 	}
-	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColClpArchivePath, archivePath).
 		Set(ColClpArchiveStorageBackend, archiveBackend).
 		Set(ColClpArchiveBucket, archiveBucket).
@@ -311,6 +314,9 @@ func (fr *FileRecords) MarkArchiveClosed(
 		Where(ColClpArchivePath + " IS NULL").
 		Where(sq.Eq{ColState: string(StateIRArchiveConsolidationPending)}).
 		ToSql()
+	if err != nil {
+		return fmt.Errorf("mark archive closed: build query: %w", err)
+	}
 
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("mark archive closed: %w", err)
@@ -368,11 +374,14 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 	for s := range sourceStates {
 		stateList = append(stateList, string(s))
 	}
-	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(newState)).
 		Where(or).
 		Where(sq.Eq{ColState: stateList}).
 		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("update state: build query: %w", err)
+	}
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("update state: %w", err)
@@ -430,13 +439,16 @@ func (fr *FileRecords) TransitionExpiredToPurging(ctx context.Context, currentNa
 // transitionStateBatch updates up to MaxExpirationBatch rows from fromState to toState
 // where expires_at > 0 AND expires_at < currentNanos.
 func (fr *FileRecords) transitionStateBatch(ctx context.Context, currentNanos int64, fromState, toState FileState) (int64, error) {
-	query, args, _ := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
+	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(toState)).
 		Where(sq.Gt{ColExpiresAt: 0}).
 		Where(sq.Lt{ColExpiresAt: currentNanos}).
 		Where(sq.Eq{ColState: string(fromState)}).
 		Limit(uint64(MaxExpirationBatch)).
 		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("transition state batch: build query: %w", err)
+	}
 
 	res, err := fr.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -455,7 +467,7 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 	defer tx.Rollback()
 
 	// Select expired files
-	expQuery, expArgs, _ := sq.Select(
+	expQuery, expArgs, err := sq.Select(
 		ColClpIRStorageBackend, ColClpIRBucket, ColClpIRPath,
 		ColClpArchiveStorageBackend, ColClpArchiveBucket, ColClpArchivePath,
 		ColClpIRPathHash,
@@ -466,6 +478,9 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 		Where(sq.Eq{ColState: []string{string(StateIRPurging), string(StateArchivePurging)}}).
 		Limit(MaxExpirationBatch).
 		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("delete expired files: build query: %w", err)
+	}
 	rows, err := tx.QueryContext(ctx, expQuery, expArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query expired files: %w", err)
@@ -511,12 +526,15 @@ func (fr *FileRecords) DeleteExpiredFiles(ctx context.Context, currentNanos int6
 	for i, h := range hashes {
 		hashArgs[i] = h
 	}
-	delQuery, delArgs, _ := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
+	delQuery, delArgs, err := sq.Delete(dbutil.QuoteIdentifier(fr.tableName)).
 		Where(sq.Eq{ColClpIRPathHash: hashArgs}).
 		Where(sq.Gt{ColExpiresAt: 0}).
 		Where(sq.Lt{ColExpiresAt: currentNanos}).
 		Where(sq.Eq{ColState: []string{string(StateIRPurging), string(StateArchivePurging)}}).
 		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("delete expired files: build delete: %w", err)
+	}
 	res, err := tx.ExecContext(ctx, delQuery, delArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("delete expired: %w", err)
@@ -555,11 +573,14 @@ func (fr *FileRecords) FindByID(ctx context.Context, id int64) (*FileRecord, err
 
 // FindByIRPath returns a single file record by its IR path (via UNHEX(MD5()) hash).
 func (fr *FileRecords) FindByIRPath(ctx context.Context, irPath string) (*FileRecord, error) {
-	query, args, _ := sq.Select(baseSelectCols()...).
+	query, args, err := sq.Select(baseSelectCols()...).
 		From(dbutil.QuoteIdentifier(fr.tableName)).
 		Where(sq.Expr(ColClpIRPathHash+" = UNHEX(MD5(?))", irPath)).
 		Limit(1).
 		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("find by ir path: build query: %w", err)
+	}
 
 	rows, err := fr.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -579,11 +600,14 @@ func (fr *FileRecords) FindByIRPath(ctx context.Context, irPath string) (*FileRe
 
 // FindByArchivePath returns a single file record by its archive path (via UNHEX(MD5()) hash).
 func (fr *FileRecords) FindByArchivePath(ctx context.Context, archivePath string) (*FileRecord, error) {
-	query, args, _ := sq.Select(baseSelectCols()...).
+	query, args, err := sq.Select(baseSelectCols()...).
 		From(dbutil.QuoteIdentifier(fr.tableName)).
 		Where(sq.Expr(ColClpArchivePathHash+" = UNHEX(MD5(?))", archivePath)).
 		Limit(1).
 		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("find by archive path: build query: %w", err)
+	}
 
 	rows, err := fr.db.QueryContext(ctx, query, args...)
 	if err != nil {

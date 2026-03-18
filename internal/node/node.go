@@ -41,6 +41,9 @@ type Node struct {
 // NewNode creates and initializes a Node from configuration.
 func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	nodeID := cfg.ResolveNodeID()
+	if nodeID == "" {
+		return nil, fmt.Errorf("node ID is empty: set %s env var or configure nodeIdEnvVar", cfg.Coordinator.NodeIDEnvVar)
+	}
 	log = log.With(zap.String("nodeId", nodeID))
 
 	// Create primary pool (nil if not configured, e.g. replica-only API server)
@@ -81,6 +84,9 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	detectPool := pool
 	if detectPool == nil {
 		detectPool = readPool
+	}
+	if detectPool == nil {
+		return nil, fmt.Errorf("no database configured (both primary and replica are nil)")
 	}
 	dbType, versionStr, err := db.DetectDatabaseType(context.Background(), detectPool)
 	if err != nil {
