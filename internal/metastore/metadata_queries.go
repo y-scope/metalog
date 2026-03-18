@@ -8,16 +8,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetadataQuerier provides read-only queries against the column registry tables.
+// MetadataReader provides read-only queries against the column registry tables.
 // It is transport-agnostic — gRPC/YARPC handlers map these domain types to proto.
-type MetadataQuerier struct {
+type MetadataReader struct {
 	db  *sql.DB
 	log *zap.Logger
 }
 
-// NewMetadataQuerier creates a MetadataQuerier.
-func NewMetadataQuerier(db *sql.DB, log *zap.Logger) *MetadataQuerier {
-	return &MetadataQuerier{db: db, log: log}
+// NewMetadataReader creates a MetadataReader.
+func NewMetadataReader(db *sql.DB, log *zap.Logger) *MetadataReader {
+	return &MetadataReader{db: db, log: log}
 }
 
 // DimensionInfo holds dimension metadata for a single column.
@@ -43,7 +43,7 @@ type SketchInfo struct {
 }
 
 // ListTables returns all registered table names, ordered alphabetically.
-func (q *MetadataQuerier) ListTables(ctx context.Context) ([]string, error) {
+func (q *MetadataReader) ListTables(ctx context.Context) ([]string, error) {
 	query, args, err := sq.Select("table_name").
 		From(TableRegistry).
 		OrderBy("table_name").
@@ -69,7 +69,7 @@ func (q *MetadataQuerier) ListTables(ctx context.Context) ([]string, error) {
 }
 
 // ListDimensions returns dimension metadata for ACTIVE columns in a table.
-func (q *MetadataQuerier) ListDimensions(ctx context.Context, tableName string) ([]DimensionInfo, error) {
+func (q *MetadataReader) ListDimensions(ctx context.Context, tableName string) ([]DimensionInfo, error) {
 	query, args, err := sq.Select("column_name", "dim_key", "base_type", "COALESCE(width, 0)", "COALESCE(alias_column, '')").
 		From(DimRegistryTable).
 		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
@@ -97,7 +97,7 @@ func (q *MetadataQuerier) ListDimensions(ctx context.Context, tableName string) 
 }
 
 // ListAggs returns aggregation metadata for ACTIVE columns in a table.
-func (q *MetadataQuerier) ListAggs(ctx context.Context, tableName string) ([]AggInfo, error) {
+func (q *MetadataReader) ListAggs(ctx context.Context, tableName string) ([]AggInfo, error) {
 	query, args, err := sq.Select("column_name", "agg_key", "COALESCE(agg_value, '')", "aggregation_type", "value_type", "COALESCE(alias_column, '')").
 		From(AggRegistryTable).
 		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
@@ -125,7 +125,7 @@ func (q *MetadataQuerier) ListAggs(ctx context.Context, tableName string) ([]Agg
 }
 
 // ListSketches returns sketch metadata for ACTIVE columns in a table.
-func (q *MetadataQuerier) ListSketches(ctx context.Context, tableName string) ([]SketchInfo, error) {
+func (q *MetadataReader) ListSketches(ctx context.Context, tableName string) ([]SketchInfo, error) {
 	query, args, err := sq.Select("sketch_name").
 		From(SketchRegistryTable).
 		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
