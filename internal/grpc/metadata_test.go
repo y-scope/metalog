@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	metapb "github.com/y-scope/metalog/gen/proto/metadatapb"
+	"github.com/y-scope/metalog/internal/metastore"
 )
 
 func newTestMetadataHandler(t *testing.T) (*MetadataHandler, sqlmock.Sqlmock) {
@@ -19,7 +20,8 @@ func newTestMetadataHandler(t *testing.T) (*MetadataHandler, sqlmock.Sqlmock) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return &MetadataHandler{db: db, log: zap.NewNop()}, mock
+	querier := metastore.NewMetadataQuerier(db, zap.NewNop())
+	return NewMetadataHandler(querier, zap.NewNop()), mock
 }
 
 // --- ListTables ---
@@ -60,7 +62,7 @@ func TestListTables_Empty(t *testing.T) {
 // --- ListDimensions ---
 
 func TestListDimensions_EmptyTable(t *testing.T) {
-	h := &MetadataHandler{}
+	h, _ := newTestMetadataHandler(t)
 	_, err := h.ListDimensions(context.Background(), &metapb.ListDimensionsRequest{})
 
 	assertGRPCCode(t, err, codes.InvalidArgument)
@@ -92,7 +94,7 @@ func TestListDimensions_ReturnsDims(t *testing.T) {
 // --- ListAggs ---
 
 func TestListAggs_EmptyTable(t *testing.T) {
-	h := &MetadataHandler{}
+	h, _ := newTestMetadataHandler(t)
 	_, err := h.ListAggs(context.Background(), &metapb.ListAggsRequest{})
 
 	assertGRPCCode(t, err, codes.InvalidArgument)
@@ -124,7 +126,7 @@ func TestListAggs_ReturnsAggs(t *testing.T) {
 // --- ListSketches ---
 
 func TestListSketches_EmptyTable(t *testing.T) {
-	h := &MetadataHandler{}
+	h, _ := newTestMetadataHandler(t)
 	_, err := h.ListSketches(context.Background(), &metapb.ListSketchesRequest{})
 
 	assertGRPCCode(t, err, codes.InvalidArgument)

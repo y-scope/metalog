@@ -2,9 +2,7 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
 
-	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -17,166 +15,90 @@ import (
 // MetadataHandler implements the MetadataService gRPC interface.
 type MetadataHandler struct {
 	metapb.UnimplementedMetadataServiceServer
-	db  *sql.DB
-	log *zap.Logger
+	querier *metastore.MetadataQuerier
+	log     *zap.Logger
 }
 
 // NewMetadataHandler creates a MetadataHandler.
-func NewMetadataHandler(db *sql.DB, log *zap.Logger) *MetadataHandler {
-	return &MetadataHandler{db: db, log: log}
+func NewMetadataHandler(querier *metastore.MetadataQuerier, log *zap.Logger) *MetadataHandler {
+	return &MetadataHandler{querier: querier, log: log}
 }
 
 // ListTables returns all registered table names.
 func (h *MetadataHandler) ListTables(ctx context.Context, _ *metapb.ListTablesRequest) (*metapb.ListTablesResponse, error) {
-	query, args, err := sq.Select("table_name").
-		From(metastore.TableRegistry).
-		OrderBy("table_name").
-		ToSql()
-	if err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list tables: build query: %v", err)
-	}
-	rows, err := h.db.QueryContext(ctx, query, args...)
+	tables, err := h.querier.ListTables(ctx)
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "list tables: %v", err)
 	}
-	defer rows.Close()
-
-	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, grpcstatus.Errorf(codes.Internal, "scan table: %v", err)
-		}
-		tables = append(tables, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list tables: %v", err)
-	}
-
 	return &metapb.ListTablesResponse{Tables: tables}, nil
 }
 
 // ListDimensions returns dimension metadata for a table.
 func (h *MetadataHandler) ListDimensions(ctx context.Context, req *metapb.ListDimensionsRequest) (*metapb.ListDimensionsResponse, error) {
-	tableName := req.GetTable()
-	if tableName == "" {
+	if req.GetTable() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "table is required")
 	}
 
-	query, args, err := sq.Select("column_name", "dim_key", "base_type", "COALESCE(width, 0)", "COALESCE(alias_column, '')").
-		From(metastore.DimRegistryTable).
-		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
-		OrderBy("column_name").
-		ToSql()
-	if err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list dimensions: build query: %v", err)
-	}
-	rows, err := h.db.QueryContext(ctx, query, args...)
+	dims, err := h.querier.ListDimensions(ctx, req.GetTable())
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "list dimensions: %v", err)
 	}
-	defer rows.Close()
 
-	var dims []*metapb.DimensionInfo
-	for rows.Next() {
-		var colName, dimKey, baseType, aliasCol string
-		var width int32
-		if err := rows.Scan(&colName, &dimKey, &baseType, &width, &aliasCol); err != nil {
-			return nil, grpcstatus.Errorf(codes.Internal, "scan dimension: %v", err)
+	pbDims := make([]*metapb.DimensionInfo, len(dims))
+	for i, d := range dims {
+		pbDims[i] = &metapb.DimensionInfo{
+			Name:        d.Name,
+			Type:        d.Type,
+			Width:       d.Width,
+			AliasColumn: d.AliasColumn,
 		}
-		dims = append(dims, &metapb.DimensionInfo{
-			Name:        dimKey,
-			Type:        baseType,
-			Width:       width,
-			AliasColumn: aliasCol,
-		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list dimensions: %v", err)
-	}
-
-	return &metapb.ListDimensionsResponse{Dimensions: dims}, nil
+	return &metapb.ListDimensionsResponse{Dimensions: pbDims}, nil
 }
 
 // ListAggs returns aggregation metadata for a table.
 func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequest) (*metapb.ListAggsResponse, error) {
-	tableName := req.GetTable()
-	if tableName == "" {
+	if req.GetTable() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "table is required")
 	}
 
-	query, args, err := sq.Select("column_name", "agg_key", "COALESCE(agg_value, '')", "aggregation_type", "value_type", "COALESCE(alias_column, '')").
-		From(metastore.AggRegistryTable).
-		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
-		OrderBy("column_name").
-		ToSql()
-	if err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list aggs: build query: %v", err)
-	}
-	rows, err := h.db.QueryContext(ctx, query, args...)
+	aggs, err := h.querier.ListAggs(ctx, req.GetTable())
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "list aggs: %v", err)
 	}
-	defer rows.Close()
 
-	var aggs []*metapb.AggInfo
-	for rows.Next() {
-		var colName, aggKey, aggValue, aggType, valueType, aliasCol string
-		if err := rows.Scan(&colName, &aggKey, &aggValue, &aggType, &valueType, &aliasCol); err != nil {
-			return nil, grpcstatus.Errorf(codes.Internal, "scan agg: %v", err)
-		}
+	pbAggs := make([]*metapb.AggInfo, len(aggs))
+	for i, a := range aggs {
 		aggInfo := &metapb.AggInfo{
-			Name:            aggKey,
-			Value:           aggValue,
-			AggregationType: splitspb.AggregationType(splitspb.AggregationType_value["AGGREGATION_TYPE_"+aggType]),
-			AliasColumn:     aliasCol,
+			Name:            a.Name,
+			Value:           a.Value,
+			AggregationType: splitspb.AggregationType(splitspb.AggregationType_value["AGGREGATION_TYPE_"+a.AggregationType]),
+			AliasColumn:     a.AliasColumn,
 		}
-		if valueType == "FLOAT" || valueType == "float" {
+		if a.ValueType == "FLOAT" || a.ValueType == "float" {
 			aggInfo.ValueType = metapb.AggValueType_AGG_VALUE_TYPE_FLOAT
 		} else {
 			aggInfo.ValueType = metapb.AggValueType_AGG_VALUE_TYPE_INT
 		}
-		aggs = append(aggs, aggInfo)
+		pbAggs[i] = aggInfo
 	}
-	if err := rows.Err(); err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list aggs: %v", err)
-	}
-
-	return &metapb.ListAggsResponse{Aggs: aggs}, nil
+	return &metapb.ListAggsResponse{Aggs: pbAggs}, nil
 }
 
 // ListSketches returns sketch metadata for a table.
 func (h *MetadataHandler) ListSketches(ctx context.Context, req *metapb.ListSketchesRequest) (*metapb.ListSketchesResponse, error) {
-	tableName := req.GetTable()
-	if tableName == "" {
+	if req.GetTable() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "table is required")
 	}
 
-	query, args, err := sq.Select("sketch_name").
-		From(metastore.SketchRegistryTable).
-		Where(sq.Eq{"table_name": tableName, "state": "ACTIVE"}).
-		OrderBy("sketch_name").
-		ToSql()
-	if err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list sketches: build query: %v", err)
-	}
-	rows, err := h.db.QueryContext(ctx, query, args...)
+	sketches, err := h.querier.ListSketches(ctx, req.GetTable())
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "list sketches: %v", err)
 	}
-	defer rows.Close()
 
-	var sketches []*metapb.SketchInfo
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, grpcstatus.Errorf(codes.Internal, "scan sketch: %v", err)
-		}
-		sketches = append(sketches, &metapb.SketchInfo{Name: name})
+	pbSketches := make([]*metapb.SketchInfo, len(sketches))
+	for i, s := range sketches {
+		pbSketches[i] = &metapb.SketchInfo{Name: s.Name}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, grpcstatus.Errorf(codes.Internal, "list sketches: %v", err)
-	}
-
-	return &metapb.ListSketchesResponse{Sketches: sketches}, nil
+	return &metapb.ListSketchesResponse{Sketches: pbSketches}, nil
 }

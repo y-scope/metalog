@@ -319,15 +319,15 @@ func seedTasks(ctx context.Context, db *sql.DB, tableNames []string, totalTasks 
 		nowNano := time.Now().UnixNano()
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO _task_queue (table_name, created_at, input) VALUES ")
-		args := make([]any, 0, n*3)
+		sb.WriteString("INSERT INTO _task_queue (table_name, created_at, version, input) VALUES ")
+		args := make([]any, 0, n*4)
 		for j := 0; j < n; j++ {
 			if j > 0 {
 				sb.WriteString(",")
 			}
-			sb.WriteString("(?,?,?)")
+			sb.WriteString("(?,?,?,?)")
 			tn := tableNames[(i+j)%len(tableNames)]
-			args = append(args, tn, nowNano, payload)
+			args = append(args, tn, nowNano, taskqueue.TaskPayloadVersion, payload)
 		}
 
 		if _, err := db.ExecContext(ctx, sb.String(), args...); err != nil {

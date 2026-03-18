@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
+	"github.com/y-scope/metalog/internal/coordinator"
 )
 
 func newTestAdminHandler(t *testing.T) (*AdminHandler, sqlmock.Sqlmock) {
@@ -20,7 +21,8 @@ func newTestAdminHandler(t *testing.T) (*AdminHandler, sqlmock.Sqlmock) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return &AdminHandler{db: db, log: zap.NewNop()}, mock
+	reg := coordinator.NewTableRegistration(db, true, "", zap.NewNop())
+	return NewAdminHandler(reg, zap.NewNop()), mock
 }
 
 // --- RegisterTable validation tests ---
@@ -54,7 +56,7 @@ func TestSetColumnAlias_EmptyColumnName(t *testing.T) {
 }
 
 func TestSetColumnAlias_InvalidColumnPrefix(t *testing.T) {
-	h := &AdminHandler{}
+	h, _ := newTestAdminHandler(t)
 	req := &pb.SetColumnAliasRequest{
 		TableName:  "test_table",
 		ColumnName: "some_random_col",
@@ -66,11 +68,8 @@ func TestSetColumnAlias_InvalidColumnPrefix(t *testing.T) {
 }
 
 func TestSetColumnAlias_AliasTooLong(t *testing.T) {
-	h := &AdminHandler{}
-	longAlias := "a"
-	for len(longAlias) <= maxAliasLength {
-		longAlias += "abcdefghij"
-	}
+	h, _ := newTestAdminHandler(t)
+	longAlias := strings.Repeat("a", 129)
 	req := &pb.SetColumnAliasRequest{
 		TableName:   "test_table",
 		ColumnName:  "dim_f01",
@@ -92,7 +91,7 @@ func TestSetColumnAlias_InvalidAliasPattern(t *testing.T) {
 	}
 	for _, alias := range invalid {
 		t.Run(alias, func(t *testing.T) {
-			h := &AdminHandler{}
+			h, _ := newTestAdminHandler(t)
 			req := &pb.SetColumnAliasRequest{
 				TableName:   "test_table",
 				ColumnName:  "dim_f01",
@@ -188,7 +187,7 @@ func TestInvalidateColumn_EmptyColumnName(t *testing.T) {
 }
 
 func TestInvalidateColumn_InvalidPrefix(t *testing.T) {
-	h := &AdminHandler{}
+	h, _ := newTestAdminHandler(t)
 	req := &pb.InvalidateColumnRequest{
 		TableName:  "test_table",
 		ColumnName: "some_random_col",

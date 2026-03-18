@@ -15,6 +15,7 @@ import (
 	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/coordinator"
 	grpcserver "github.com/y-scope/metalog/internal/grpc"
+	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/node"
 	"github.com/y-scope/metalog/internal/query"
 )
@@ -65,7 +66,7 @@ func Server() {
 
 		if cfg.GRPC.Admin {
 			regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Coordinator.TableCompression, log)
-			adminGrpc := grpcserver.NewAdminHandler(regSvc, n.Shared().DB, log)
+			adminGrpc := grpcserver.NewAdminHandler(regSvc, log)
 			coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminGrpc)
 			log.Info("gRPC service registered", zap.String("service", "admin"))
 		}
@@ -80,7 +81,8 @@ func Server() {
 
 		if cfg.GRPC.Metadata {
 			roDB := n.Shared().ReadOnlyDB()
-			metaGrpc := grpcserver.NewMetadataHandler(roDB, log)
+			querier := metastore.NewMetadataQuerier(roDB, log)
+			metaGrpc := grpcserver.NewMetadataHandler(querier, log)
 			metadatapb.RegisterMetadataServiceServer(grpcSrv.GRPCServer(), metaGrpc)
 			log.Info("gRPC service registered", zap.String("service", "metadata"))
 		}
