@@ -114,7 +114,7 @@ func extractDims(dims []*pb.DimEntry, rec *metastore.FileRecord) {
 
 // extractAggs populates FileRecord.Aggs with logical keys and FileRecord.AggMeta
 // with type metadata for schema evolution.
-func extractAggs(aggs []*pb.AggEntry, rec *metastore.FileRecord) {
+func extractAggs(aggs []*pb.IngestAggEntry, rec *metastore.FileRecord) {
 	for _, a := range aggs {
 		if a.Field == "" {
 			continue
@@ -125,10 +125,10 @@ func extractAggs(aggs []*pb.AggEntry, rec *metastore.FileRecord) {
 		var val any
 
 		switch v := a.Value.(type) {
-		case *pb.AggEntry_IntVal:
+		case *pb.IngestAggEntry_IntVal:
 			valueType = "INT"
 			val = v.IntVal
-		case *pb.AggEntry_FloatVal:
+		case *pb.IngestAggEntry_FloatVal:
 			valueType = "FLOAT"
 			val = v.FloatVal
 		default:

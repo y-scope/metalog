@@ -27,20 +27,20 @@ type StringDimension = ingestionpb.StringDimension
 
 // Aggregation types.
 
-type AggEntry = ingestionpb.AggEntry
-type AggType = ingestionpb.AggType
+type IngestAggEntry = ingestionpb.IngestAggEntry
+type IngestAggType = ingestionpb.IngestAggType
 
-// AggType enum values.
+// IngestAggType enum values.
 const (
-	AggType_EQ  = ingestionpb.AggType_EQ
-	AggType_GTE = ingestionpb.AggType_GTE
-	AggType_GT  = ingestionpb.AggType_GT
-	AggType_LTE = ingestionpb.AggType_LTE
-	AggType_LT  = ingestionpb.AggType_LT
-	AggType_SUM = ingestionpb.AggType_SUM
-	AggType_AVG = ingestionpb.AggType_AVG
-	AggType_MIN = ingestionpb.AggType_MIN
-	AggType_MAX = ingestionpb.AggType_MAX
+	IngestAggType_EQ  = ingestionpb.IngestAggType_EQ
+	IngestAggType_GTE = ingestionpb.IngestAggType_GTE
+	IngestAggType_GT  = ingestionpb.IngestAggType_GT
+	IngestAggType_LTE = ingestionpb.IngestAggType_LTE
+	IngestAggType_LT  = ingestionpb.IngestAggType_LT
+	IngestAggType_SUM = ingestionpb.IngestAggType_SUM
+	IngestAggType_AVG = ingestionpb.IngestAggType_AVG
+	IngestAggType_MIN = ingestionpb.IngestAggType_MIN
+	IngestAggType_MAX = ingestionpb.IngestAggType_MAX
 )
 
 // Self-describing key-value escape hatch.

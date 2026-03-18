@@ -21,23 +21,23 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type AggType int32
+type IngestAggType int32
 
 const (
-	AggType_EQ  AggType = 0
-	AggType_GTE AggType = 1
-	AggType_GT  AggType = 2
-	AggType_LTE AggType = 3
-	AggType_LT  AggType = 4
-	AggType_SUM AggType = 5
-	AggType_AVG AggType = 6
-	AggType_MIN AggType = 7
-	AggType_MAX AggType = 8
+	IngestAggType_EQ  IngestAggType = 0
+	IngestAggType_GTE IngestAggType = 1
+	IngestAggType_GT  IngestAggType = 2
+	IngestAggType_LTE IngestAggType = 3
+	IngestAggType_LT  IngestAggType = 4
+	IngestAggType_SUM IngestAggType = 5
+	IngestAggType_AVG IngestAggType = 6
+	IngestAggType_MIN IngestAggType = 7
+	IngestAggType_MAX IngestAggType = 8
 )
 
-// Enum value maps for AggType.
+// Enum value maps for IngestAggType.
 var (
-	AggType_name = map[int32]string{
+	IngestAggType_name = map[int32]string{
 		0: "EQ",
 		1: "GTE",
 		2: "GT",
@@ -48,7 +48,7 @@ var (
 		7: "MIN",
 		8: "MAX",
 	}
-	AggType_value = map[string]int32{
+	IngestAggType_value = map[string]int32{
 		"EQ":  0,
 		"GTE": 1,
 		"GT":  2,
@@ -61,30 +61,30 @@ var (
 	}
 )
 
-func (x AggType) Enum() *AggType {
-	p := new(AggType)
+func (x IngestAggType) Enum() *IngestAggType {
+	p := new(IngestAggType)
 	*p = x
 	return p
 }
 
-func (x AggType) String() string {
+func (x IngestAggType) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (AggType) Descriptor() protoreflect.EnumDescriptor {
+func (IngestAggType) Descriptor() protoreflect.EnumDescriptor {
 	return file_ingestion_proto_enumTypes[0].Descriptor()
 }
 
-func (AggType) Type() protoreflect.EnumType {
+func (IngestAggType) Type() protoreflect.EnumType {
 	return &file_ingestion_proto_enumTypes[0]
 }
 
-func (x AggType) Number() protoreflect.EnumNumber {
+func (x IngestAggType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use AggType.Descriptor instead.
-func (AggType) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use IngestAggType.Descriptor instead.
+func (IngestAggType) EnumDescriptor() ([]byte, []int) {
 	return file_ingestion_proto_rawDescGZIP(), []int{0}
 }
 
@@ -322,35 +322,35 @@ func (x *DimEntry) GetValue() *DimensionValue {
 	return nil
 }
 
-type AggEntry struct {
+type IngestAggEntry struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Field     string                 `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
 	Qualifier string                 `protobuf:"bytes,2,opt,name=qualifier,proto3" json:"qualifier,omitempty"`
-	AggType   AggType                `protobuf:"varint,3,opt,name=agg_type,json=aggType,proto3,enum=com.yscope.metalog.coordinator.grpc.AggType" json:"agg_type,omitempty"`
+	AggType   IngestAggType          `protobuf:"varint,3,opt,name=agg_type,json=aggType,proto3,enum=com.yscope.metalog.coordinator.grpc.IngestAggType" json:"agg_type,omitempty"`
 	// Types that are valid to be assigned to Value:
 	//
-	//	*AggEntry_IntVal
-	//	*AggEntry_FloatVal
-	Value         isAggEntry_Value `protobuf_oneof:"value"`
-	AliasColumn   string           `protobuf:"bytes,6,opt,name=alias_column,json=aliasColumn,proto3" json:"alias_column,omitempty"`
+	//	*IngestAggEntry_IntVal
+	//	*IngestAggEntry_FloatVal
+	Value         isIngestAggEntry_Value `protobuf_oneof:"value"`
+	AliasColumn   string                 `protobuf:"bytes,6,opt,name=alias_column,json=aliasColumn,proto3" json:"alias_column,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AggEntry) Reset() {
-	*x = AggEntry{}
+func (x *IngestAggEntry) Reset() {
+	*x = IngestAggEntry{}
 	mi := &file_ingestion_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AggEntry) String() string {
+func (x *IngestAggEntry) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AggEntry) ProtoMessage() {}
+func (*IngestAggEntry) ProtoMessage() {}
 
-func (x *AggEntry) ProtoReflect() protoreflect.Message {
+func (x *IngestAggEntry) ProtoReflect() protoreflect.Message {
 	mi := &file_ingestion_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -362,79 +362,79 @@ func (x *AggEntry) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AggEntry.ProtoReflect.Descriptor instead.
-func (*AggEntry) Descriptor() ([]byte, []int) {
+// Deprecated: Use IngestAggEntry.ProtoReflect.Descriptor instead.
+func (*IngestAggEntry) Descriptor() ([]byte, []int) {
 	return file_ingestion_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *AggEntry) GetField() string {
+func (x *IngestAggEntry) GetField() string {
 	if x != nil {
 		return x.Field
 	}
 	return ""
 }
 
-func (x *AggEntry) GetQualifier() string {
+func (x *IngestAggEntry) GetQualifier() string {
 	if x != nil {
 		return x.Qualifier
 	}
 	return ""
 }
 
-func (x *AggEntry) GetAggType() AggType {
+func (x *IngestAggEntry) GetAggType() IngestAggType {
 	if x != nil {
 		return x.AggType
 	}
-	return AggType_EQ
+	return IngestAggType_EQ
 }
 
-func (x *AggEntry) GetValue() isAggEntry_Value {
+func (x *IngestAggEntry) GetValue() isIngestAggEntry_Value {
 	if x != nil {
 		return x.Value
 	}
 	return nil
 }
 
-func (x *AggEntry) GetIntVal() int64 {
+func (x *IngestAggEntry) GetIntVal() int64 {
 	if x != nil {
-		if x, ok := x.Value.(*AggEntry_IntVal); ok {
+		if x, ok := x.Value.(*IngestAggEntry_IntVal); ok {
 			return x.IntVal
 		}
 	}
 	return 0
 }
 
-func (x *AggEntry) GetFloatVal() float64 {
+func (x *IngestAggEntry) GetFloatVal() float64 {
 	if x != nil {
-		if x, ok := x.Value.(*AggEntry_FloatVal); ok {
+		if x, ok := x.Value.(*IngestAggEntry_FloatVal); ok {
 			return x.FloatVal
 		}
 	}
 	return 0
 }
 
-func (x *AggEntry) GetAliasColumn() string {
+func (x *IngestAggEntry) GetAliasColumn() string {
 	if x != nil {
 		return x.AliasColumn
 	}
 	return ""
 }
 
-type isAggEntry_Value interface {
-	isAggEntry_Value()
+type isIngestAggEntry_Value interface {
+	isIngestAggEntry_Value()
 }
 
-type AggEntry_IntVal struct {
+type IngestAggEntry_IntVal struct {
 	IntVal int64 `protobuf:"varint,4,opt,name=int_val,json=intVal,proto3,oneof"`
 }
 
-type AggEntry_FloatVal struct {
+type IngestAggEntry_FloatVal struct {
 	FloatVal float64 `protobuf:"fixed64,5,opt,name=float_val,json=floatVal,proto3,oneof"`
 }
 
-func (*AggEntry_IntVal) isAggEntry_Value() {}
+func (*IngestAggEntry_IntVal) isIngestAggEntry_Value() {}
 
-func (*AggEntry_FloatVal) isAggEntry_Value() {}
+func (*IngestAggEntry_FloatVal) isIngestAggEntry_Value() {}
 
 type IrFileInfo struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -795,7 +795,7 @@ func (x *SketchEntry) GetData() []byte {
 type MetadataRecord struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	File             *FileFields            `protobuf:"bytes,1,opt,name=file,proto3" json:"file,omitempty"`
-	Agg              []*AggEntry            `protobuf:"bytes,2,rep,name=agg,proto3" json:"agg,omitempty"`
+	Agg              []*IngestAggEntry      `protobuf:"bytes,2,rep,name=agg,proto3" json:"agg,omitempty"`
 	Dim              []*DimEntry            `protobuf:"bytes,3,rep,name=dim,proto3" json:"dim,omitempty"`
 	SelfDescribingKv []*SelfDescribingEntry `protobuf:"bytes,4,rep,name=self_describing_kv,json=selfDescribingKv,proto3" json:"self_describing_kv,omitempty"`
 	Sketch           []*SketchEntry         `protobuf:"bytes,5,rep,name=sketch,proto3" json:"sketch,omitempty"`
@@ -840,7 +840,7 @@ func (x *MetadataRecord) GetFile() *FileFields {
 	return nil
 }
 
-func (x *MetadataRecord) GetAgg() []*AggEntry {
+func (x *MetadataRecord) GetAgg() []*IngestAggEntry {
 	if x != nil {
 		return x.Agg
 	}
@@ -1072,11 +1072,11 @@ func file_ingestion_proto_rawDescGZIP() []byte {
 var file_ingestion_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_ingestion_proto_goTypes = []any{
-	(AggType)(0),                // 0: com.yscope.metalog.coordinator.grpc.AggType
+	(IngestAggType)(0),              // 0: com.yscope.metalog.coordinator.grpc.IngestAggType
 	(*StringDimension)(nil),     // 1: com.yscope.metalog.coordinator.grpc.StringDimension
 	(*DimensionValue)(nil),      // 2: com.yscope.metalog.coordinator.grpc.DimensionValue
 	(*DimEntry)(nil),            // 3: com.yscope.metalog.coordinator.grpc.DimEntry
-	(*AggEntry)(nil),            // 4: com.yscope.metalog.coordinator.grpc.AggEntry
+	(*IngestAggEntry)(nil),          // 4: com.yscope.metalog.coordinator.grpc.IngestAggEntry
 	(*IrFileInfo)(nil),          // 5: com.yscope.metalog.coordinator.grpc.IrFileInfo
 	(*ArchiveFileInfo)(nil),     // 6: com.yscope.metalog.coordinator.grpc.ArchiveFileInfo
 	(*FileFields)(nil),          // 7: com.yscope.metalog.coordinator.grpc.FileFields
@@ -1090,11 +1090,11 @@ var file_ingestion_proto_depIdxs = []int32{
 	1,  // 0: com.yscope.metalog.coordinator.grpc.DimensionValue.str:type_name -> com.yscope.metalog.coordinator.grpc.StringDimension
 	1,  // 1: com.yscope.metalog.coordinator.grpc.DimensionValue.str_utf8:type_name -> com.yscope.metalog.coordinator.grpc.StringDimension
 	2,  // 2: com.yscope.metalog.coordinator.grpc.DimEntry.value:type_name -> com.yscope.metalog.coordinator.grpc.DimensionValue
-	0,  // 3: com.yscope.metalog.coordinator.grpc.AggEntry.agg_type:type_name -> com.yscope.metalog.coordinator.grpc.AggType
+	0,  // 3: com.yscope.metalog.coordinator.grpc.IngestAggEntry.agg_type:type_name -> com.yscope.metalog.coordinator.grpc.IngestAggType
 	5,  // 4: com.yscope.metalog.coordinator.grpc.FileFields.ir:type_name -> com.yscope.metalog.coordinator.grpc.IrFileInfo
 	6,  // 5: com.yscope.metalog.coordinator.grpc.FileFields.archive:type_name -> com.yscope.metalog.coordinator.grpc.ArchiveFileInfo
 	7,  // 6: com.yscope.metalog.coordinator.grpc.MetadataRecord.file:type_name -> com.yscope.metalog.coordinator.grpc.FileFields
-	4,  // 7: com.yscope.metalog.coordinator.grpc.MetadataRecord.agg:type_name -> com.yscope.metalog.coordinator.grpc.AggEntry
+	4,  // 7: com.yscope.metalog.coordinator.grpc.MetadataRecord.agg:type_name -> com.yscope.metalog.coordinator.grpc.IngestAggEntry
 	3,  // 8: com.yscope.metalog.coordinator.grpc.MetadataRecord.dim:type_name -> com.yscope.metalog.coordinator.grpc.DimEntry
 	8,  // 9: com.yscope.metalog.coordinator.grpc.MetadataRecord.self_describing_kv:type_name -> com.yscope.metalog.coordinator.grpc.SelfDescribingEntry
 	9,  // 10: com.yscope.metalog.coordinator.grpc.MetadataRecord.sketch:type_name -> com.yscope.metalog.coordinator.grpc.SketchEntry
@@ -1121,8 +1121,8 @@ func file_ingestion_proto_init() {
 		(*DimensionValue_FloatVal)(nil),
 	}
 	file_ingestion_proto_msgTypes[3].OneofWrappers = []any{
-		(*AggEntry_IntVal)(nil),
-		(*AggEntry_FloatVal)(nil),
+		(*IngestAggEntry_IntVal)(nil),
+		(*IngestAggEntry_FloatVal)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
