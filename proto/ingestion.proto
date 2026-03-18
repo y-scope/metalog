@@ -29,10 +29,10 @@ message DimEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Aggregation types
+// Aggregation types (ingestion path)
 // ---------------------------------------------------------------------------
 
-enum AggType {
+enum IngestAggType {
   EQ  = 0;
   GTE = 1;
   GT  = 2;
@@ -44,10 +44,10 @@ enum AggType {
   MAX = 8;
 }
 
-message AggEntry {
-  string  field     = 1;
-  string  qualifier = 2;
-  AggType agg_type  = 3;
+message IngestAggEntry {
+  string         field        = 1;
+  string         qualifier    = 2;
+  IngestAggType  agg_type     = 3;
   oneof value {
     int64  int_val   = 4;
     double float_val = 5;
@@ -110,7 +110,7 @@ message SketchEntry {
 
 message MetadataRecord {
   FileFields                   file               = 1;
-  repeated AggEntry            agg                = 2;
+  repeated IngestAggEntry      agg                = 2;
   repeated DimEntry            dim                = 3;
   repeated SelfDescribingEntry self_describing_kv = 4;
   repeated SketchEntry         sketch             = 5;

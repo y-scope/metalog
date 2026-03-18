@@ -37,7 +37,7 @@ type CoordinatorUnit struct {
 	partition         *schema.PartitionManager
 	registry          *schema.ColumnRegistry
 	progress          *coordinator.ProgressTracker
-	kafkaConsumer     *kafkaconsumer.Consumer
+	kafkaConsumer     kafkaconsumer.MessageSource
 	log               *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
@@ -133,7 +133,7 @@ func NewCoordinatorUnit(
 
 	// Create Kafka consumer if configured — routes through IngestionService
 	// for proper dim/agg column resolution.
-	var kc *kafkaconsumer.Consumer
+	var kc kafkaconsumer.MessageSource
 	if tableCfg.Kafka.Enabled &&
 		tableCfg.Kafka.Topic != "" && tableCfg.Kafka.BootstrapServers != "" {
 		groupID := kafkaGroupPrefix + tableName + "-" + tableID

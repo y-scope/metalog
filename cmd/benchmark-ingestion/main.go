@@ -176,11 +176,11 @@ func buildIngestRequest(table string, i, appCount int) *pb.IngestRequest {
 				{Key: "host", Value: &pb.DimensionValue{Value: &pb.DimensionValue_Str{Str: &pb.StringDimension{Value: host, MaxLength: 128}}}},
 				{Key: "zone", Value: &pb.DimensionValue{Value: &pb.DimensionValue_Str{Str: &pb.StringDimension{Value: zone, MaxLength: 128}}}},
 			},
-			Agg: []*pb.AggEntry{
-				{Field: "level", Qualifier: "info", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(recordCount)}},
-				{Field: "level", Qualifier: "warn", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.05)}},
-				{Field: "level", Qualifier: "error", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.02)}},
-				{Field: "level", Qualifier: "fatal", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.002)}},
+			Agg: []*pb.IngestAggEntry{
+				{Field: "level", Qualifier: "info", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(recordCount)}},
+				{Field: "level", Qualifier: "warn", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.05)}},
+				{Field: "level", Qualifier: "error", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.02)}},
+				{Field: "level", Qualifier: "fatal", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(float64(recordCount) * 0.002)}},
 			},
 		},
 	}
@@ -350,11 +350,11 @@ func buildMetadataRecord(rng *rand.Rand, appID string, seq int) *pb.MetadataReco
 			{Key: "host", Value: &pb.DimensionValue{Value: &pb.DimensionValue_Str{Str: &pb.StringDimension{Value: fmt.Sprintf("host-%03d", rng.Intn(50)), MaxLength: 64}}}},
 			{Key: "zone", Value: &pb.DimensionValue{Value: &pb.DimensionValue_Str{Str: &pb.StringDimension{Value: zones[rng.Intn(len(zones))], MaxLength: 32}}}},
 		},
-		Agg: []*pb.AggEntry{
-			{Field: "level", Qualifier: "info", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(rng.Intn(40_000))}},
-			{Field: "level", Qualifier: "warn", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(rng.Intn(5_000))}},
-			{Field: "level", Qualifier: "error", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(rng.Intn(500))}},
-			{Field: "level", Qualifier: "fatal", AggType: pb.AggType_GTE, Value: &pb.AggEntry_IntVal{IntVal: int64(rng.Intn(10))}},
+		Agg: []*pb.IngestAggEntry{
+			{Field: "level", Qualifier: "info", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(rng.Intn(40_000))}},
+			{Field: "level", Qualifier: "warn", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(rng.Intn(5_000))}},
+			{Field: "level", Qualifier: "error", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(rng.Intn(500))}},
+			{Field: "level", Qualifier: "fatal", AggType: pb.IngestAggType_GTE, Value: &pb.IngestAggEntry_IntVal{IntVal: int64(rng.Intn(10))}},
 		},
 	}
 }
@@ -417,7 +417,7 @@ func marshalRecordJSON(record *pb.MetadataRecord) ([]byte, error) {
 	}
 
 	for _, a := range record.Agg {
-		if iv, ok := a.Value.(*pb.AggEntry_IntVal); ok {
+		if iv, ok := a.Value.(*pb.IngestAggEntry_IntVal); ok {
 			rec.Aggs = append(rec.Aggs, jsonAgg{
 				Field: a.Field, Qualifier: a.Qualifier,
 				Type: a.AggType.String(), IntVal: iv.IntVal,
