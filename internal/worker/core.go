@@ -107,7 +107,10 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 	if err != nil {
 		log.Error("archive creation failed", zap.Error(err))
 		result := &taskqueue.TaskResult{Error: err.Error()}
-		output, _ := taskqueue.MarshalResult(result)
+		output, marshalErr := taskqueue.MarshalResult(result)
+		if marshalErr != nil {
+			log.Error("marshal error result failed", zap.Error(marshalErr))
+		}
 		if _, cErr := c.taskQueue.CompleteTask(ctx, task.TaskID, output); cErr != nil {
 			log.Error("complete task with error result failed", zap.Error(cErr))
 		}

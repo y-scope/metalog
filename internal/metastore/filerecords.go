@@ -60,7 +60,10 @@ func (fr *FileRecords) UpsertBatch(
 		}
 		batch := records[start:end]
 
-		query, _, paramsPerRow := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch), fr.isMariaDB)
+		query, _, paramsPerRow, err := BuildGuardedUpsertSQL(fr.tableName, dimCols, aggCols, floatAggCols, len(batch), fr.isMariaDB)
+		if err != nil {
+			return totalAffected, fmt.Errorf("build upsert SQL: %w", err)
+		}
 
 		// Fill args for each row
 		allArgs := make([]any, 0, len(batch)*paramsPerRow)
@@ -353,8 +356,7 @@ func (fr *FileRecords) UpdateState(ctx context.Context, irPaths []string, newSta
 		}
 	}
 	if len(validPaths) == 0 {
-		_ = tx.Commit()
-		return 0, nil
+		return 0, tx.Commit()
 	}
 
 	// Batch update with OR-ed hash conditions.

@@ -1,6 +1,7 @@
 package metastore
 
 import (
+	"fmt"
 	"strings"
 
 	dbutil "github.com/y-scope/metalog/internal/db"
@@ -35,7 +36,7 @@ func BuildGuardedUpsertSQL(
 	floatAggCols map[string]bool,
 	rowCount int,
 	useValuesFunc bool,
-) (string, []any, int) {
+) (string, []any, int, error) {
 
 	base := baseCols()
 	allCols := make([]string, 0, len(base)+len(dimCols)+len(aggCols))
@@ -48,7 +49,7 @@ func BuildGuardedUpsertSQL(
 	// from ColumnRegistry which uses validated dim_fNN/agg_fNN names.
 	for _, col := range allCols {
 		if err := dbutil.ValidateSQLIdentifier(col); err != nil {
-			return "", nil, 0
+			return "", nil, 0, fmt.Errorf("invalid column name %q: %w", col, err)
 		}
 	}
 
@@ -131,7 +132,7 @@ func BuildGuardedUpsertSQL(
 	b.WriteString(", ")
 	writeGuardedAssignment(&b, ColMaxTimestamp, guard, newRef)
 
-	return b.String(), nil, paramsPerRow
+	return b.String(), nil, paramsPerRow, nil
 }
 
 // writeGuardedAssignment writes: `col` = IF(guard, <newRef(col)>, `col`)

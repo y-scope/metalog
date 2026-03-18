@@ -153,8 +153,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 	}
 
 	if len(tasks) == 0 {
-		_ = tx.Commit()
-		return nil, nil
+		return nil, tx.Commit()
 	}
 
 	// UPDATE claimed tasks to processing
