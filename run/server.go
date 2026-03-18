@@ -81,7 +81,7 @@ func Server() {
 
 		if cfg.GRPC.Metadata {
 			roDB := n.Shared().ReadOnlyDB()
-			querier := metastore.NewMetadataQuerier(roDB, log)
+			querier := metastore.NewMetadataReader(roDB, log)
 			metaGrpc := grpcserver.NewMetadataHandler(querier, log)
 			metadatapb.RegisterMetadataServiceServer(grpcSrv.GRPCServer(), metaGrpc)
 			log.Info("gRPC service registered", zap.String("service", "metadata"))

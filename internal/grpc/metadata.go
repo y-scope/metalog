@@ -15,12 +15,12 @@ import (
 // MetadataHandler implements the MetadataService gRPC interface.
 type MetadataHandler struct {
 	metapb.UnimplementedMetadataServiceServer
-	querier *metastore.MetadataQuerier
+	querier *metastore.MetadataReader
 	log     *zap.Logger
 }
 
 // NewMetadataHandler creates a MetadataHandler.
-func NewMetadataHandler(querier *metastore.MetadataQuerier, log *zap.Logger) *MetadataHandler {
+func NewMetadataHandler(querier *metastore.MetadataReader, log *zap.Logger) *MetadataHandler {
 	return &MetadataHandler{querier: querier, log: log}
 }
 

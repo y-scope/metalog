@@ -20,7 +20,7 @@ func newTestMetadataHandler(t *testing.T) (*MetadataHandler, sqlmock.Sqlmock) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	querier := metastore.NewMetadataQuerier(db, zap.NewNop())
+	querier := metastore.NewMetadataReader(db, zap.NewNop())
 	return NewMetadataHandler(querier, zap.NewNop()), mock
 }
 
