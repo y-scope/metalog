@@ -127,18 +127,22 @@ func (s *defaultStrategy) deleteStoragePaths(ctx context.Context, paths []metast
 		return
 	}
 
-	ticker := time.NewTicker(time.Second / time.Duration(s.deleteRate))
-	defer ticker.Stop()
+	interval := time.Second / time.Duration(s.deleteRate)
 
-	for _, p := range paths {
+	for i, p := range paths {
 		if p.Backend == "" || p.Path == "" {
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		// Rate-limit after the first deletion.
+		if i > 0 {
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 
 		backend, err := s.storageRegistry.Get(p.Backend)

@@ -258,6 +258,11 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		}
 
 		payload := p.buildPayload(group, irPaths)
+		if payload == nil {
+			p.inFlight.Remove(irPaths)
+			p.log.Warn("skipping group: missing IR bucket info")
+			continue
+		}
 		input, err := taskqueue.MarshalPayload(payload)
 		if err != nil {
 			p.inFlight.Remove(irPaths)
@@ -316,12 +321,13 @@ func (p *Planner) buildPayload(group FileGroup, irPaths []string) *taskqueue.Tas
 	if len(group.Records) > 0 && group.Records[0].ClpIRStorageBackend.Valid {
 		cons.IRBackend = group.Records[0].ClpIRStorageBackend.String
 	}
-	if len(group.Records) > 0 && group.Records[0].ClpIRBucket.Valid {
-		cons.IRBuckets = make([]string, len(group.Records))
-		for i, rec := range group.Records {
-			if rec.ClpIRBucket.Valid {
-				cons.IRBuckets[i] = rec.ClpIRBucket.String
-			}
+	if len(group.Records) == 0 || !group.Records[0].ClpIRBucket.Valid {
+		return nil // skip groups without valid IR bucket info
+	}
+	cons.IRBuckets = make([]string, len(group.Records))
+	for i, rec := range group.Records {
+		if rec.ClpIRBucket.Valid {
+			cons.IRBuckets[i] = rec.ClpIRBucket.String
 		}
 	}
 

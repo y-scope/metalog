@@ -64,19 +64,35 @@ func (b *FilesystemBackend) Put(_ context.Context, bucket, key string, body io.R
 	if err != nil {
 		return fmt.Errorf("fs put: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("fs put: mkdir: %w", err)
 	}
-	f, err := os.Create(path)
+
+	// Write to a temp file then rename for crash safety.
+	f, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
-		return fmt.Errorf("fs put: create: %w", err)
+		return fmt.Errorf("fs put: create temp: %w", err)
 	}
+	tmpPath := f.Name()
+
 	if _, err = io.Copy(f, body); err != nil {
 		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("fs put: copy: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("fs put: sync: %w", err)
+	}
 	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
 		return fmt.Errorf("fs put: close: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("fs put: rename: %w", err)
 	}
 	return nil
 }

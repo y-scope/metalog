@@ -208,7 +208,9 @@ func (c *Consumer) drainFlushesBlocking() {
 	if len(c.pendingFlushes) == 0 {
 		return
 	}
-	deadline := time.After(5 * time.Second)
+	deadlineTimer := time.NewTimer(5 * time.Second)
+	defer deadlineTimer.Stop()
+	deadline := deadlineTimer.C
 	for i, pf := range c.pendingFlushes {
 		select {
 		case err := <-pf.flushed:

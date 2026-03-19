@@ -432,6 +432,12 @@ func (n *Node) reconcile() {
 		n.log.Warn("orphan claim failed", zap.Error(err))
 	}
 	for _, t := range orphansClaimed {
+		n.coordMu.Lock()
+		_, exists := n.coordinators[t]
+		n.coordMu.Unlock()
+		if exists {
+			continue
+		}
 		if err := n.startCoordinator(t); err != nil {
 			n.log.Error("failed to start coordinator for orphan",
 				zap.String("table", t), zap.Error(err))

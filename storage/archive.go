@@ -30,6 +30,13 @@ func (ac *ArchiveCreator) CreateArchive(
 	irBackend string, irBuckets []string, irPaths []string,
 	archiveBackend, archiveBucket, archivePath string,
 ) (int64, error) {
+	if ac.compressor == nil {
+		return 0, fmt.Errorf("create archive: no compressor configured")
+	}
+	if len(irBuckets) != 1 && len(irBuckets) != len(irPaths) {
+		return 0, fmt.Errorf("create archive: irBuckets length %d must be 1 or match irPaths length %d", len(irBuckets), len(irPaths))
+	}
+
 	tmpDir, err := os.MkdirTemp("", "metalog-archive-*")
 	if err != nil {
 		return 0, fmt.Errorf("create temp dir: %w", err)
@@ -48,11 +55,9 @@ func (ac *ArchiveCreator) CreateArchive(
 	}
 
 	for i, irPath := range irPaths {
-		bucket := ""
-		if i < len(irBuckets) {
+		bucket := irBuckets[0]
+		if len(irBuckets) > 1 {
 			bucket = irBuckets[i]
-		} else if len(irBuckets) == 1 {
-			bucket = irBuckets[0]
 		}
 		localPath := filepath.Join(inputDir, fmt.Sprintf("%04d_%s", i, filepath.Base(irPath)))
 		if err := downloadFile(ctx, backend, bucket, irPath, localPath); err != nil {

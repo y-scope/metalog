@@ -47,10 +47,12 @@ func WithDeadlockRetry(ctx context.Context, maxRetries int, fn func() error) err
 		}
 		jitter := config.DefaultDeadlockMinBackoff +
 			time.Duration(rand.Int63n(int64(config.DefaultDeadlockMaxBackoff-config.DefaultDeadlockMinBackoff)))
+		timer := time.NewTimer(jitter)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(jitter):
+		case <-timer.C:
 		}
 	}
 }

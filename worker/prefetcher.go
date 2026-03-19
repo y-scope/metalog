@@ -92,8 +92,10 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 }
 
 func sleep(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
 	select {
-	case <-time.After(d):
+	case <-timer.C:
 	case <-ctx.Done():
+		timer.Stop()
 	}
 }
