@@ -60,13 +60,7 @@ Three layers of failure detection, each covering a non-overlapping failure scena
 
 Without the watchdog, a stalled coordinator on a live node would never be detected — the liveness signal keeps renewing, no peer claims the table, but no work gets done.
 
-**Watchdog escalation:**
-
-| Step | Trigger | Action |
-|------|---------|--------|
-| 1 | Goroutine exceeds stall threshold (5 min) | Log warning |
-| 2 | Goroutine exceeds 2× stall threshold (10 min) | Restart coordinator |
-| 3 | Same coordinator stalls again within 5 min | Release assignment for another node |
+**Stall detection:** When a coordinator shows no progress for 5 minutes (`DefaultProgressStallTimeout`), the reconciliation loop logs a warning and restarts the coordinator immediately.
 
 See [Coordinator HA Design: Health Monitoring](../design/coordinator-ha.md#health-monitoring) for details.
 

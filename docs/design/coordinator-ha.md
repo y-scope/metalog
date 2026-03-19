@@ -31,10 +31,8 @@ When a node starts:
 
    Per-node (one instance regardless of how many tables the node owns):
    - **gRPC server** — accepts metadata from gRPC clients; not HA-related (see [Ingestion Paths](../concepts/ingestion.md))
-   - **Reconciliation goroutine** — claims unassigned tables, detects dead owners, reconciles running units with DB assignments
+   - **Reconciliation goroutine** — claims unassigned tables, detects dead owners, reconciles running units with DB assignments, detects stalled coordinators (see [Health Monitoring](#health-monitoring))
    - **Liveness goroutine** — heartbeat mode writes to `_node_registry`; lease mode renews `lease_expiry`
-   - **Watchdog goroutine** — checks per-goroutine progress and restarts stalled coordinators (see [Health Monitoring](#health-monitoring))
-   - **Partition maintenance** — runs partition management for all active tables (not just owned ones), coordinated via advisory locks (database-level mutexes that prevent concurrent DDL across nodes; see [Partitioning](../concepts/metadata-schema.md#partitioning))
 
    Per-table (one instance per claimed table):
    - **Kafka consumer** — if enabled, polls Kafka and submits records to the node-level BatchingWriter (see [Ingestion Paths](../concepts/ingestion.md))
@@ -158,15 +156,9 @@ WHERE table_name = ? AND node_id = ?;
 -- AND node_id = ? prevents overwriting the new owner's progress after ownership loss
 ```
 
-**Watchdog escalation** (runs at the watchdog interval):
+**Stall detection** (checked during each reconciliation cycle):
 
-| Step | Trigger | Action |
-|------|---------|--------|
-| 1 | Goroutine exceeds stall threshold | Log warning |
-| 2 | Goroutine exceeds 2x stall threshold | Restart per-table coordinator |
-| 3 | Restart fails or same coordinator stalls again shortly after | Release assignment (`node_id = NULL`) for another node |
-
-The stall threshold (`DefaultProgressStallTimeout = 5 min`) is intentionally generous to avoid false positives during transient slowdowns. If a coordinator shows no progress for 5 minutes, a warning is logged and the coordinator is restarted.
+When a coordinator shows no progress for `DefaultProgressStallTimeout` (5 min), the reconciliation loop logs a warning and calls `Restart()` on the coordinator unit. The threshold is intentionally generous to avoid false positives during transient database latency.
 
 **Goroutine definitions** — a goroutine has made progress when it completes a full loop iteration:
 

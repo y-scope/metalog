@@ -17,21 +17,19 @@ Both ingestion paths submit records to a single `BatchingWriter`, which lazily c
 
 Both paths share this behavior. Under low volume, the time trigger ensures metadata is durably committed within roughly 1 second. Under high volume, the count trigger kicks in first, keeping batches full and throughput high.
 
-**Flush notification:** Each `FileRecord` carries an optional `Flushed chan error` (buffered, cap 1). After a batch is durably committed (or fails), the `tableWriter` sends `nil` (success) or an error to each record's `Flushed` channel. This is the coordination point: the Kafka consumer uses it to know when offsets are safe to commit, and gRPC uses it to send client acknowledgments.
+**Flush notification:** Each `FileRecord` carries an optional `Flushed chan error` (buffered, cap 1). After a batch is durably committed (or fails), the `tableWriter` sends `nil` (success) or an error to each record's `Flushed` channel. The Kafka consumer uses this to know when offsets are safe to commit.
 
-## gRPC (Push) — Commit-Then-Ack
+## gRPC (Push)
 
-The client sends metadata directly to the coordinator via the `Ingest` RPC (`IngestRequest` → `IngestResponse`). The coordinator submits records to the `BatchingWriter` and acknowledges only after the database commit succeeds.
+The client sends metadata directly to the coordinator via the `Ingest` RPC (`IngestRequest` → `IngestResponse`). The coordinator submits records to the `BatchingWriter` channel and returns immediately — the response indicates the record was accepted for processing, not that it has been committed to the database.
 
 **Protocol:**
 
 1. Client sends `IngestRequest` (one record per RPC call) with file metadata (IR or Archive)
 2. `IngestionGrpcService` converts proto records to internal domain objects, delegates to `IngestionService`
-3. `IngestionService` validates records, resolves dims/aggs via `ColumnRegistry`, submits to `BatchingWriter`
-4. `tableWriter` batches records and UPSERTs to database
-5. On flush completion, the `Flushed` channel signals success — gRPC handler sends the response
-
-The client does not receive an acknowledgment until the batch is durably committed. If the coordinator is unavailable or the channel is full, the client receives an error and can retry.
+3. `IngestionService` validates records, resolves dims/aggs via `ColumnRegistry`, submits to `BatchingWriter` channel
+4. Response sent to client (record accepted for async processing)
+5. `tableWriter` batches records and UPSERTs to database asynchronously
 
 **Backpressure:**
 

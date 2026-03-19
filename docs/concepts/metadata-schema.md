@@ -256,7 +256,7 @@ For partitions older than the cleanup age (default: 90 days):
 
 **Startup (blocking)**: Each per-table coordinator calls `ensureLookaheadPartitions()` before starting its goroutines. This blocks for up to 5 seconds to acquire the advisory lock — if another node is already running maintenance, the startup waits briefly then proceeds (partitions may already exist). The 5-second timeout is generous given that creating 7 lookahead partitions takes well under a second (metadata-only DDL). The timeout only matters when another node holds the advisory lock.
 
-**Background (periodic)**: Every node runs `runGlobalPartitionMaintenance()` every hour for all active tables with partition management enabled — not just tables the node owns. This provides redundancy: if a node dies, surviving nodes continue maintaining its tables' partitions. The advisory lock ensures only one node executes DDL at a time; others skip immediately.
+**Background (periodic)**: Each per-table coordinator runs `runPartitionMaintenance()` as an always-on goroutine. The advisory lock ensures only one coordinator executes DDL at a time for a given table; others skip immediately.
 
 ### Advisory Lock Coordination
 

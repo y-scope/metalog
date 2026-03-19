@@ -175,7 +175,7 @@ Periodic background goroutines for coordination and housekeeping. Created once a
 | 2 | `IngestionGrpcService` | Converts proto records → domain objects, delegates to `IngestionService` |
 | 3 | `IngestionService` | Validates records, resolves dims/aggs via `ColumnRegistry`, submits to `BatchingWriter` |
 | 4 | `BatchingWriter` | Routes to per-table `tableWriter` channel, batches records, UPSERT to database |
-| 5 | Response | Ack sent to client only after batch is durably committed |
+| 5 | Response | Ack sent to client after record is accepted onto the channel (async DB commit) |
 
 **Ingestion Path (Kafka → Database):**
 
@@ -236,8 +236,8 @@ In production, coordinators and workers run as separate processes on dedicated m
 2. Create shared resources (database pool, StorageRegistry)
 3. Initialize coordination schema, claim tables
 4. Create BatchingWriter
-5. Start all coordinator units (each runs per-coordinator startup below)
-6. Create `IngestionService`
+5. Create `IngestionService`
+6. Start all coordinator units (each runs per-coordinator startup below)
 7. Start gRPC server (if enabled)
 8. Start Node-level goroutines: Heartbeat/Lease Renewal, Reconciliation (includes stall detection)
 9. Start Health Check Server (if configured)
