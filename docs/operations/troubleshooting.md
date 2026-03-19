@@ -152,15 +152,13 @@ FROM _table_assignment
 WHERE node_id IS NOT NULL;
 ```
 
-The watchdog goroutine detects stalled per-coordinator goroutines and restarts them (or releases the table assignment). Look for:
+The reconciliation loop detects stalled coordinators and restarts them (or releases the table assignment). Look for:
 
 ```
-WARN Watchdog - Coordinator for table=clp_spark has not made progress in 50s — restarting
+WARN Coordinator for table=clp_spark has not made progress in 5m — restarting
 ```
 
-If the watchdog itself has stopped, the process may be in an unhealthy state. Check liveness: `curl http://coordinator:8081/health/live`.
-
-### Watchdog restarting a goroutine repeatedly
+### Reconciliation restarting a coordinator repeatedly
 
 **Symptom:** Logs show repeated coordinator restarts for the same table.
 

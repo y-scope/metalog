@@ -64,8 +64,8 @@ Without the watchdog, a stalled coordinator on a live node would never be detect
 
 | Step | Trigger | Action |
 |------|---------|--------|
-| 1 | Goroutine exceeds stall threshold (50s) | Log warning |
-| 2 | Goroutine exceeds 2× stall threshold (100s) | Restart coordinator |
+| 1 | Goroutine exceeds stall threshold (5 min) | Log warning |
+| 2 | Goroutine exceeds 2× stall threshold (10 min) | Restart coordinator |
 | 3 | Same coordinator stalls again within 5 min | Release assignment for another node |
 
 See [Coordinator HA Design: Health Monitoring](../design/coordinator-ha.md#health-monitoring) for details.
@@ -100,7 +100,7 @@ Step 4 handles split-brain: if a network partition caused another node to claim 
 5. Start all coordinator units (each runs per-coordinator startup below)
 6. Create `IngestionService`
 7. Start gRPC server (if enabled)
-8. Start node-level goroutines: Heartbeat/Lease Renewal, Reconciliation, Partition Maintenance, Watchdog
+8. Start node-level goroutines: Heartbeat/Lease Renewal, Reconciliation (includes stall detection)
 9. Start Health Check Server (if configured)
 
 **Per-coordinator (each claimed table):**
@@ -153,9 +153,8 @@ The ready flag is atomic — set to true after startup completes, false at the s
 |---------|---------|-------------|
 | Liveness interval | 30s | How often the node refreshes its heartbeat or lease |
 | Dead threshold / Lease TTL | 180s | Time before a silent node is considered dead |
-| Reconciliation interval | 60s | How often nodes scan for orphans |
-| Watchdog interval | 60s | How often the watchdog checks goroutine progress |
-| Stall threshold | 50s | Time before a stalled goroutine triggers a warning |
+| Reconciliation interval | 60s | How often nodes scan for orphans and check for stalled coordinators |
+| Stall threshold | 5 min | Time before a stalled coordinator triggers a warning (checked during reconciliation) |
 | Worker drain timeout | 30s | How long to wait for workers to finish during shutdown |
 | Task stale timeout | 5 min | How long before abandoned tasks are reclaimed |
 

@@ -145,11 +145,11 @@ The liveness goroutine and watchdog goroutine cover two non-overlapping failure 
 | Failure | Detected by | Response |
 |---------|-------------|----------|
 | Node death | Remote peers (liveness goroutine stops → signal goes stale) | Claim table |
-| Coordinator stall (node alive) | Local watchdog | Restart or release |
+| Coordinator stall (node alive) | Reconciliation loop (stall detection) | Restart or release |
 
-A stalled coordinator doesn't stop the liveness goroutine, so remote peers still see the node as alive. Without the watchdog, a stalled coordinator on a live node would never be detected — the liveness signal keeps renewing, no one claims the table, but no work gets done.
+A stalled coordinator doesn't stop the liveness goroutine, so remote peers still see the node as alive. Without stall detection, a stalled coordinator on a live node would never be detected — the liveness signal keeps renewing, no one claims the table, but no work gets done.
 
-Stall detection is entirely local. Each coordinator goroutine updates an in-memory `lastIterationAt` timestamp at the end of each loop iteration. The watchdog checks these in-memory timestamps — it does not read from the database. If all goroutines are healthy, the watchdog writes `last_progress_at` to the database for operator visibility (so cluster health can be queried without SSH-ing into individual nodes). If any goroutine stalls, `last_progress_at` stops advancing.
+Stall detection runs as part of the reconciliation loop. Each coordinator unit has a `ProgressTracker` with a `lastProgressNanos` atomic timestamp. Always-on goroutines (Alias Refresh, Partition Maintenance) call `RecordProgress()` on each iteration. The reconciliation loop checks these timestamps — if no progress has been made within the stall threshold, the coordinator is restarted.
 
 ```sql
 UPDATE _table_assignment
@@ -166,19 +166,16 @@ WHERE table_name = ? AND node_id = ?;
 | 2 | Goroutine exceeds 2x stall threshold | Restart per-table coordinator |
 | 3 | Restart fails or same coordinator stalls again shortly after | Release assignment (`node_id = NULL`) for another node |
 
-The stall threshold (hardcoded at 50s) is intentionally generous to avoid false positives during transient slowdowns (temporary database latency). The restart threshold is 2x the stall threshold (100s), and the recurrence window is 5 minutes — if the same coordinator stalls again within 5 minutes of a restart, the assignment is released.
+The stall threshold (`DefaultProgressStallTimeout = 5 min`) is intentionally generous to avoid false positives during transient slowdowns. If a coordinator shows no progress for 5 minutes, a warning is logged and the coordinator is restarted.
 
 **Goroutine definitions** — a goroutine has made progress when it completes a full loop iteration:
 
-| Goroutine | Iteration completes when... |
+| Goroutine | Records progress via |
 |-----------|---------------------------------|
-| Kafka Consumer | `Poll()` returns and all records submitted to BatchingWriter |
-| tableWriter | batch-UPSERT succeeds |
-| Planner | file query, task creation, stale task reclaim finish |
-| Storage Deletion | storage deletion finishes (or queue empty) |
-| Retention Cleanup | expired row deletion completes |
+| Alias Refresh | `ProgressTracker.RecordProgress()` after each refresh cycle |
+| Partition Maintenance | `ProgressTracker.RecordProgress()` after each maintenance cycle |
 
-An idle goroutine still completes iterations — `Poll()` returns 0 records and finishes immediately. A stuck goroutine cannot complete its iteration.
+The `ProgressTracker` uses a single atomic `lastProgressNanos` timestamp per coordinator unit. Progress is checked during the reconciliation loop's stall detection step.
 
 **Visibility queries:**
 

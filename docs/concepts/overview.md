@@ -239,26 +239,22 @@ In production, coordinators and workers run as separate processes on dedicated m
 5. Start all coordinator units (each runs per-coordinator startup below)
 6. Create `IngestionService`
 7. Start gRPC server (if enabled)
-8. Start Node-level goroutines: Heartbeat/Lease Renewal, Reconciliation, Partition Maintenance, Watchdog
+8. Start Node-level goroutines: Heartbeat/Lease Renewal, Reconciliation (includes stall detection)
 9. Start Health Check Server (if configured)
 
 **Per-coordinator (each claimed table):**
 
 1. Initialize schema and components (ColumnRegistry, PartitionManager, Retention Strategy)
 2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
-3. Recover from restart (Kafka consumer group resumes from last committed offset)
-4. Start Retention Strategy goroutine (always-on)
-5. Start Partition Maintenance goroutine (always-on)
-6. Start Alias Refresh goroutine (always-on)
-7. Start Planner goroutine (if consolidation enabled)
-8. Start Kafka Consumer goroutine (if enabled)
-9. Ready to process
+3. Start always-on goroutines: Partition Maintenance, Alias Refresh, Column Recycler
+4. Start conditional goroutines: Retention Strategy, Planner, Kafka Consumer (based on `_table_config`)
+5. Ready to process
 
 ### Shutdown Sequence
 
 **Node-level:**
 
-1. Cancel Node-level context (stops HA, Reconciliation, Partition Maintenance, Watchdog goroutines)
+1. Cancel Node-level context (stops Heartbeat/Lease Renewal, Reconciliation goroutines)
 2. Stop Health Check Server
 3. Stop gRPC server
 4. Stop all coordinator units (each runs per-coordinator shutdown below)
@@ -275,16 +271,6 @@ In production, coordinators and workers run as separate processes on dedicated m
 5. Stop Partition Maintenance
 6. Stop Alias Refresh
 7. Close unit resources (Kafka consumer client)
-
-### Recovery from Restart
-
-1. Get current database timestamp
-2. Wait for next second (clean timestamp boundary)
-3. Delete all tasks except `dead_letter`
-4. Clear InFlightSet
-5. Kafka consumer group resumes from last committed offset
-
-The consumer group ID (`clp-coordinator-{table_name}-{table_id}`) is deterministic. On restart or failover, the new owner reuses the same group ID and Kafka resumes automatically. No offset storage in the database.
 
 ---
 

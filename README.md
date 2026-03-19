@@ -93,7 +93,7 @@ flowchart TD
     subgraph Node["Each Node"]
         GrpcSvc["gRPC Ingestion Service"]
         BW["BatchingWriter<br/>(1 TableWriter per table per path)"]
-        HAAll["Heartbeat/Lease, Watchdog,<br/>Reconciliation, Partition Maint."]
+        HAAll["Heartbeat/Lease,<br/>Reconciliation"]
     end
 
     GrpcSvc --> BW

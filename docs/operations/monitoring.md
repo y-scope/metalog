@@ -93,7 +93,7 @@ FROM _table_assignment
 WHERE node_id IS NOT NULL;
 ```
 
-Alert if `seconds_stale > 100` (2× the default watchdog stall threshold of 50s).
+Alert if `seconds_stale > 600` (2× the default stall threshold of 5 min).
 
 ### Task queue depth
 

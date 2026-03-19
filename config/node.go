@@ -72,13 +72,6 @@ type CoordinatorConfig struct {
 	LeaseRenewalIntervalSeconds int        `yaml:"leaseRenewalIntervalSeconds"`
 }
 
-// RetentionConfig selects the retention cleanup strategy for a table.
-// Type selects the strategy implementation ("default" if empty).
-// Stored per-table in _table_config; read at coordinator startup.
-type RetentionConfig struct {
-	Type string
-}
-
 // HealthConfig controls the HTTP health endpoint.
 type HealthConfig struct {
 	Enabled bool `yaml:"enabled"`

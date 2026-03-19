@@ -64,10 +64,9 @@ coordinator:
 |---------|---------|-------------|
 | Liveness interval | 30s | How often the node refreshes its heartbeat or lease |
 | Dead threshold / Lease TTL | 180s (3 min) | Time before a silent node is considered dead |
-| Reconciliation interval | 60s | How often nodes scan for orphans and reconcile assignments |
+| Reconciliation interval | 60s | How often nodes scan for orphans, reconcile assignments, and check for stalled coordinators |
 | Partition maintenance interval | 1h | How often nodes run partition housekeeping |
-| Watchdog interval | 60s | How often the watchdog checks goroutine progress |
-| Stall threshold | 50s | Time before a stalled goroutine triggers a warning |
+| Stall threshold | 5 min | Time before a stalled coordinator triggers a warning (checked during reconciliation) |
 | Progress write interval | 60s | How often `last_progress_at` is updated in the database |
 
 **Threshold/interval ratio** defaults to 6:1 — the node must miss 6 consecutive writes before peers declare it dead. Below 3:1 risks spurious failover from scheduling jitter.
