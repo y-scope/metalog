@@ -18,7 +18,7 @@ import (
 	"github.com/y-scope/metalog/storage"
 )
 
-// Node is the top-level orchestrator that manages coordinator units.
+// Node is the top-level orchestrator that manages coordinator and worker units.
 type Node struct {
 	cfg       *config.NodeConfig
 	nodeID    string
@@ -29,6 +29,7 @@ type Node struct {
 
 	coordMu      sync.Mutex
 	coordinators map[string]*CoordinatorUnit
+	workerUnit   *WorkerUnit
 	healthSrv    *health.Server
 
 	log    *zap.Logger
@@ -161,7 +162,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 	return n, nil
 }
 
-// Start initializes the node based on configuration. Coordinator
+// Start initializes the node based on configuration. Coordinator and worker
 // subsystems only start when configured (coordinator.enabled + primary DB).
 // Tables are discovered from DB assignments — registered via admin API.
 // A node with only a replica DB and gRPC enabled runs as a read-only API server.
@@ -221,6 +222,12 @@ func (n *Node) Start() error {
 		}()
 	}
 
+	// Workers require primary DB
+	if n.cfg.Worker.Concurrency > 0 {
+		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
+		n.workerUnit.Start()
+	}
+
 	// Health server
 	if n.healthSrv != nil {
 		n.wg.Add(1)
@@ -235,6 +242,7 @@ func (n *Node) Start() error {
 
 	n.log.Info("node started",
 		zap.Int("coordinators", len(n.coordinators)),
+		zap.Int("workers", n.cfg.Worker.Concurrency),
 	)
 	return nil
 }
@@ -273,6 +281,11 @@ func (n *Node) Stop() {
 	// Stop batching writer
 	if n.writer != nil {
 		n.writer.Stop()
+	}
+
+	// Stop workers
+	if n.workerUnit != nil {
+		n.workerUnit.Stop()
 	}
 
 	// Stop health server
@@ -341,6 +354,9 @@ func (n *Node) startCoordinator(tableName string) error {
 	n.log.Info("starting coordinator",
 		zap.String("table", tableName),
 		zap.Bool("kafka", tableCfg.Kafka.Enabled),
+		zap.Bool("consolidation", tableCfg.Consolidation.Enabled),
+		zap.Bool("retention", tableCfg.Retention.Enabled),
+		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
 	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
@@ -457,6 +473,7 @@ func (n *Node) reconcile() {
 	}
 
 	// Step 3: Watchdog — restart stalled coordinators.
+	// Collect stalled coordinators under lock, then restart outside lock.
 	var stalled []*CoordinatorUnit
 	n.coordMu.Lock()
 	for name, cu := range n.coordinators {
@@ -470,7 +487,8 @@ func (n *Node) reconcile() {
 		cu.Restart()
 	}
 
-	// Step 4: Ownership verification
+	// Step 4: Ownership verification — stop coordinators for lost assignments,
+	// start coordinators for new assignments
 	assigned, err := n.registry.GetAssignedTables(ctx)
 	if err != nil {
 		n.log.Warn("get assigned tables failed", zap.Error(err))
@@ -481,6 +499,8 @@ func (n *Node) reconcile() {
 		assignedSet[t] = true
 	}
 
+	// Collect coordinators to stop, then release the lock before stopping them.
+	// cu.Stop() blocks on wg.Wait() which can take seconds under load.
 	var toStopUnits []*CoordinatorUnit
 	var toStopNames []string
 	n.coordMu.Lock()
@@ -501,6 +521,7 @@ func (n *Node) reconcile() {
 	for _, name := range toStopNames {
 		delete(n.coordinators, name)
 	}
+	// Identify newly assigned tables that need coordinators.
 	var toStart []string
 	for _, t := range assigned {
 		if _, running := n.coordinators[t]; !running {
@@ -509,6 +530,7 @@ func (n *Node) reconcile() {
 	}
 	n.coordMu.Unlock()
 
+	// Start coordinators outside the lock.
 	for _, t := range toStart {
 		n.log.Info("new assignment detected, starting coordinator", zap.String("table", t))
 		if err := n.startCoordinator(t); err != nil {

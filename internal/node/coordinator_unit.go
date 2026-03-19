@@ -10,9 +10,12 @@ import (
 
 	"github.com/y-scope/metalog/internal/config"
 	"github.com/y-scope/metalog/internal/coordinator"
+	"github.com/y-scope/metalog/internal/coordinator/consolidation"
 	"github.com/y-scope/metalog/internal/coordinator/ingestion"
+	"github.com/y-scope/metalog/internal/coordinator/retention"
 	"github.com/y-scope/metalog/internal/metastore"
 	"github.com/y-scope/metalog/internal/schema"
+	"github.com/y-scope/metalog/internal/taskqueue"
 	kafkaconsumer "github.com/y-scope/metalog/kafka"
 )
 
@@ -29,11 +32,13 @@ type CoordinatorUnit struct {
 	tableCfg      metastore.TableConfig
 	shared        *SharedResources
 	writer        *ingestion.BatchingWriter
-	partition     *schema.PartitionManager
-	registry      *schema.ColumnRegistry
-	progress      *coordinator.ProgressTracker
-	kafkaConsumer kafkaconsumer.MessageSource
-	log           *zap.Logger
+	planner           *consolidation.Planner
+	retentionStrategy retention.Strategy
+	partition         *schema.PartitionManager
+	registry          *schema.ColumnRegistry
+	progress          *coordinator.ProgressTracker
+	kafkaConsumer     kafkaconsumer.MessageSource
+	log               *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
 	ctxMu     sync.Mutex      // protects ctx and cancel
@@ -67,6 +72,63 @@ func NewCoordinatorUnit(
 	writer.SetRegistry(tableName, reg)
 	shared.SetColumnRegistry(tableName, reg)
 
+	// Consolidation planner (conditional on feature flag).
+	var planner *consolidation.Planner
+	if tableCfg.Consolidation.Enabled {
+		inFlight := consolidation.NewInFlightSet()
+
+		policy, err := consolidation.CreatePolicyChain(tableCfg.Consolidation.Policies)
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: create policy chain: %w", err)
+		}
+
+		taskQueue := taskqueue.NewQueue(shared.DB, log)
+
+		staleThreshold := 60 * time.Minute
+		if tableCfg.Consolidation.StaleBufferingMins > 0 {
+			staleThreshold = time.Duration(tableCfg.Consolidation.StaleBufferingMins) * time.Minute
+		} else if tableCfg.Consolidation.StaleBufferingMins < 0 {
+			staleThreshold = 0 // disabled
+		}
+
+		planner, err = consolidation.NewPlanner(consolidation.PlannerConfig{
+			DB:                 shared.DB,
+			TableName:          tableName,
+			IsMariaDB:          shared.IsMariaDB,
+			Policy:             policy,
+			InFlight:           inFlight,
+			TaskQueue:          taskQueue,
+			Resolver:           reg,
+			StorageRegistry:    shared.StorageRegistry,
+			ArchiveBackend:     shared.ArchiveBackend,
+			ArchiveBucket:      shared.ArchiveBucket,
+			Interval:           config.DefaultPlannerInterval,
+			FailureLogInterval: shared.FailureLogInterval,
+			StaleThreshold:     staleThreshold,
+			Log:                log,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: planner: %w", err)
+		}
+	}
+
+	// Retention strategy — always created; conditionally started in Start().
+	retTypeName := tableCfg.Retention.Type
+	if retTypeName == "" {
+		retTypeName = "default"
+	}
+	retStrategy, err := retention.CreateStrategy(retTypeName, retention.Deps{
+		DB:                 shared.DB,
+		TableName:          tableName,
+		IsMariaDB:          shared.IsMariaDB,
+		StorageRegistry:    shared.StorageRegistry,
+		FailureLogInterval: shared.FailureLogInterval,
+		Log:                log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("new coordinator unit: retention strategy: %w", err)
+	}
+
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
 	// Create Kafka consumer if configured — routes through IngestionService
@@ -92,15 +154,17 @@ func NewCoordinatorUnit(
 	childCtx, cancel := context.WithCancel(ctx)
 
 	return &CoordinatorUnit{
-		tableName:     tableName,
-		tableCfg:      tableCfg,
-		shared:        shared,
-		writer:        writer,
-		partition:     partMgr,
-		registry:      reg,
-		progress:      progress,
-		kafkaConsumer: kc,
-		log:           log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
+		tableName:        tableName,
+		tableCfg:         tableCfg,
+		shared:           shared,
+		writer:           writer,
+		planner:           planner,
+		retentionStrategy: retStrategy,
+		partition:        partMgr,
+		registry:         reg,
+		progress:         progress,
+		kafkaConsumer:    kc,
+		log:              log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
 		parentCtx:     ctx,
 		ctx:           childCtx,
 		cancel:        cancel,
@@ -138,6 +202,15 @@ func (u *CoordinatorUnit) Start() {
 	ctx := u.ctx
 	u.ctxMu.Unlock()
 
+	// Planner goroutine (nil when consolidation_enabled=false)
+	if u.planner != nil {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.planner.Run(ctx)
+		}()
+	}
+
 	// Partition maintenance goroutine
 	u.wg.Add(1)
 	go func() {
@@ -151,6 +224,15 @@ func (u *CoordinatorUnit) Start() {
 		defer u.wg.Done()
 		u.runAliasRefresh(ctx)
 	}()
+
+	// Retention cleanup goroutine (conditional on retention.enabled)
+	if u.tableCfg.Retention.Enabled {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.retentionStrategy.Run(ctx)
+		}()
+	}
 
 	// Column recycler goroutine
 	u.wg.Add(1)
