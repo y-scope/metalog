@@ -179,7 +179,7 @@ if updated == 0 {
 | Download failure | Error returned → `FailTask(taskID)` → delete orphan archive |
 | clp-s non-zero exit | Error returned → `FailTask(taskID)` → delete orphan archive |
 | Upload failure | Error returned → `FailTask(taskID)` → delete orphan archive |
-| Worker crash mid-task | Task stays in `processing`; Planner reclaims after stale timeout (default 10 min, set via `coordinator.task.timeout.ms`) |
+| Worker crash mid-task | Task stays in `processing`; Planner reclaims after stale timeout (`DefaultTaskStaleTimeout = 5m` in `config/timeouts.go`) |
 | `completeTask` returns 0 | Task reclaimed by coordinator — log warning, leave archive in place |
 
 ## Compression Metrics
@@ -200,9 +200,8 @@ The actual archive size (bytes) is returned by `createArchive()` and stored in t
 | Property | Default | Description |
 |----------|---------|-------------|
 | `worker.concurrency` | `0` (disabled) | Number of worker goroutines per process |
-| `worker.prefetchQueueSize` | `5` | Tasks held in-memory; one DB batch-claim per refill |
 
-Backoff on empty polls uses exponential backoff (1s → 32s) with a 2× multiplier.
+The prefetch batch size is an internal constant (`DefaultTaskClaimBatchSize = 10` in `config/timeouts.go`). Backoff on empty polls uses exponential backoff (1s → 30s) with a 2× multiplier.
 
 Note: In containerized environments, set `worker.concurrency` explicitly based on the container's CPU limit (cgroup).
 

@@ -26,7 +26,7 @@ There are two worker deployment modes with different claiming strategies:
 | In-process mode | Simple deployment for dev/test, shared connection pool, single config |
 | Dedicated worker nodes | Fault isolation, independent scaling (production) |
 | Prefetcher + channel | One DB claim transaction per batch instead of one per worker; workers wake via channel receive at zero CPU cost |
-| `FOR UPDATE` + `UPDATE` | Transactional task claiming in READ COMMITTED isolation; correct fan-out without SKIP LOCKED |
+| `FOR UPDATE SKIP LOCKED` + `UPDATE` | Transactional task claiming in READ COMMITTED isolation; concurrent claimers skip locked rows instead of blocking |
 | Direct storage access | Workers bypass coordinator for data transfer |
 | Self-healing | Workers delete the archive they just created when their task fails; if a task was reclaimed, the coordinator's retry logic handles cleanup |
 
@@ -52,7 +52,7 @@ There are two worker deployment modes with different claiming strategies:
    - Inserts to `_task_queue` table with state = `pending`
 
 2. **Task Claiming**
-   - A single `Prefetcher` goroutine executes `SELECT ... FOR UPDATE` + `UPDATE` in a READ COMMITTED transaction to batch-claim tasks. Claimed tasks are sent to a buffered channel. Worker goroutines receive from the channel (blocking). Prefetcher backs off (1 s → 32 s) when no tasks are available.
+   - A single `Prefetcher` goroutine executes `SELECT ... FOR UPDATE` + `UPDATE` in a READ COMMITTED transaction to batch-claim tasks. Claimed tasks are sent to a buffered channel. Worker goroutines receive from the channel (blocking). Prefetcher backs off (1s → 30s) when no tasks are available.
    - Both in-process and dedicated worker nodes use the same Prefetcher + channel architecture.
 
 3. **Task Execution** (Worker)
@@ -174,7 +174,7 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 
 | Error | Behavior | Recovery |
 |-------|----------|----------|
-| No task available | Prefetcher backs off (1s → 32s); workers block on channel receive at zero CPU cost | Automatic |
+| No task available | Prefetcher backs off (1s → 30s); workers block on channel receive at zero CPU cost | Automatic |
 | Database connection error | Log and retry | Automatic retry |
 | Task execution failure | Report via `failTask()` | Task marked failed |
 | Storage download error | Report via `failTask()` | Task marked failed |
@@ -215,7 +215,7 @@ docker compose -f docker/docker-compose.yml ps | grep worker
 | Worker health | `docker compose -f docker/docker-compose.yml ps \| grep worker` |
 | Task age | `SELECT *, (UNIX_TIMESTAMP() * 1000000000 - claimed_at) DIV 1000000000 AS age_seconds FROM _task_queue WHERE state = 'processing'` |
 | Planner running? | Check coordinator logs for "planner" |
-| Timeout config | Ensure `coordinator.task.timeout.ms` is set |
+| Stale timeout | `DefaultTaskStaleTimeout = 5m` (internal constant in `config/timeouts.go`) |
 
 ### Archive Creation Failures
 

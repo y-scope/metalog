@@ -126,7 +126,7 @@ When a node receives SIGTERM (e.g., rolling deployment):
 1. For each assigned table: stop ingestion, finish in-progress work, flush pending writes
 2. Exit
 
-The node does **not** release its assignments or clean up its liveness signal. In heartbeat mode, the heartbeat goes stale; in lease mode, the lease expires. Either way, the table becomes claimable after the dead threshold passes. During rolling deployments, the replacement node typically starts before the threshold expires and claims the orphans.
+On graceful shutdown, the node releases all table assignments and deregisters from `_node_registry`. Other nodes pick up the released tables on their next reconciliation cycle. During rolling deployments, the replacement node typically claims tables within seconds of the old node shutting down.
 
 ### Mode Switching
 

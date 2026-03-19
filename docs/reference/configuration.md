@@ -120,23 +120,26 @@ worker:
 
 ### Internal Constants
 
-These are not configurable via YAML but are defined in `config/timeouts.go`:
+These are not configurable via YAML. Most are defined in `config/timeouts.go` unless noted otherwise:
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `DefaultBatchFlushInterval` | 1s | Batching writer flush interval |
-| `DefaultBatchSize` | 5000 | UPSERT batch size |
-| `DefaultTaskClaimBatchSize` | 10 | Tasks claimed per worker poll |
-| `DefaultTaskStaleTimeout` | 5m | Processing task reclaim timeout |
-| `DefaultTaskCleanupAge` | 24h | Completed/failed task cleanup age |
-| `DefaultWorkerPollInterval` | 2s | Worker task poll interval |
-| `DefaultWorkerBackoffMax` | 30s | Max backoff when no tasks available |
-| `DefaultPlannerInterval` | 60s | Consolidation planner run interval |
-| `defaultScanInterval` | 60s | Retention strategy scan interval |
-| `defaultDeleteRate` | 500/sec | Max storage object deletions per second during retention cleanup |
-| `DefaultQueryLimit` | 1000 | Default total result limit for split queries (0 = unlimited) |
-| `DefaultQueryPageSize` | 1000 | Internal SQL LIMIT per page for streaming queries |
-| `DefaultDeadlockMaxRetries` | 10 | Max retries on SQL deadlock |
+| Constant | Value | Location | Description |
+|----------|-------|----------|-------------|
+| `DefaultBatchFlushInterval` | 1s | `config/timeouts.go` | Batching writer flush interval |
+| `DefaultBatchSize` | 5000 | `config/timeouts.go` | UPSERT batch size |
+| `DefaultTaskClaimBatchSize` | 10 | `config/timeouts.go` | Tasks claimed per worker poll |
+| `DefaultTaskStaleTimeout` | 5m | `config/timeouts.go` | Processing task reclaim timeout |
+| `DefaultTaskCleanupAge` | 24h | `config/timeouts.go` | Completed/failed task cleanup age |
+| `DefaultWorkerPollInterval` | 2s | `config/timeouts.go` | Worker task poll interval |
+| `DefaultWorkerBackoffMax` | 30s | `config/timeouts.go` | Max backoff when no tasks available |
+| `DefaultPlannerInterval` | 60s | `config/timeouts.go` | Consolidation planner run interval |
+| `defaultScanInterval` | 60s | `coordinator/retention/scanner.go` | Retention strategy scan interval |
+| `defaultDeleteRate` | 500/sec | `coordinator/retention/scanner.go` | Max storage deletions per second |
+| `DefaultQueryLimit` | 1000 | `config/timeouts.go` | Default total result limit for split queries (0 = unlimited) |
+| `DefaultQueryPageSize` | 1000 | `config/timeouts.go` | Internal SQL LIMIT per page for streaming queries |
+| `DefaultDeadlockMaxRetries` | 10 | `config/timeouts.go` | Max retries on SQL deadlock |
+| `DefaultDeadlockMinBackoff` | 1ms | `config/timeouts.go` | Min jitter on deadlock retry |
+| `DefaultDeadlockMaxBackoff` | 50ms | `config/timeouts.go` | Max jitter on deadlock retry |
+| `DefaultProgressStallTimeout` | 5m | `config/timeouts.go` | Coordinator progress stall detection |
 
 ---
 

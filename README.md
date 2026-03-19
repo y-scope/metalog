@@ -163,7 +163,7 @@ For the full system design — data lifecycle, end-to-end data flow, and deploym
 <tr><td><a href="docs/concepts/metadata-schema.md">Metadata Schema</a></td><td>Entry types, lifecycle, denormalization, partitioning</td></tr>
 <tr><td><a href="docs/concepts/ingestion.md">Ingestion Paths</a></td><td>gRPC and Kafka ingestion, BatchingWriter</td></tr>
 <tr><td><a href="docs/concepts/consolidation.md">Consolidation</a></td><td>IR→Archive pipeline, policies, worker workflow</td></tr>
-<tr><td><a href="docs/concepts/task-queue.md">Task Queue</a></td><td>Database-backed task queue, claim protocol, recovery</td></tr>
+<tr><td><a href="docs/design/task-queue.md">Task Queue</a></td><td>Database-backed task queue, claim protocol, recovery</td></tr>
 <tr><td><a href="docs/concepts/query-execution.md">Query Execution</a></td><td>Pruning pipeline, early termination, query catalog</td></tr>
 <tr><td><a href="docs/concepts/semantic-extraction.md">Semantic Extraction</a></td><td>log-surgeon, MPT, ERTs, LLM-powered schema generation</td></tr>
 <tr><td><a href="docs/concepts/glossary.md">Glossary</a></td><td>CLP terminology and definitions</td></tr>

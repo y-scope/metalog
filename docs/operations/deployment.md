@@ -268,7 +268,7 @@ The service supports zero-downtime rolling updates because:
 
 1. **Coordinators** use the HA liveness mechanism — a node that goes silent becomes claimable after the dead threshold (default 3 min). The replacement pod starts, claims the table, and resumes from the last committed Kafka offset.
 
-2. **Workers** are stateless — they can be stopped and restarted at any time. Tasks that were in-progress are automatically reclaimed by the Planner after the task timeout (default 10 min, configurable via `coordinator.task.timeout.ms`).
+2. **Workers** are stateless — they can be stopped and restarted at any time. Tasks that were in-progress are automatically reclaimed by the Planner after the task stale timeout (default 5 min, defined in `config/timeouts.go`).
 
 3. **API servers** are fully stateless — rolling restarts are seamless.
 

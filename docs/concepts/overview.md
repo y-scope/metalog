@@ -109,7 +109,7 @@ Stateless processes that transform IR files into Archives — row-to-column tran
 
 - **[Scale Workers](../guides/scale-workers.md)** — scaling, troubleshooting
 - **[Consolidation](consolidation.md)** — IR→Archive pipeline, policies
-- **[Task Queue](task-queue.md)** — claim protocol, recovery, performance
+- **[Task Queue](../design/task-queue.md)** — claim protocol, recovery, performance
 
 ### Query Service
 
@@ -129,21 +129,22 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 ## Goroutine Model
 
-Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (retention, partition maintenance, alias refresh); two are conditional on `_table_config` columns (Kafka consumer, planner).
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Four per-coordinator goroutines are always-on (retention, partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` columns (Kafka consumer, planner).
 
 Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
 
-### Per-Coordinator Goroutines (up to 5 per table)
+### Per-Coordinator Goroutines (up to 6 per table)
 
-Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; two are conditional on feature flags.
+Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Four are always-on; two are conditional on feature flags.
 
 | Goroutine | Name | Always On | Reads From | Writes To | Purpose |
 |-----------|------|:---------:|------------|-----------|---------|
 | 1 | **Retention Strategy** | No | Database | Database, Object storage | Three-phase retention cleanup (requires `retention.enabled`) |
 | 2 | **Partition Maintenance** | Yes | Database | Database (DDL) | Lookahead partition creation, old partition merge/drop |
 | 3 | **Alias Refresh** | Yes | Database | In-memory ColumnRegistry | Periodic re-read of alias_column values from `_dim_registry`/`_agg_registry` |
-| 4 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka.enabled`) |
-| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
+| 4 | **Column Recycler** | Yes | Database | Database | Hourly scan to reclaim INVALIDATED column slots |
+| 5 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka.enabled`) |
+| 6 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
 
 ### Node-Level Data Path Goroutines
 
@@ -161,10 +162,8 @@ Periodic background goroutines for coordination and housekeeping. Created once a
 
 | Goroutine | Name | Scope | Purpose |
 |-----------|------|-------|---------|
-| — | **Watchdog** | 1 per node | Monitor per-coordinator goroutine health, restart or release stalled coordinators |
 | — | **Heartbeat / Lease Renewal** | 1 per node | HA liveness signal (mode set by `coordinator.haStrategy`) |
-| — | **Reconciliation** | 1 per node | Claim unassigned tables, start/stop coordinator units |
-| — | **Partition Maintenance** | 1 per node | Lookahead partition creation and cleanup for all tables |
+| — | **Reconciliation** | 1 per node | Claim orphans/unassigned tables, restart stalled coordinators, verify ownership |
 
 ### Data Flow Paths
 

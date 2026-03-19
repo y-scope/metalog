@@ -108,22 +108,22 @@ Step 4 handles split-brain: if a network partition caused another node to claim 
 1. Initialize schema and components
 2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
 3. Recover from restart (Kafka consumer group resumes from last committed offset)
-4. Start Kafka Consumer, Planner, Storage Deletion, Retention Cleanup goroutines
+4. Start goroutines: Partition Maintenance, Alias Refresh, Column Recycler, and conditionally Kafka Consumer, Planner, Retention Strategy
 
 ### Shutdown Sequence
 
 When a node receives SIGTERM:
 
 1. Mark health check as NOT_READY (stop receiving new requests)
-2. Cancel node-level context (stops HA, Reconciliation, Partition Maintenance, Watchdog goroutines)
+2. Cancel node-level context (stops Liveness, Reconciliation goroutines)
 3. Stop gRPC server
 4. Stop all coordinator units:
-   - Cancel coordinator context → stop Kafka Consumer → stop Planner → stop Retention Strategy → stop Partition Maintenance → stop Alias Refresh
+   - Cancel coordinator context → stop all per-coordinator goroutines
 5. Signal BatchingWriter to stop, wait for per-table goroutines to drain
 6. Stop worker units (two-phase: stop Prefetcher → drain workers with 30s timeout → force-cancel)
 7. Close shared resources (database pool, StorageRegistry)
 
-The node does **not** release assignments on shutdown. In heartbeat mode, the heartbeat goes stale; in lease mode, the lease expires. Either way, the table becomes claimable after the dead threshold. During rolling deployments, the replacement node typically starts before the threshold expires.
+On graceful shutdown, the node releases all table assignments (`node_id = NULL` in `_table_assignment`) and deregisters from `_node_registry`. This allows other nodes to claim the tables immediately via the next reconciliation cycle, without waiting for the dead threshold to expire.
 
 ### Two-Phase Worker Shutdown
 

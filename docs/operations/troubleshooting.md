@@ -192,7 +192,7 @@ FROM _task_queue
 WHERE state = 'processing';
 ```
 
-If `age_seconds > coordinator.task.timeout.ms / 1000`, the Planner will reclaim them on its next cycle. If no tasks exist at all, the Planner may not be running — check coordinator logs.
+If `age_seconds > 300` (5 min, the `DefaultTaskStaleTimeout`), the Planner will reclaim them on its next cycle. If no tasks exist at all, the Planner may not be running — check coordinator logs.
 
 ```bash
 # Verify worker database connectivity

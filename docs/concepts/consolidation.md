@@ -260,7 +260,7 @@ A single **Prefetcher** goroutine per node batch-claims tasks into a buffered ch
 | 3 | Prefetcher | Send claimed tasks to buffered channel (`batchSize × 2` capacity) |
 | 4 | Worker goroutines | Receive from channel, execute, mark completed or failed |
 
-`SKIP LOCKED` is the key: concurrent Prefetchers on different nodes skip each other's locked rows instead of blocking. Exponential backoff (2s → 32s) reduces DB polling during idle periods.
+`SKIP LOCKED` is the key: concurrent Prefetchers on different nodes skip each other's locked rows instead of blocking. Exponential backoff (2s → 30s) reduces DB polling during idle periods.
 
 ### Recovery
 

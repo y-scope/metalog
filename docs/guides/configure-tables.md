@@ -24,7 +24,7 @@ grpcurl -plaintext -d '{
 ```
 
 After the API call writes the `_table_assignment` row (with `node_id = NULL`), the coordinator's
-existing periodic `reconcileUnits()` loop claims it on the next cycle (default: every 60 s).
+existing periodic `reconcile()` loop claims it on the next cycle (default: every 60 s).
 
 All per-table settings are passed via the `config_json` field — a JSON blob merged into the existing
 config (read-modify-write). Unknown fields are rejected.

@@ -49,7 +49,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 |---------|-----------|---------|:---:|---------|
 | `SplitQueryService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
 | `MetadataService` | `metadata.proto` | `metadatapb` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
-| `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
+| `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` / `ingestiongrpc` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
 | `AdminService` | `admin.proto` | `coordinatorpb` | 9090 | Runtime table and column management |
 
 ### Proto Definitions
@@ -604,7 +604,7 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 1. Validates `table_name` → `INVALID_ARGUMENT` on failure. If `config_json` is provided, validates JSON and rejects unknown fields.
 2. Writes `_table`, `_table_config`, `_table_assignment`, and 64 `_sketch_registry` slots (all idempotent). Merges `config_json` into the existing config blob.
 3. Provisions the physical metadata table with lookahead partitions (no-op if already exists).
-4. The coordinator's periodic `reconcileUnits()` loop claims the new `_table_assignment` row (with `node_id = NULL`) on its next cycle (default: 60 s).
+4. The coordinator's periodic `reconcile()` loop claims the new `_table_assignment` row (with `node_id = NULL`) on its next cycle (default: 60 s).
 
 #### Examples
 

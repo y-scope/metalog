@@ -43,7 +43,7 @@ Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each act
 
 ### Goroutine Architecture Benefits
 
-**Per-coordinator goroutines (up to 5 per table):**
+**Per-coordinator goroutines (up to 6 per table):**
 
 | Goroutine | Purpose | Throughput Impact |
 |-----------|---------|-------------------|
@@ -259,8 +259,7 @@ With the prefetch model, a single `Prefetcher` goroutine issues one DB batch-cla
 
 **Key observations:**
 - Worker count no longer drives DB polling frequency — the prefetcher claims in batches, workers drain the queue
-- Default `prefetchQueueSize=5` is sufficient for most deployments
-- Increase `prefetchQueueSize` if workers are frequently starved (queue drains faster than the prefetcher refills)
+- Default batch size (`DefaultTaskClaimBatchSize = 10`) is sufficient for most deployments
 - Production database (dedicated, not Docker) will be faster
 
 ### Multi-Coordinator Isolation

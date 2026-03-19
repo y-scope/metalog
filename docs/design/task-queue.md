@@ -413,14 +413,14 @@ Prefetcher (1 goroutine per node)
                                               │
                                               no
                                               ▼
-                                     sleep with backoff (1s → 32s)
+                                     sleep with backoff (1s → 30s)
 
 Worker goroutine (N per node)
   loop ──► <-pf.Tasks() [blocks] ──► got task ──► execute ──► (loop)
 ```
 
 - **High load:** Prefetcher keeps channel fed; workers receive instantly
-- **Low load:** Prefetcher backs off (1 s → 32 s), reducing DB polling automatically; workers block on channel receive at zero CPU cost
+- **Low load:** Prefetcher backs off (1s → 30s), reducing DB polling automatically; workers block on channel receive at zero CPU cost
 - **One DB claim transaction per batch** (SELECT FOR UPDATE + UPDATE) regardless of worker count
 
 ---
