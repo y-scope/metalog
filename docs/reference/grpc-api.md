@@ -789,8 +789,7 @@ See [Configuration Reference: API Server Configuration](configuration.md#api-ser
 ## Project Structure
 
 ```
-internal/
-├── grpc/
+├── grpcserver/
 │   ├── server.go           — unified gRPC server (all services on one port)
 │   ├── ingestion.go        — implements MetadataIngestionService
 │   ├── query.go            — implements SplitQueryService

@@ -37,7 +37,7 @@ done
 # Build clp-core .deb if not present or rebuild was requested.
 # The .deb is installed inside the Docker image to provide the clp-s binary.
 if [[ "$rebuild_clp" == true ]] || ! ls "$PROJECT_DIR"/clp-core_*.deb >/dev/null 2>&1; then
-    "$PROJECT_DIR/scripts/build-clp.sh"
+    "$PROJECT_DIR/docker/build-clp.sh"
 fi
 
 docker compose -f "$SCRIPT_DIR/docker-compose.yml" up --build "${compose_args[@]}"

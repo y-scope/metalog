@@ -2,6 +2,8 @@
 bin/
 /metalog
 /benchmark-*
+/ingestion
+/task-queue-scalability
 *.exe
 
 # Java (legacy)

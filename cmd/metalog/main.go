@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-
-	"github.com/y-scope/metalog/run"
 )
 
 func main() {
@@ -16,9 +14,9 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Args = append(os.Args[:1], os.Args[2:]...)
-		run.Server()
+		runServer()
 	case "admin":
-		run.Admin(os.Args[2:])
+		runAdmin(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
 		printUsage()

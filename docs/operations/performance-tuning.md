@@ -4,7 +4,7 @@
 
 **Last Updated:** 2026-02-11
 
-> **Note:** Throughput figures in this document were measured using local testcontainers-go (MariaDB in Docker). Production numbers depend on network latency, disk IOPS, server load, and connection pool configuration. Use `./integration-tests/benchmarks/task-queue-scalability/run.py` for task queue throughput.
+> **Note:** Throughput figures in this document were measured using local testcontainers-go (MariaDB in Docker). Production numbers depend on network latency, disk IOPS, server load, and connection pool configuration. Use `go run ./test/benchmarks/task-queue-scalability` for task queue throughput.
 
 ## Summary
 
@@ -31,7 +31,7 @@ The benchmark measures:
 
 ### Lifecycle Overhead
 
-In production, each file goes through multiple state transitions (3-5 upserts per file). Effective files/sec is the batch-UPSERT rate divided by upserts-per-file. Run `integration-tests/benchmarks/ingestion/run.py` for production-representative numbers.
+In production, each file goes through multiple state transitions (3-5 upserts per file). Effective files/sec is the batch-UPSERT rate divided by upserts-per-file. Run `go run ./test/benchmarks/ingestion` for production-representative numbers.
 
 ---
 
@@ -152,10 +152,10 @@ Throughput scales linearly with coordinators (each owns independent tables). Mea
 
 ```bash
 # Run task queue scalability benchmark
-integration-tests/benchmarks/task-queue-scalability/run.py
+go run ./test/benchmarks/task-queue-scalability
 
 # Run ingestion benchmark (gRPC mode)
-integration-tests/benchmarks/ingestion/run.py --mode grpc -r 100000
+go run ./test/benchmarks/ingestion --mode grpc -r 100000
 ```
 
 ---
@@ -226,17 +226,17 @@ The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` 
 
 ## End-to-End Benchmark
 
-The unified ingestion benchmark exercises the full pipeline against real Docker infrastructure (MariaDB, optionally Kafka + ZooKeeper). It builds Go binaries, starts containers, produces records, and reports coordinator throughput.
+The unified ingestion benchmark exercises the full pipeline against real Docker infrastructure (MariaDB, optionally Kafka). It starts containers via testcontainers, runs the coordinator in-process, produces records, and reports throughput.
 
 ```bash
 # gRPC mode (default — just MariaDB)
-integration-tests/benchmarks/ingestion/run.py --mode grpc -r 100000
+go run ./test/benchmarks/ingestion --mode grpc -r 100000
 
 # Kafka protobuf mode (MariaDB + Kafka)
-integration-tests/benchmarks/ingestion/run.py --mode kafka-proto -r 100000
+go run ./test/benchmarks/ingestion --mode kafka-proto -r 100000
 
 # Kafka JSON mode (MariaDB + Kafka)
-integration-tests/benchmarks/ingestion/run.py --mode kafka-json -r 100000
+go run ./test/benchmarks/ingestion --mode kafka-json -r 100000
 ```
 
 See the [Summary](#summary) table for expected throughput ranges. Results vary by hardware — run the benchmark to get numbers for your environment.
@@ -273,10 +273,10 @@ Each coordinator's workers poll only their assigned table. Multiple coordinator 
 
 ```bash
 # Default: workers=1,25,50,75,100,125  batch=1,5,10
-integration-tests/benchmarks/task-queue-scalability/run.py
+go run ./test/benchmarks/task-queue-scalability
 
 # Custom configuration
-integration-tests/benchmarks/task-queue-scalability/run.py -w 50,100 -b 1,5 -t 50
+go run ./test/benchmarks/task-queue-scalability -w 50,100 -b 1,5 -t 50
 
 # Options:
 #   -w, --workers <csv>    Worker counts (default: 1,25,50,75,100,125)

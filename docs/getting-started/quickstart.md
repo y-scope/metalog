@@ -113,10 +113,10 @@ docker compose -f docker/docker-compose.yml logs -f coordinator-node
 go test ./...
 
 # Run a specific test package
-go test ./internal/coordinator/consolidation/...
+go test ./coordinator/consolidation/...
 
 # Run integration tests only (requires Docker)
-go test -tags=integration ./internal/...
+go test -tags=integration ./...
 ```
 
 ## Configuration
@@ -195,7 +195,7 @@ docker compose -f docker/docker-compose.yml exec minio mc ls local/
 For a thorough automated check — HA fight-for-master, Kafka ingestion, and single-owner enforcement — use the E2E validation script:
 
 ```bash
-./integration-tests/coordination/validate-e2e.sh
+./test/coordination/test-multi-node.sh
 ```
 
 What it tests:

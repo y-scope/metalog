@@ -46,11 +46,11 @@ proto:
 
 # Run unit tests
 test:
-	$(GOTEST) ./internal/...
+	$(GOTEST) ./...
 
 # Run integration tests (requires Docker)
 test-integration:
-	$(GOTEST) -tags=integration -timeout 300s ./internal/...
+	$(GOTEST) -tags=integration -timeout 300s ./...
 
 # Lint
 lint:

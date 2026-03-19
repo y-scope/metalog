@@ -45,7 +45,7 @@ Built-in transformers are registered via `RegisterTransformer` and looked up by 
 
 ### RecordTransformer (Ingestion Layer)
 
-Defined in `internal/coordinator/ingestion/transformer.go`. Transforms structured key-value data into `FileRecord` dimension and aggregation fields.
+Defined in `coordinator/ingestion/transformer.go`. Transforms structured key-value data into `FileRecord` dimension and aggregation fields.
 
 ```go
 type RecordTransformer interface {
@@ -92,7 +92,7 @@ Create a new `RecordTransformer` implementation. The `Transform` method receives
 package ingestion
 
 import (
-	"github.com/y-scope/metalog/internal/metastore"
+	"github.com/y-scope/metalog/metastore"
 )
 
 // sparkTransformer handles Spark-specific metadata fields.

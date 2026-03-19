@@ -8,7 +8,7 @@ The CLP Metastore Service uses several ports for its infrastructure. All ports a
 
 ### Default Ports (No Configuration Needed)
 ```bash
-integration-tests/benchmarks/kafka-ingestion/run.py
+go run ./test/benchmarks/ingestion --mode kafka-proto
 ```
 
 Uses default ports:
@@ -23,7 +23,7 @@ Uses default ports:
 ```bash
 export MINIO_PORT=9002
 export MINIO_CONSOLE_PORT=9003
-integration-tests/benchmarks/kafka-ingestion/run.py
+go run ./test/benchmarks/ingestion --mode kafka-proto
 ```
 
 **Option 2: Create a .env file from the example**

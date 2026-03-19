@@ -1,7 +1,10 @@
-// Package schemadef embeds the SQL schema definition for the metalog metastore.
+// Package schema manages the physical database schema for metadata tables.
 //
-// The embedded [SQL] variable contains the full DDL for system tables
-// (_table, _table_config, _table_assignment, _node_registry, _dim_registry,
-// _agg_registry, _sketch_registry, _task_queue) and the _clp_template table
-// that serves as the prototype for all metadata tables.
-package schemadef
+// It provisions tables from a template ([EnsureTable]), manages RANGE partitions
+// by timestamp ([PartitionManager]), maintains secondary indexes ([IndexManager]),
+// and tracks dynamic column allocation via the [ColumnRegistry].
+//
+// The column registry maps user-facing field names to physical dim_fNN/agg_fNN
+// columns, supporting thread-safe slot allocation and atomic snapshots for
+// concurrent readers.
+package schema

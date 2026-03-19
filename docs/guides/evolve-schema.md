@@ -258,10 +258,10 @@ The Kafka ingestion benchmark exercises automatic schema evolution end-to-end. I
 
 ```bash
 # From the metalog directory
-integration-tests/benchmarks/kafka-ingestion/run.py -r 10000
+go run ./test/benchmarks/ingestion --mode kafka-proto -r 10000
 
 # Try proto-structured mode to exercise structured DimEntry/AggEntry evolution
-integration-tests/benchmarks/kafka-ingestion/run.py -r 10000 --mode proto-structured
+go run ./test/benchmarks/ingestion --mode kafka-proto -r 10000 --mode proto-structured
 ```
 
 Prerequisites: Docker, Go 1.22+.

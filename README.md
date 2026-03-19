@@ -206,30 +206,37 @@ go test ./...
 go test -race ./...
 
 # Run integration tests (requires Docker for testcontainers)
-go test -tags=integration ./internal/...
+go test -tags=integration ./...
 ```
 
 ## Project Structure
 
 ```
 cmd/
-  metalog/            Unified entry point (coordinator + workers + gRPC + query API)
-internal/
-  config/             YAML config, env vars, defaults
-  db/                 Database pool, dialect detection, tx helpers, SQL identifiers
-  metastore/          Data access layer (FileRecords, columns, file state)
-  taskqueue/          Task queue (create, claim, complete, reclaim, payloads)
-  schema/             Schema management (ColumnRegistry, partitions, DDL)
-  coordinator/        Coordinator business logic (ingestion, consolidation)
-  worker/             Worker core and task prefetcher
-  query/              Query engine, filters, cursors, cache
-  storage/            Object storage abstraction (S3, filesystem, HTTP)
-  node/               Node orchestration (lifecycle, shared resources)
-  grpc/               gRPC server and service adapters
-  kafka/              Kafka consumer and poller
-  health/             HTTP health check endpoint
+  metalog/            Entry point and subcommands (serve, admin)
+config/               YAML config, env vars, defaults
+db/                   Database pool, dialect detection, tx helpers, SQL identifiers
+metastore/            Data access layer (FileRecords, columns, file state)
+taskqueue/            Task queue (create, claim, complete, reclaim, payloads)
+schema/               Schema management (ColumnRegistry, partitions, DDL)
+coordinator/          Coordinator business logic (ingestion, consolidation)
+worker/               Worker core and task prefetcher
+query/                Query engine, filters, cursors, cache
+storage/              Object storage abstraction (S3, filesystem, HTTP)
+node/                 Node orchestration (lifecycle, shared resources)
+grpcserver/           gRPC server and service adapters
+kafka/                Kafka consumer and poller
+pkg/
+  ddl/                Embedded SQL schema definition
+  encoding/           LZ4 + msgpack codec
+  health/             HTTP liveness probe
+  logutil/            Throttled logging
+  testutil/           Integration test containers
+  timeutil/           Timestamp helpers
 proto/                Proto definitions (.proto files)
 gen/proto/            Generated Go protobuf/gRPC stubs
+test/                 Integration tests, benchmarks, docker stacks
+docker/               Dockerfile, Compose, build scripts
 ```
 
 ## License

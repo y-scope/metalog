@@ -120,7 +120,7 @@ worker:
 
 ### Internal Constants
 
-These are not configurable via YAML but are defined in `internal/config/timeouts.go`:
+These are not configurable via YAML but are defined in `config/timeouts.go`:
 
 | Constant | Value | Description |
 |----------|-------|-------------|

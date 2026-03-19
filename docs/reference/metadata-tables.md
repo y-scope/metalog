@@ -332,11 +332,11 @@ Standard MySQL recommended. Vitess is supported but suboptimal:
 
 | Component | Location |
 |-----------|----------|
-| Schema | `schema/schema.sql` |
-| File Records | `internal/metastore/filerecords.go` |
-| Partition Manager | `internal/schema/partitionmanager.go` |
+| Schema | `pkg/ddl/schema.sql` |
+| File Records | `metastore/filerecords.go` |
+| Partition Manager | `schema/partitionmanager.go` |
 | Performance | [Performance Tuning](../operations/performance-tuning.md) |
-| Benchmark | `integration-tests/benchmarks/kafka-ingestion/run.py`, `integration-tests/benchmarks/grpc-ingestion/run.py` |
+| Benchmark | `go run ./test/benchmarks/ingestion --mode kafka-proto`, `go run ./test/benchmarks/ingestion --mode grpc` |
 
 **Critical DSN setting:** `interpolateParams=true` required for optimal performance — avoids server-side prepared statements and reduces round-trips.
 

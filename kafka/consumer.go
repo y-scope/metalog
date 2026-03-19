@@ -9,7 +9,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/internal/coordinator/ingestion"
+	"github.com/y-scope/metalog/coordinator/ingestion"
 )
 
 // pollTimeoutMs is the timeout for the initial Poll call when no messages are buffered.
