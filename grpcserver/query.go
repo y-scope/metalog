@@ -3,7 +3,6 @@ package grpcserver
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -13,7 +12,6 @@ import (
 
 	pb "github.com/y-scope/metalog/gen/proto/splitspb"
 	"github.com/y-scope/metalog/config"
-	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/query"
 	"github.com/y-scope/metalog/schema"
 )
@@ -194,99 +192,37 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 }
 
 func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.Split {
+	rs := query.ResolveSplit(row, registry)
 	split := &pb.Split{
-		Id:         row.ID,
-		Dimensions: make(map[string]string),
+		Id:                       rs.ID,
+		MinTimestamp:             rs.MinTimestamp,
+		MaxTimestamp:             rs.MaxTimestamp,
+		RecordCount:              rs.RecordCount,
+		SizeBytes:                rs.SizeBytes,
+		ClpIrPath:                rs.ClpIRPath,
+		ClpArchivePath:           rs.ClpArchivePath,
+		State:                    rs.State,
+		ClpIrStorageBackend:      rs.ClpIRStorageBackend,
+		ClpIrBucket:              rs.ClpIRBucket,
+		ClpArchiveStorageBackend: rs.ClpArchiveStorageBackend,
+		ClpArchiveBucket:         rs.ClpArchiveBucket,
+		Dimensions:               rs.Dimensions,
 	}
-
-	var irSizeBytes, archiveSizeBytes int64
-
-	for col, val := range row.Values {
-		switch col {
-		case metastore.ColClpIRPath:
-			split.ClpIrPath = dbValToString(val)
-		case metastore.ColClpArchivePath:
-			split.ClpArchivePath = dbValToString(val)
-		case metastore.ColMinTimestamp:
-			if v, ok := val.(int64); ok {
-				split.MinTimestamp = v
-			}
-		case metastore.ColMaxTimestamp:
-			if v, ok := val.(int64); ok {
-				split.MaxTimestamp = v
-			}
-		case metastore.ColState:
-			split.State = dbValToString(val)
-		case metastore.ColRecordCount:
-			if v, ok := val.(int64); ok {
-				split.RecordCount = v
-			}
-		case metastore.ColClpIRSizeBytes:
-			if v, ok := val.(int64); ok {
-				irSizeBytes = v
-			}
-		case metastore.ColClpArchiveSizeBytes:
-			if v, ok := val.(int64); ok {
-				archiveSizeBytes = v
-			}
-		case metastore.ColClpIRStorageBackend:
-			split.ClpIrStorageBackend = dbValToString(val)
-		case metastore.ColClpIRBucket:
-			split.ClpIrBucket = dbValToString(val)
-		case metastore.ColClpArchiveStorageBackend:
-			split.ClpArchiveStorageBackend = dbValToString(val)
-		case metastore.ColClpArchiveBucket:
-			split.ClpArchiveBucket = dbValToString(val)
-		// File-level columns already handled above or not exposed in the proto.
-		case metastore.ColID, metastore.ColRawSizeBytes, metastore.ColClpArchiveCreatedAt,
-			metastore.ColRetentionDays, metastore.ColExpiresAt,
-			metastore.ColClpIRPathHash, metastore.ColClpArchivePathHash:
-			continue
-
-		default:
-			if val == nil {
-				continue
-			}
-			// Agg columns: reverse-map physical name to structured AggEntry
-			if strings.HasPrefix(col, metastore.AggColumnPrefix) && registry != nil {
-				if entry := registry.LookupAggByColumn(col); entry != nil {
-					aggEntry := &pb.AggEntry{
-						Key:             entry.AggKey,
-						Value:           entry.AggValue,
-						AggregationType: pb.AggregationType(pb.AggregationType_value["AGGREGATION_TYPE_"+entry.AggregationType]),
-					}
-					if entry.ValueType == "FLOAT" {
-						if f, ok := dbValToFloat64(val); ok {
-							aggEntry.Result = &pb.AggEntry_FloatValue{FloatValue: f}
-						}
-					} else {
-						if i, ok := dbValToInt64(val); ok {
-							aggEntry.Result = &pb.AggEntry_IntValue{IntValue: i}
-						}
-					}
-					split.Aggs = append(split.Aggs, aggEntry)
-					continue
-				}
-			}
-			// Dimension columns: reverse-map physical name to semantic dim_key.
-			// Falls back to physical column name if no registry entry exists.
-			dimKey := col
-			if strings.HasPrefix(col, metastore.DimColumnPrefix) && registry != nil {
-				if entry := registry.LookupDimByColumn(col); entry != nil {
-					dimKey = entry.DimKey
-				}
-			}
-			split.Dimensions[dimKey] = dbValToString(val)
+	for _, ra := range rs.Aggs {
+		aggEntry := &pb.AggEntry{
+			Key:             ra.Key,
+			Value:           ra.Value,
+			AggregationType: pb.AggregationType(pb.AggregationType_value["AGGREGATION_TYPE_"+ra.AggregationType]),
 		}
+		if ra.HasResult {
+			if ra.ValueType == "FLOAT" {
+				aggEntry.Result = &pb.AggEntry_FloatValue{FloatValue: ra.FloatResult}
+			} else {
+				aggEntry.Result = &pb.AggEntry_IntValue{IntValue: ra.IntResult}
+			}
+		}
+		split.Aggs = append(split.Aggs, aggEntry)
 	}
-
-	// Use archive size when an archive exists, otherwise IR size.
-	if split.ClpArchivePath != "" {
-		split.SizeBytes = archiveSizeBytes
-	} else {
-		split.SizeBytes = irSizeBytes
-	}
-
 	return split
 }
 
@@ -319,43 +255,3 @@ func toCursorValue(val any) *pb.CursorValue {
 	}
 }
 
-func dbValToInt64(val any) (int64, bool) {
-	switch v := val.(type) {
-	case int64:
-		return v, true
-	case int32:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
-		return 0, false
-	}
-}
-
-func dbValToFloat64(val any) (float64, bool) {
-	switch v := val.(type) {
-	case float64:
-		return v, true
-	case int64:
-		return float64(v), true
-	case int32:
-		return float64(v), true
-	default:
-		return 0, false
-	}
-}
-
-// dbValToString converts a database value to a string.
-// Handles []byte (from MySQL driver) and other types efficiently.
-func dbValToString(val any) string {
-	switch v := val.(type) {
-	case string:
-		return v
-	case []byte:
-		return string(v)
-	case nil:
-		return ""
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}

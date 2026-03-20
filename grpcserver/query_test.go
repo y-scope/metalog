@@ -277,28 +277,28 @@ func TestToCursorValue_FallbackToString(t *testing.T) {
 // --- dbValToInt64 tests ---
 
 func TestDbValToInt64_Int64(t *testing.T) {
-	v, ok := dbValToInt64(int64(99))
+	v, ok := query.DBValToInt64(int64(99))
 	if !ok || v != 99 {
 		t.Errorf("got (%d, %v), want (99, true)", v, ok)
 	}
 }
 
 func TestDbValToInt64_Int32(t *testing.T) {
-	v, ok := dbValToInt64(int32(7))
+	v, ok := query.DBValToInt64(int32(7))
 	if !ok || v != 7 {
 		t.Errorf("got (%d, %v), want (7, true)", v, ok)
 	}
 }
 
 func TestDbValToInt64_Float64(t *testing.T) {
-	v, ok := dbValToInt64(float64(42.0))
+	v, ok := query.DBValToInt64(float64(42.0))
 	if !ok || v != 42 {
 		t.Errorf("got (%d, %v), want (42, true)", v, ok)
 	}
 }
 
 func TestDbValToInt64_Unsupported(t *testing.T) {
-	v, ok := dbValToInt64("not-a-number")
+	v, ok := query.DBValToInt64("not-a-number")
 	if ok || v != 0 {
 		t.Errorf("got (%d, %v), want (0, false)", v, ok)
 	}
@@ -307,28 +307,28 @@ func TestDbValToInt64_Unsupported(t *testing.T) {
 // --- dbValToFloat64 tests ---
 
 func TestDbValToFloat64_Float64(t *testing.T) {
-	v, ok := dbValToFloat64(float64(3.14))
+	v, ok := query.DBValToFloat64(float64(3.14))
 	if !ok || v != 3.14 {
 		t.Errorf("got (%f, %v), want (3.14, true)", v, ok)
 	}
 }
 
 func TestDbValToFloat64_Int64(t *testing.T) {
-	v, ok := dbValToFloat64(int64(10))
+	v, ok := query.DBValToFloat64(int64(10))
 	if !ok || v != 10.0 {
 		t.Errorf("got (%f, %v), want (10.0, true)", v, ok)
 	}
 }
 
 func TestDbValToFloat64_Int32(t *testing.T) {
-	v, ok := dbValToFloat64(int32(5))
+	v, ok := query.DBValToFloat64(int32(5))
 	if !ok || v != 5.0 {
 		t.Errorf("got (%f, %v), want (5.0, true)", v, ok)
 	}
 }
 
 func TestDbValToFloat64_Unsupported(t *testing.T) {
-	v, ok := dbValToFloat64("nope")
+	v, ok := query.DBValToFloat64("nope")
 	if ok || v != 0 {
 		t.Errorf("got (%f, %v), want (0, false)", v, ok)
 	}
@@ -349,7 +349,7 @@ func TestDbValToString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := dbValToString(tt.val)
+			got := query.DBValToString(tt.val)
 			if got != tt.want {
 				t.Errorf("dbValToString(%v) = %q, want %q", tt.val, got, tt.want)
 			}
