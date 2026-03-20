@@ -4,7 +4,7 @@
 //   - Metadata ingestion (push-based record ingestion)
 //   - Query splits (paginated metadata queries with filtering)
 //   - Metadata service (table listing and schema introspection)
-//   - Coordinator service (runtime table registration)
+//   - Admin service (runtime table registration)
 //
 // The [Server] wraps a google.golang.org/grpc server with graceful shutdown support.
 // Each handler adapts between protobuf request/response types and the

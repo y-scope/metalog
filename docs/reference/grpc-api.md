@@ -803,7 +803,6 @@ See [Configuration Reference: API Server Configuration](configuration.md#api-ser
 │   ├── engine.go           — split query engine (keyset pagination, streaming)
 │   ├── filter.go           — filter expression validation
 │   ├── cache.go            — TTL-based in-memory cache
-│   ├── cursor.go           — keyset cursor encoding/decoding
 │   ├── resolve.go          — column resolution and projection
 │   └── sketch.go           — bloom filter sketch evaluation
 kafka/

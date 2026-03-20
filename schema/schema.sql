@@ -252,9 +252,9 @@ CREATE TABLE IF NOT EXISTS _table (
 ) ENGINE=InnoDB;
 
 -- Feature config: unified JSON blob containing all per-table settings.
--- NULL blob → all defaults (kafka_poller=true, consolidation=true, retention="default").
--- See internal/metastore/tableconfig.go for the TableConfig struct definition.
--- Adding new settings is a Go struct change + msgpack tag — no schema migration needed.
+-- NULL blob → all defaults (kafka.enabled=true, consolidation.enabled=true, retention.type="default").
+-- See metastore/tableconfig.go for the TableConfig struct definition.
+-- Adding new settings is a Go struct change + JSON tag — no schema migration needed.
 CREATE TABLE IF NOT EXISTS _table_config (
     table_name VARCHAR(64) NOT NULL PRIMARY KEY,
     config     MEDIUMTEXT NULL,

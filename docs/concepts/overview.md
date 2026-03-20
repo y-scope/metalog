@@ -172,7 +172,7 @@ Periodic background goroutines for coordination and housekeeping. Created once a
 | Step | Component | Action |
 |------|-----------|--------|
 | 1 | gRPC client | Sends `IngestRequest` (one record per RPC call) with file metadata |
-| 2 | `IngestionGrpcService` | Converts proto records → domain objects, delegates to `IngestionService` |
+| 2 | `IngestionHandler` | Converts proto records → domain objects, delegates to `IngestionService` |
 | 3 | `IngestionService` | Validates records and submits to `BatchingWriter` (column resolution at flush time) |
 | 4 | `BatchingWriter` | Routes to per-table `tableWriter` channel, batches records, UPSERT to database |
 | 5 | Response | Ack sent to client after record is accepted onto the channel (async DB commit) |

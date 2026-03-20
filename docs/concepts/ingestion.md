@@ -26,7 +26,7 @@ The client sends metadata directly to the coordinator via the `Ingest` RPC (`Ing
 **Protocol:**
 
 1. Client sends `IngestRequest` (one record per RPC call) with file metadata (IR or Archive)
-2. `IngestionGrpcService` converts proto records to internal domain objects, delegates to `IngestionService`
+2. `IngestionHandler` converts proto records to internal domain objects, delegates to `IngestionService`
 3. `IngestionService` validates records and submits to `BatchingWriter` channel (dim/agg column resolution happens at batch flush time in the `tableWriter`)
 4. Response sent to client (record accepted for async processing)
 5. `tableWriter` batches records and UPSERTs to database asynchronously
@@ -53,7 +53,7 @@ The client sends metadata directly to the coordinator via the `Ingest` RPC (`Ing
 
 The client publishes metadata to a Kafka topic. The coordinator's Kafka Consumer polls messages and submits them to the `BatchingWriter` via `IngestWithCallbackWait()` (blocking — waits for channel space).
 
-**Offset tracking:** The `Consumer` maintains a per-partition watermark — a map from each Kafka partition to the highest offset whose flush has been confirmed. This watermark is the basis for offset commits.
+**Offset tracking:** The `Consumer` tracks pending flush confirmations in a `pendingFlushes` slice. Each poll cycle, `drainFlushes()` checks completed flushes non-blockingly and queues their offsets in `pendingCommit`. `commitPending()` deduplicates and commits the highest offset+1 per partition to Kafka.
 
 **Protocol:**
 
@@ -65,7 +65,7 @@ The client publishes metadata to a Kafka topic. The coordinator's Kafka Consumer
 
 **Why single-threaded drain?** All consumer state (`pendingFlushes`, `pendingCommit`) is owned by the poll goroutine. No mutex, no goroutine-per-message — the `select`/`default` pattern non-blockingly checks each `Flushed` channel. Records whose flush hasn't completed yet are simply retained for the next cycle.
 
-**Backpressure:** The Kafka consumer uses `SubmitWait()` — a blocking channel send that waits until space opens or the context is cancelled. When the channel is full, the poll loop blocks, the consumer stops polling, and Kafka retains messages in the topic. No messages are dropped due to channel capacity. Sustained backpressure indicates the database is slower than the Kafka ingestion rate — scale the DB or reduce topic throughput.
+**Backpressure:** The Kafka consumer uses `IngestWithCallbackWait()` — which blocks until the `BatchingWriter` channel has space or the context is cancelled. When the channel is full, the poll loop blocks, the consumer stops polling, and Kafka retains messages in the topic. No messages are dropped due to channel capacity. Sustained backpressure indicates the database is slower than the Kafka ingestion rate — scale the DB or reduce topic throughput.
 
 **Characteristics:**
 

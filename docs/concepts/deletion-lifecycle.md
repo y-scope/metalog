@@ -152,9 +152,9 @@ Storage deletion is rate-limited to 500 operations per second to avoid overwhelm
 Retention strategies use a two-level registry pattern (same as storage backends):
 
 1. **Compile-time registration** — each strategy implementation registers itself via `init()` with a type name and factory function.
-2. **Runtime instantiation** — when a coordinator starts, it reads `retention_type` from `_table_config` and creates the corresponding strategy instance.
+2. **Runtime instantiation** — when a coordinator starts, it reads `retention.type` from the `_table_config` config blob and creates the corresponding strategy instance.
 
-Custom strategies can implement throttling, grace periods, or alternative cleanup policies by registering a new type and setting `retention_type` on the table.
+Custom strategies can implement throttling, grace periods, or alternative cleanup policies by registering a new type and setting `retention.type` on the table.
 
 ---
 
