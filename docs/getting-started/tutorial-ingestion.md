@@ -102,7 +102,7 @@ You (Kafka producer)
 Kafka topic: spark-ir
   │
   ▼
-Coordinator: Kafka Poller (per-table) — consumed message
+Coordinator: Kafka Consumer (per-table) — consumed message
   │
   ▼
 Node: BatchingWriter → TableWriter (per-table) — batch-UPSERT to clp_spark table

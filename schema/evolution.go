@@ -11,6 +11,10 @@ import (
 )
 
 // Evolver handles online DDL for adding new columns to metadata tables.
+// Internally, ColumnRegistry uses an Evolver to add dim_fNN/agg_fNN columns
+// on the fly. The type is exported so enterprise deployments can substitute
+// a custom DDL strategy (e.g., pt-online-schema-change or an approval
+// workflow) by providing their own Evolver to the registry.
 type Evolver struct {
 	db        *sql.DB
 	isMariaDB bool

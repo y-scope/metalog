@@ -176,10 +176,6 @@ Only non-empty env var values trigger an override. Unset or empty variables are 
 
 The mechanism uses `env` and `envprefix` struct tags on Go config types (see `config/envoverride.go`). Storage backend fields are not overridable via env vars — use YAML for storage configuration.
 
-### YAML Variable Substitution (utility)
-
-The `config.ExpandEnvVars()` utility (defined in `config/configmap.go`) provides shell-style `${VAR}` and `${VAR:-default}` substitution inside YAML values. Unlike the env override mechanism above, this is **not** applied automatically — it is an exported utility for callers that want to pre-process YAML bytes before unmarshalling.
-
 ### Internal Constants
 
 These are not configurable via YAML. Most are defined in `config/timeouts.go` unless noted otherwise:

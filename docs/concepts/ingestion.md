@@ -27,7 +27,7 @@ The client sends metadata directly to the coordinator via the `Ingest` RPC (`Ing
 
 1. Client sends `IngestRequest` (one record per RPC call) with file metadata (IR or Archive)
 2. `IngestionGrpcService` converts proto records to internal domain objects, delegates to `IngestionService`
-3. `IngestionService` validates records, resolves dims/aggs via `ColumnRegistry`, submits to `BatchingWriter` channel
+3. `IngestionService` validates records and submits to `BatchingWriter` channel (dim/agg column resolution happens at batch flush time in the `tableWriter`)
 4. Response sent to client (record accepted for async processing)
 5. `tableWriter` batches records and UPSERTs to database asynchronously
 

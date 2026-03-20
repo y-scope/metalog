@@ -91,6 +91,7 @@ var systemTableColumns = map[string][]columnSpec{
 		{"table_name", "varchar"},
 		{"node_id", "varchar"},
 		{"node_assigned_at", "bigint"},
+		{"assignment_updated_at", "bigint"},
 		{"last_progress_at", "bigint"},
 		{"lease_expiry", "bigint"},
 	},
