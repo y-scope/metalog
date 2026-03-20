@@ -3,14 +3,19 @@
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
 // source: ingestion.proto
+//
+// This file has been moved to a separate package so that consumers of the
+// protobuf message types (ingestionpb) do not transitively depend on gRPC.
 
-package ingestionpb
+package ingestiongrpc
 
 import (
 	context "context"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+
+	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -26,7 +31,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MetadataIngestionServiceClient interface {
-	Ingest(ctx context.Context, in *IngestRequest, opts ...grpc.CallOption) (*IngestResponse, error)
+	Ingest(ctx context.Context, in *pb.IngestRequest, opts ...grpc.CallOption) (*pb.IngestResponse, error)
 }
 
 type metadataIngestionServiceClient struct {
@@ -37,9 +42,9 @@ func NewMetadataIngestionServiceClient(cc grpc.ClientConnInterface) MetadataInge
 	return &metadataIngestionServiceClient{cc}
 }
 
-func (c *metadataIngestionServiceClient) Ingest(ctx context.Context, in *IngestRequest, opts ...grpc.CallOption) (*IngestResponse, error) {
+func (c *metadataIngestionServiceClient) Ingest(ctx context.Context, in *pb.IngestRequest, opts ...grpc.CallOption) (*pb.IngestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IngestResponse)
+	out := new(pb.IngestResponse)
 	err := c.cc.Invoke(ctx, MetadataIngestionService_Ingest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -51,7 +56,7 @@ func (c *metadataIngestionServiceClient) Ingest(ctx context.Context, in *IngestR
 // All implementations must embed UnimplementedMetadataIngestionServiceServer
 // for forward compatibility.
 type MetadataIngestionServiceServer interface {
-	Ingest(context.Context, *IngestRequest) (*IngestResponse, error)
+	Ingest(context.Context, *pb.IngestRequest) (*pb.IngestResponse, error)
 	mustEmbedUnimplementedMetadataIngestionServiceServer()
 }
 
@@ -62,7 +67,7 @@ type MetadataIngestionServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMetadataIngestionServiceServer struct{}
 
-func (UnimplementedMetadataIngestionServiceServer) Ingest(context.Context, *IngestRequest) (*IngestResponse, error) {
+func (UnimplementedMetadataIngestionServiceServer) Ingest(context.Context, *pb.IngestRequest) (*pb.IngestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ingest not implemented")
 }
 func (UnimplementedMetadataIngestionServiceServer) mustEmbedUnimplementedMetadataIngestionServiceServer() {
@@ -88,7 +93,7 @@ func RegisterMetadataIngestionServiceServer(s grpc.ServiceRegistrar, srv Metadat
 }
 
 func _MetadataIngestionService_Ingest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(IngestRequest)
+	in := new(pb.IngestRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -100,7 +105,7 @@ func _MetadataIngestionService_Ingest_Handler(srv interface{}, ctx context.Conte
 		FullMethod: MetadataIngestionService_Ingest_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataIngestionServiceServer).Ingest(ctx, req.(*IngestRequest))
+		return srv.(MetadataIngestionServiceServer).Ingest(ctx, req.(*pb.IngestRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

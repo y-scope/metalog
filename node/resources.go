@@ -56,16 +56,6 @@ func (s *Resources) GetColumnRegistry(tableName string) *schema.ColumnRegistry {
 	return s.registries[tableName]
 }
 
-// ColumnRegistries returns a snapshot of all registries (safe for concurrent use).
-func (s *Resources) ColumnRegistries() map[string]*schema.ColumnRegistry {
-	s.regMu.RLock()
-	defer s.regMu.RUnlock()
-	m := make(map[string]*schema.ColumnRegistry, len(s.registries))
-	for k, v := range s.registries {
-		m[k] = v
-	}
-	return m
-}
 
 // Close releases all shared resources.
 func (s *Resources) Close() {
