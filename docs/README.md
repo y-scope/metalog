@@ -18,7 +18,7 @@ The CLP Metastore Service is a file-level metadata catalog for CLP's compressed 
 [Query Execution](concepts/query-execution.md) → [gRPC API Reference](reference/grpc-api.md) → [Metadata Tables Reference](reference/metadata-tables.md)
 
 **Extending the codebase?**
-[Architecture Overview](concepts/overview.md) → [Consolidation](concepts/consolidation.md) → [Metadata Schema](concepts/metadata-schema.md) → [Design Documents](design/README.md)
+[Extending Metalog](guides/extending.md) → [Write Transformers](guides/write-transformers.md) → [Architecture Overview](concepts/overview.md) → [Design Documents](design/README.md)
 
 **Understanding CLP's semantic capabilities?**
 [Semantic Extraction](concepts/semantic-extraction.md) → [gRPC API Reference](reference/grpc-api.md)
@@ -61,6 +61,7 @@ Task-oriented how-to guides for specific operations.
 - [Evolve Schema](guides/evolve-schema.md) — Online DDL, adding dimensions and aggregates
 - [Integrate CLP](guides/integrate-clp.md) — Worker-CLP binary integration
 - [Write Transformers](guides/write-transformers.md) — Normalizing Kafka producer schemas
+- [Extending Metalog](guides/extending.md) — All extension points for enterprise deployments
 
 ## Reference
 
