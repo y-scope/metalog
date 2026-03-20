@@ -17,9 +17,9 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/coordinator/consolidation"
+	"github.com/y-scope/metalog/consolidation"
 	"github.com/y-scope/metalog/taskqueue"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 	"github.com/y-scope/metalog/worker"
 	"github.com/y-scope/metalog/storage"
 )

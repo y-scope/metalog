@@ -9,10 +9,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
-	"github.com/y-scope/metalog/pkg/logutil"
+	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/taskqueue"
-	"github.com/y-scope/metalog/pkg/timeutil"
+	"github.com/y-scope/metalog/timeutil"
 	"github.com/y-scope/metalog/storage"
 )
 

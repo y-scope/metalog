@@ -37,7 +37,7 @@ import (
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
 	"github.com/y-scope/metalog/node"
-	"github.com/y-scope/metalog/pkg/ddl"
+	"github.com/y-scope/metalog/ddl"
 )
 
 var (

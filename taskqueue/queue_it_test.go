@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/taskqueue"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 const testTable = "clp_spark"

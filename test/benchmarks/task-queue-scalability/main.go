@@ -23,7 +23,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/pkg/ddl"
+	"github.com/y-scope/metalog/ddl"
 	"github.com/y-scope/metalog/taskqueue"
 )
 

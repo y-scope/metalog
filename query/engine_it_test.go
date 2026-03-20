@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/query"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 const engineTable = "test_query_engine"

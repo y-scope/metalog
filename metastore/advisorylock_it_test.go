@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 func TestAdvisoryLock_AcquireAndRelease(t *testing.T) {

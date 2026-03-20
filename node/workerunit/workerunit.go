@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
-	"github.com/y-scope/metalog/node/shared"
+	"github.com/y-scope/metalog/node/resources"
 	"github.com/y-scope/metalog/taskqueue"
 	"github.com/y-scope/metalog/worker"
 )
@@ -21,7 +21,7 @@ const drainTimeout = 30 * time.Second
 type Unit struct {
 	concurrency int
 	nodeID     string
-	shared     *shared.Resources
+	shared     *resources.Resources
 	prefetcher *worker.Prefetcher
 	log        *zap.Logger
 
@@ -35,7 +35,7 @@ type Unit struct {
 }
 
 // New creates a worker unit derived from the given parent context.
-func New(parent context.Context, concurrency int, nodeID string, shared *shared.Resources, log *zap.Logger) *Unit {
+func New(parent context.Context, concurrency int, nodeID string, shared *resources.Resources, log *zap.Logger) *Unit {
 	prefetchCtx, prefetchCancel := context.WithCancel(parent)
 	workerCtx, workerCancel := context.WithCancel(parent)
 	return &Unit{

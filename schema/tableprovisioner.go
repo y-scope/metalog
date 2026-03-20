@@ -10,7 +10,7 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/pkg/ddl"
+	"github.com/y-scope/metalog/ddl"
 
 	"github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/metastore"

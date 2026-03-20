@@ -10,10 +10,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
-	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/ingestion"
 	"github.com/y-scope/metalog/db"
-	"github.com/y-scope/metalog/pkg/health"
-	"github.com/y-scope/metalog/pkg/logutil"
+	"github.com/y-scope/metalog/health"
+	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/storage"
 )

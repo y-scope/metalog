@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
-	"github.com/y-scope/metalog/pkg/encoding"
+	"github.com/y-scope/metalog/encoding"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
 )

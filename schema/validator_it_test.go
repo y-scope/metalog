@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/schema"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 func TestBaseSchemaValidator_Validate(t *testing.T) {

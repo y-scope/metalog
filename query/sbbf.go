@@ -4,7 +4,7 @@ import (
 	"github.com/axiomhq/splitblockbloom"
 	"github.com/cespare/xxhash/v2"
 
-	"github.com/y-scope/metalog/pkg/encoding"
+	"github.com/y-scope/metalog/encoding"
 )
 
 // sbbfContains checks whether a value is present in a Parquet-compatible Split

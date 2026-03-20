@@ -1,9 +1,9 @@
 package node
 
 import (
-	"github.com/y-scope/metalog/node/shared"
+	"github.com/y-scope/metalog/node/resources"
 )
 
-// SharedResources is an alias for shared.Resources so existing code in the
+// SharedResources is an alias for resources.Resources so existing code in the
 // node package (and callers) continues to compile without changes.
-type SharedResources = shared.Resources
+type SharedResources = resources.Resources

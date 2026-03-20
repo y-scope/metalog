@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 const testTable = "test_logs"

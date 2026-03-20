@@ -12,7 +12,7 @@ import (
 
 	db "github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/pkg/ddl"
+	"github.com/y-scope/metalog/ddl"
 )
 
 // Registry handles table assignment, heartbeat, and HA operations.

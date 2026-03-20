@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/taskqueue"
-	"github.com/y-scope/metalog/pkg/timeutil"
+	"github.com/y-scope/metalog/timeutil"
 )
 
 // TaskCompleter handles task lifecycle operations (complete/fail).

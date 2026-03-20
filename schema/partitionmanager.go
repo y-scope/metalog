@@ -11,7 +11,7 @@ import (
 
 	"github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/pkg/timeutil"
+	"github.com/y-scope/metalog/timeutil"
 )
 
 // Structural partition names — these bookend the daily partition range and

@@ -12,7 +12,7 @@ import (
 
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
-	"github.com/y-scope/metalog/pkg/testutil"
+	"github.com/y-scope/metalog/testutil"
 )
 
 func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *node.CoordinatorRegistry) {

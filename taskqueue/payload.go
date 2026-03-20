@@ -3,7 +3,7 @@ package taskqueue
 import (
 	"fmt"
 
-	"github.com/y-scope/metalog/pkg/encoding"
+	"github.com/y-scope/metalog/encoding"
 )
 
 // TaskPayloadVersion is the current payload schema version.

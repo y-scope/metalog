@@ -12,7 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
 
-	"github.com/y-scope/metalog/pkg/ddl"
+	"github.com/y-scope/metalog/ddl"
 )
 
 const (
