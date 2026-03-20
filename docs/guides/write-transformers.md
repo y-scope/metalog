@@ -118,13 +118,13 @@ func (t *sparkTransformer) Transform(rec *metastore.FileRecord, data map[string]
 
 ### Step 2: Register the transformer
 
-Add it to the `TransformerRegistry` in an `init()` function:
+Register it via `RegisterRecordTransformer` in an `init()` function:
 
 ```go
 func init() {
-	TransformerRegistry["spark"] = func() RecordTransformer {
+	RegisterRecordTransformer("spark", func() RecordTransformer {
 		return &sparkTransformer{}
-	}
+	})
 }
 ```
 

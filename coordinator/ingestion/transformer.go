@@ -1,6 +1,9 @@
 package ingestion
 
 import (
+	"fmt"
+	"sync"
+
 	"github.com/y-scope/metalog/metastore"
 )
 
@@ -33,8 +36,29 @@ func (t *DefaultTransformer) Transform(rec *metastore.FileRecord, data map[strin
 	return nil
 }
 
-// TransformerRegistry maps transformer names to implementations.
-var TransformerRegistry = map[string]func() RecordTransformer{
-	"":        func() RecordTransformer { return NewDefaultTransformer() },
-	"default": func() RecordTransformer { return NewDefaultTransformer() },
+var (
+	transformerMu       sync.RWMutex
+	transformerRegistry = map[string]func() RecordTransformer{
+		"":        func() RecordTransformer { return NewDefaultTransformer() },
+		"default": func() RecordTransformer { return NewDefaultTransformer() },
+	}
+)
+
+// RegisterRecordTransformer registers a named record transformer factory.
+func RegisterRecordTransformer(name string, factory func() RecordTransformer) {
+	transformerMu.Lock()
+	defer transformerMu.Unlock()
+	transformerRegistry[name] = factory
+}
+
+// NewRecordTransformer creates a record transformer by name.
+// Returns an error for unregistered names.
+func NewRecordTransformer(name string) (RecordTransformer, error) {
+	transformerMu.RLock()
+	factory, ok := transformerRegistry[name]
+	transformerMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown record transformer %q", name)
+	}
+	return factory(), nil
 }

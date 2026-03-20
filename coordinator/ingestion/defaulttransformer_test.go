@@ -81,12 +81,11 @@ func TestJsonRecordTransformer_ArrayField(t *testing.T) {
 }
 
 func TestJsonTransformerInRegistry(t *testing.T) {
-	factory, ok := TransformerRegistry["json"]
-	if !ok {
-		t.Fatal("json transformer not registered")
+	tr, err := NewRecordTransformer("json")
+	if err != nil {
+		t.Fatalf("NewRecordTransformer(\"json\") error = %v", err)
 	}
-	tr := factory()
 	if tr == nil {
-		t.Fatal("factory returned nil")
+		t.Fatal("returned nil transformer")
 	}
 }

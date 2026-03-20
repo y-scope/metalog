@@ -110,9 +110,9 @@ package ingestion
 import "github.com/y-scope/metalog/coordinator/ingestion"
 
 func init() {
-    ingestion.TransformerRegistry["spark"] = func() ingestion.RecordTransformer {
+    ingestion.RegisterRecordTransformer("spark", func() ingestion.RecordTransformer {
         return &sparkTransformer{}
-    }
+    })
 }
 ```
 
@@ -293,7 +293,7 @@ func main() {
 | Extension Point | Interface | Registration | Config |
 |----------------|-----------|--------------|--------|
 | Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_table_config` `kafka.record_transformer` |
-| Record Transformers | `ingestion.RecordTransformer` | `ingestion.TransformerRegistry` | `_table_config` `kafka.record_transformer` |
+| Record Transformers | `ingestion.RecordTransformer` | `ingestion.RegisterRecordTransformer()` | `_table_config` `kafka.record_transformer` |
 | Storage Backends | `storage.Backend` | `storage.RegisterType()` | `node.yaml` `storage.backends` |
 | Consolidation Policies | `consolidation.Policy` | `consolidation.RegisterPolicyType()` | `_table_config` `consolidation.policies` |
 | Kafka Adapters | `node.KafkaAdapter` | `node.WithKafkaAdapterFactory()` | Programmatic (`NodeOption`) |

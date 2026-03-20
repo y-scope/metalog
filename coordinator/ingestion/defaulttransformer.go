@@ -87,7 +87,7 @@ func flattenJSON(prefix string, m map[string]any, out map[string]any) {
 }
 
 func init() {
-	TransformerRegistry["json"] = func() RecordTransformer {
+	RegisterRecordTransformer("json", func() RecordTransformer {
 		return newJSONRecordTransformer("")
-	}
+	})
 }
