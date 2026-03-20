@@ -184,9 +184,19 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 		return
 	}
 
+	rec, err := ingestion.ConvertRecord(record)
+	if err != nil {
+		c.log.Warn("convert failed",
+			zap.Int32("partition", msg.TopicPartition.Partition),
+			zap.Any("offset", msg.TopicPartition.Offset),
+			zap.Error(err),
+		)
+		return
+	}
+
 	flushed := make(chan error, 1)
 
-	if err := c.service.IngestWithCallbackWait(ctx, c.tableName, record, flushed); err != nil {
+	if err := c.service.IngestWithCallbackWait(ctx, c.tableName, rec, flushed); err != nil {
 		c.log.Warn("ingest failed",
 			zap.Int32("partition", msg.TopicPartition.Partition),
 			zap.Any("offset", msg.TopicPartition.Offset),

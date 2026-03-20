@@ -7,18 +7,33 @@ import (
 	"github.com/y-scope/metalog/metastore"
 )
 
+func TestConvertRecord_NilInput(t *testing.T) {
+	_, err := ConvertRecord(nil)
+	if err == nil {
+		t.Error("ConvertRecord(nil) should return error")
+	}
+}
+
+func TestConvertRecord_NilFile(t *testing.T) {
+	record := &pb.MetadataRecord{File: nil}
+	_, err := ConvertRecord(record)
+	if err == nil {
+		t.Error("ConvertRecord with nil File should return error")
+	}
+}
+
 func TestFileRecordFromProto_NilInput(t *testing.T) {
-	result := FileRecordFromProto(nil)
+	result := fileRecordFromProto(nil)
 	if result != nil {
-		t.Error("FileRecordFromProto(nil) should return nil")
+		t.Error("fileRecordFromProto(nil) should return nil")
 	}
 }
 
 func TestFileRecordFromProto_NilFile(t *testing.T) {
 	record := &pb.MetadataRecord{File: nil}
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 	if result != nil {
-		t.Error("FileRecordFromProto with nil File should return nil")
+		t.Error("fileRecordFromProto with nil File should return nil")
 	}
 }
 
@@ -35,10 +50,10 @@ func TestFileRecordFromProto_BasicFields(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if result == nil {
-		t.Fatal("FileRecordFromProto returned nil")
+		t.Fatal("fileRecordFromProto returned nil")
 	}
 
 	if result.State != metastore.FileState("IR_BUFFERING") {
@@ -72,7 +87,7 @@ func TestFileRecordFromProto_RawSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	// Zero or negative should result in Invalid NullInt64
 	if result.RawSizeBytes.Valid {
@@ -93,7 +108,7 @@ func TestFileRecordFromProto_IRFields(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if !result.ClpIRStorageBackend.Valid || result.ClpIRStorageBackend.String != "s3" {
 		t.Errorf("ClpIRStorageBackend = %v, want s3", result.ClpIRStorageBackend)
@@ -123,7 +138,7 @@ func TestFileRecordFromProto_ArchiveFields(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if !result.ClpArchiveStorageBackend.Valid || result.ClpArchiveStorageBackend.String != "gcs" {
 		t.Errorf("ClpArchiveStorageBackend = %v, want gcs", result.ClpArchiveStorageBackend)
@@ -150,7 +165,7 @@ func TestFileRecordFromProto_NoArchive(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	// Archive fields should be null/invalid
 	if result.ClpArchiveStorageBackend.Valid {
@@ -174,7 +189,7 @@ func TestFileRecordFromProto_DimsAndAggsInitialized(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if result.Dims == nil {
 		t.Error("Dims should be initialized (not nil)")
@@ -201,7 +216,7 @@ func TestFileRecordFromProto_ExpiresAtComputed(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	want := int64(1704067200000000000) + 30*86400*1e9
 	if result.ExpiresAt != want {
@@ -220,7 +235,7 @@ func TestFileRecordFromProto_ExpiresAtExplicit(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if result.ExpiresAt != 3000000000000000000 {
 		t.Errorf("ExpiresAt = %d, want 3000000000000000000 (explicit value preserved)", result.ExpiresAt)
@@ -238,7 +253,7 @@ func TestFileRecordFromProto_DefaultRetentionDays(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	if result.RetentionDays != metastore.DefaultRetentionDays {
 		t.Errorf("RetentionDays = %d, want %d", result.RetentionDays, metastore.DefaultRetentionDays)
@@ -260,10 +275,37 @@ func TestFileRecordFromProto_IRSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := FileRecordFromProto(record)
+	result := fileRecordFromProto(record)
 
 	// Zero size should be invalid
 	if result.ClpIRSizeBytes.Valid {
 		t.Error("ClpIRSizeBytes should be invalid when 0")
+	}
+}
+
+func TestConvertRecord_WithDimsAndSketches(t *testing.T) {
+	record := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State:        "IR_BUFFERING",
+			MinTimestamp: 1000000000,
+			Ir: &pb.IrFileInfo{
+				ClpIrPath: "/path/to/file.ir",
+			},
+		},
+		Sketch: []*pb.SketchEntry{
+			{SketchKey: "uuid", Data: []byte{1, 2, 3}},
+		},
+	}
+
+	rec, err := ConvertRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rec.Sketches) != 1 {
+		t.Fatalf("expected 1 sketch, got %d", len(rec.Sketches))
+	}
+	if string(rec.Sketches["uuid"]) != string([]byte{1, 2, 3}) {
+		t.Error("uuid sketch data mismatch")
 	}
 }

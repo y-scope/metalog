@@ -34,7 +34,12 @@ func NewIngestionHandler(svc *ingestion.Service, log *zap.Logger) *IngestionHand
 //
 // Application-level errors (internal processing) are returned via IngestResponse.
 func (h *IngestionHandler) Ingest(ctx context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
-	result := h.service.Ingest(ctx, req.GetTableName(), req.GetRecord())
+	rec, err := ingestion.ConvertRecord(req.GetRecord())
+	if err != nil {
+		return nil, mapIngestionError(err)
+	}
+
+	result := h.service.Ingest(ctx, req.GetTableName(), rec)
 	if !result.Accepted {
 		if grpcErr := h.mapToGRPCError(result); grpcErr != nil {
 			return nil, grpcErr
@@ -52,6 +57,15 @@ func (h *IngestionHandler) Ingest(ctx context.Context, req *pb.IngestRequest) (*
 		Accepted: result.Accepted,
 		Error:    result.Error,
 	}, nil
+}
+
+// mapIngestionError maps a ConvertRecord error to a gRPC status.
+func mapIngestionError(err error) error {
+	var ve *ingestion.ValidationError
+	if errors.As(err, &ve) {
+		return status.Error(codes.InvalidArgument, ve.Error())
+	}
+	return status.Error(codes.InvalidArgument, err.Error())
 }
 
 // mapToGRPCError maps known error types to gRPC status codes.
