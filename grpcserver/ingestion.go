@@ -10,7 +10,7 @@ import (
 
 	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
-	"github.com/y-scope/metalog/ingestion"
+	"github.com/y-scope/metalog/coordinator/ingestion"
 )
 
 // IngestionHandler implements the MetadataIngestionService gRPC interface.

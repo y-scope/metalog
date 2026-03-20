@@ -5,7 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/ingestion"
+	"github.com/y-scope/metalog/coordinator/ingestion"
 )
 
 // Poller wraps a Consumer with a polling goroutine for a single table.

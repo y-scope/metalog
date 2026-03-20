@@ -10,9 +10,9 @@ import (
 
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator"
-	"github.com/y-scope/metalog/consolidation"
-	"github.com/y-scope/metalog/ingestion"
-	"github.com/y-scope/metalog/retention"
+	"github.com/y-scope/metalog/coordinator/consolidation"
+	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/coordinator/retention"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/taskqueue"
