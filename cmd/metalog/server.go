@@ -15,6 +15,7 @@ import (
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator"
 	"github.com/y-scope/metalog/grpcserver"
+	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/query"
@@ -35,7 +36,7 @@ func runServer() {
 		log.Fatal("failed to load config", zap.String("path", *configPath), zap.Error(err))
 	}
 
-	n, err := node.NewNode(cfg, log)
+	n, err := node.NewNode(cfg, log, node.WithKafkaAdapterFactory(kafka.NewDefaultAdapterFactory()))
 	if err != nil {
 		log.Fatal("failed to create node", zap.Error(err))
 	}

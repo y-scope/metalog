@@ -20,12 +20,13 @@ import (
 
 // Node is the top-level orchestrator that manages coordinator and worker units.
 type Node struct {
-	cfg       *config.NodeConfig
-	nodeID    string
-	shared    *SharedResources
-	registry  *CoordinatorRegistry
-	writer    *ingestion.BatchingWriter
-	ingestSvc *ingestion.Service
+	cfg          *config.NodeConfig
+	nodeID       string
+	shared       *SharedResources
+	registry     *CoordinatorRegistry
+	writer       *ingestion.BatchingWriter
+	ingestSvc    *ingestion.Service
+	kafkaFactory KafkaAdapterFactory
 
 	coordMu      sync.Mutex
 	coordinators map[string]*CoordinatorUnit
@@ -39,7 +40,7 @@ type Node struct {
 }
 
 // NewNode creates and initializes a Node from configuration.
-func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
+func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node, error) {
 	nodeID := cfg.ResolveNodeID()
 	if nodeID == "" {
 		return nil, fmt.Errorf("node ID is empty: set %s env var or configure nodeIdEnvVar", cfg.Coordinator.NodeIDEnvVar)
@@ -151,6 +152,10 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger) (*Node, error) {
 		log:          log,
 		ctx:          ctx,
 		cancel:       cancel,
+	}
+
+	for _, opt := range opts {
+		opt(n)
 	}
 
 	// Health server
@@ -359,7 +364,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.kafkaFactory, n.log)
 	if err != nil {
 		return err
 	}

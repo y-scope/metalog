@@ -36,6 +36,7 @@ import (
 	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
+	metalogkafka "github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/schema"
 )
@@ -186,7 +187,7 @@ func main() {
 
 	// Start node.
 	logger.Info("starting coordinator node")
-	n, err := node.NewNode(cfg, logger)
+	n, err := node.NewNode(cfg, logger, node.WithKafkaAdapterFactory(metalogkafka.NewDefaultAdapterFactory()))
 	if err != nil {
 		logger.Fatal("create node", zap.Error(err))
 	}

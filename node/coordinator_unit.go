@@ -16,7 +16,6 @@ import (
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/taskqueue"
-	kafkaconsumer "github.com/y-scope/metalog/kafka"
 )
 
 // partitionMaintenanceInterval is how often partition lookahead/cleanup runs.
@@ -37,7 +36,7 @@ type CoordinatorUnit struct {
 	partition         *schema.PartitionManager
 	registry          *schema.ColumnRegistry
 	progress          *coordinator.ProgressTracker
-	kafkaConsumer     kafkaconsumer.MessageSource
+	kafkaAdapter      KafkaAdapter
 	log               *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
@@ -46,10 +45,6 @@ type CoordinatorUnit struct {
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 }
-
-// kafkaGroupPrefix is the prefix for Kafka consumer group IDs.
-// Matches the Java implementation (clp-coordinator-{table_name}-{table_id}).
-const kafkaGroupPrefix = "clp-coordinator-"
 
 // NewCoordinatorUnit creates a coordinator unit for a table.
 // tableID is the UUID from the _table registry, used to derive a unique Kafka consumer
@@ -62,6 +57,7 @@ func NewCoordinatorUnit(
 	shared *SharedResources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
+	kafkaFactory KafkaAdapterFactory,
 	log *zap.Logger,
 ) (*CoordinatorUnit, error) {
 	reg, err := schema.NewColumnRegistry(ctx, shared.DB, tableName, shared.IsMariaDB, log)
@@ -131,22 +127,15 @@ func NewCoordinatorUnit(
 
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
-	// Create Kafka consumer if configured — routes through IngestionService
+	// Create Kafka adapter if configured — routes through IngestionService
 	// for proper dim/agg column resolution.
-	var kc kafkaconsumer.MessageSource
-	if tableCfg.Kafka.Enabled &&
-		tableCfg.Kafka.Topic != "" && tableCfg.Kafka.BootstrapServers != "" {
-		transformer, err := kafkaconsumer.NewTransformer(tableCfg.Kafka.RecordTransformer)
+	var kafkaAdapter KafkaAdapter
+	if kafkaFactory != nil {
+		var err error
+		kafkaAdapter, err = kafkaFactory(tableName, tableID, tableCfg, ingestSvc, log)
 		if err != nil {
 			return nil, fmt.Errorf("new coordinator unit: %w", err)
 		}
-		groupID := kafkaGroupPrefix + tableName + "-" + tableID
-		kc = kafkaconsumer.NewConsumer(
-			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
-			transformer,
-			ingestSvc,
-			log,
-		)
 	}
 
 	progress := coordinator.NewProgressTracker(config.DefaultProgressStallTimeout, log)
@@ -163,7 +152,7 @@ func NewCoordinatorUnit(
 		partition:        partMgr,
 		registry:         reg,
 		progress:         progress,
-		kafkaConsumer:    kc,
+		kafkaAdapter:     kafkaAdapter,
 		log:              log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
 		parentCtx:     ctx,
 		ctx:           childCtx,
@@ -247,12 +236,12 @@ func (u *CoordinatorUnit) Start() {
 		u.registry.RunRecycler(ctx)
 	}()
 
-	// Kafka consumer goroutine
-	if u.kafkaConsumer != nil {
+	// Kafka adapter goroutine
+	if u.kafkaAdapter != nil {
 		u.wg.Add(1)
 		go func() {
 			defer u.wg.Done()
-			u.kafkaConsumer.Run(ctx)
+			u.kafkaAdapter.Start(ctx)
 		}()
 	}
 
@@ -262,6 +251,11 @@ func (u *CoordinatorUnit) Start() {
 // Stop signals all goroutines to stop and waits for completion.
 func (u *CoordinatorUnit) Stop() {
 	u.log.Info("stopping coordinator unit")
+	// Stop the Kafka adapter before cancelling the context so push-based
+	// adapters can deregister cleanly while the goroutine is still running.
+	if u.kafkaAdapter != nil {
+		u.kafkaAdapter.Stop()
+	}
 	u.ctxMu.Lock()
 	cancel := u.cancel
 	u.ctxMu.Unlock()
