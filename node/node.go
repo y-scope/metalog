@@ -463,12 +463,7 @@ func (n *Node) reconcile() {
 		n.log.Warn("get unassigned tables failed", zap.Error(err))
 		return
 	}
-	if len(unassigned) == 0 {
-		// Nothing to claim — skip the fair-share queries.
-		goto stepThree
-	}
-
-	{
+	if len(unassigned) > 0 {
 		var activeNodes int
 		var err error
 		if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
@@ -532,8 +527,6 @@ func (n *Node) reconcile() {
 			}
 		}
 	}
-
-stepThree:
 
 	// Step 3: Watchdog — restart stalled coordinators.
 	// Collect stalled coordinators under lock, then restart outside lock.
