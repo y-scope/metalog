@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -131,10 +132,13 @@ func NewCoordinatorUnit(
 	// for proper dim/agg column resolution.
 	var kafkaAdapter KafkaAdapter
 	if kafkaFactory != nil {
-		var err error
-		kafkaAdapter, err = kafkaFactory(tableName, tableID, tableCfg, ingestSvc, log)
-		if err != nil {
+		adapter, err := kafkaFactory(tableName, tableID, tableCfg, ingestSvc, log)
+		if errors.Is(err, ErrKafkaNotConfigured) {
+			// Table doesn't use Kafka — skip adapter setup.
+		} else if err != nil {
 			return nil, fmt.Errorf("new coordinator unit: %w", err)
+		} else {
+			kafkaAdapter = adapter
 		}
 	}
 

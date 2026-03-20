@@ -2,12 +2,18 @@ package node
 
 import (
 	"context"
+	"errors"
 
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
 	"github.com/y-scope/metalog/metastore"
 )
+
+// ErrKafkaNotConfigured is returned by a KafkaAdapterFactory when the table
+// does not have Kafka enabled or configured. The caller skips Kafka setup
+// for this table rather than treating it as a failure.
+var ErrKafkaNotConfigured = errors.New("kafka not configured for table")
 
 // KafkaAdapter handles message consumption for a single table.
 type KafkaAdapter interface {

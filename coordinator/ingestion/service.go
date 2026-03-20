@@ -37,15 +37,14 @@ func (e *ValidationError) Error() string { return e.Msg }
 // IngestionResult provides details about the outcome of an ingestion request.
 type IngestionResult struct {
 	Accepted bool
-	Error    string
-	Err      error // raw error for gRPC status mapping
+	Err      error
 }
 
 // Ingest submits a single pre-converted record.
 func (s *Service) Ingest(ctx context.Context, tableName string, rec *metastore.FileRecord) *IngestionResult {
 	err := s.IngestWithCallback(ctx, tableName, rec, nil)
 	if err != nil {
-		return &IngestionResult{Accepted: false, Error: err.Error(), Err: err}
+		return &IngestionResult{Accepted: false, Err: err}
 	}
 	return &IngestionResult{Accepted: true}
 }

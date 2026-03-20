@@ -17,10 +17,6 @@ func ConvertRecord(record *pb.MetadataRecord) (*metastore.FileRecord, error) {
 	}
 
 	rec := fileRecordFromProto(record)
-	if rec == nil {
-		return nil, fmt.Errorf("failed to convert record")
-	}
-
 	extractDims(record.Dim, rec)
 	extractAggs(record.Agg, rec)
 	extractSketches(record.Sketch, rec)

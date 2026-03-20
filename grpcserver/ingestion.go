@@ -46,17 +46,18 @@ func (h *IngestionHandler) Ingest(ctx context.Context, req *pb.IngestRequest) (*
 		}
 		h.log.Warn("ingest failed",
 			zap.String("table", req.GetTableName()),
-			zap.String("error", result.Error),
+			zap.Error(result.Err),
 		)
 	} else {
 		h.log.Debug("record ingested",
 			zap.String("table", req.GetTableName()),
 		)
 	}
-	return &pb.IngestResponse{
-		Accepted: result.Accepted,
-		Error:    result.Error,
-	}, nil
+	resp := &pb.IngestResponse{Accepted: result.Accepted}
+	if result.Err != nil {
+		resp.Error = result.Err.Error()
+	}
+	return resp, nil
 }
 
 // mapIngestionError maps a ConvertRecord error to a gRPC status.

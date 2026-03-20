@@ -27,7 +27,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/y-scope/metalog/config"
@@ -385,15 +387,24 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 			defer wg.Done()
 			for idx := range work {
 				req := buildIngestRequest(table, idx, apps)
-				resp, err := client.Ingest(context.Background(), req)
-				if err != nil {
-					rejected.Add(1)
-					continue
-				}
-				if resp.Accepted {
-					accepted.Add(1)
-				} else {
-					rejected.Add(1)
+				backoff := time.Millisecond
+				for {
+					resp, err := client.Ingest(context.Background(), req)
+					if err != nil {
+						if status.Code(err) == codes.ResourceExhausted {
+							time.Sleep(backoff)
+							backoff = min(backoff*2, 100*time.Millisecond)
+							continue
+						}
+						rejected.Add(1)
+						break
+					}
+					if resp.Accepted {
+						accepted.Add(1)
+					} else {
+						rejected.Add(1)
+					}
+					break
 				}
 			}
 		}()

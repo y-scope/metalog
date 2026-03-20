@@ -150,7 +150,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 
 	consumer := func(swc *query.SplitWithCursor) (bool, error) {
 		seq++
-		split := rowToProtoSplit(swc.Row, registry)
+		split := rowToProtoSplit(swc.Row, registry, h.log)
 
 		resp := &pb.StreamSplitsResponse{
 			Split:    split,
@@ -191,7 +191,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 	})
 }
 
-func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.Split {
+func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry, log *zap.Logger) *pb.Split {
 	rs := query.ResolveSplit(row, registry)
 	split := &pb.Split{
 		Id:                       rs.ID,
@@ -209,10 +209,16 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry) *pb.S
 		Dimensions:               rs.Dimensions,
 	}
 	for _, ra := range rs.Aggs {
+		aggTypeName := "AGGREGATION_TYPE_" + ra.AggregationType
+		aggTypeVal, ok := pb.AggregationType_value[aggTypeName]
+		if !ok {
+			log.Warn("unknown aggregation_type, defaulting to UNSPECIFIED",
+				zap.String("raw_value", ra.AggregationType))
+		}
 		aggEntry := &pb.AggEntry{
 			Key:             ra.Key,
 			Value:           ra.Value,
-			AggregationType: pb.AggregationType(pb.AggregationType_value["AGGREGATION_TYPE_"+ra.AggregationType]),
+			AggregationType: pb.AggregationType(aggTypeVal),
 		}
 		if ra.HasResult {
 			if ra.ValueType == "FLOAT" {

@@ -24,7 +24,7 @@ func NewDefaultAdapterFactory() node.KafkaAdapterFactory {
 		log *zap.Logger,
 	) (node.KafkaAdapter, error) {
 		if !tableCfg.Kafka.Enabled || tableCfg.Kafka.Topic == "" || tableCfg.Kafka.BootstrapServers == "" {
-			return nil, nil
+			return nil, node.ErrKafkaNotConfigured
 		}
 		transformer, err := NewTransformer(tableCfg.Kafka.RecordTransformer)
 		if err != nil {
