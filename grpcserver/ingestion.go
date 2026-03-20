@@ -8,14 +8,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/coordinator/ingestion"
 )
 
 // IngestionHandler implements the MetadataIngestionService gRPC interface.
 type IngestionHandler struct {
-	ingestiongrpc.UnimplementedMetadataIngestionServiceServer
+	pb.UnimplementedMetadataIngestionServiceServer
 	service *ingestion.Service
 	log     *zap.Logger
 }

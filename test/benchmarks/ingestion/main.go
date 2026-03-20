@@ -35,7 +35,6 @@ import (
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator"
 	coordinatorpb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
-	ingestiongrpc "github.com/y-scope/metalog/gen/proto/ingestiongrpc"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
 	metalogkafka "github.com/y-scope/metalog/kafka"
@@ -202,7 +201,7 @@ func main() {
 	grpcSrv := grpcserver.NewServer(grpcPortResolved, logger)
 	if *mode == "grpc" {
 		ingestionHandler := grpcserver.NewIngestionHandler(n.IngestionService(), logger)
-		ingestiongrpc.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionHandler)
+		pb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionHandler)
 	}
 	regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Coordinator.TableCompression, logger)
 	adminHandler := grpcserver.NewAdminHandler(regSvc, logger)
@@ -366,7 +365,7 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 	}
 	defer conn.Close()
 
-	client := ingestiongrpc.NewMetadataIngestionServiceClient(conn)
+	client := pb.NewMetadataIngestionServiceClient(conn)
 
 	var (
 		accepted atomic.Int64
