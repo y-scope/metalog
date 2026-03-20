@@ -12,7 +12,7 @@ import (
 
 	db "github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/ddl"
+	"github.com/y-scope/metalog/schema"
 )
 
 // Registry handles table assignment, heartbeat, and HA operations.
@@ -31,7 +31,7 @@ func New(db *sql.DB, nodeID string, isMariaDB bool, log *zap.Logger) *Registry {
 // EnsureSystemTables executes the embedded schema.sql to create all system
 // tables (registry, task queue, column registries, template) if they don't exist.
 func (r *Registry) EnsureSystemTables(ctx context.Context) error {
-	stmts := splitSQLStatements(ddl.SQL)
+	stmts := splitSQLStatements(schema.SchemaSQL)
 	for _, stmt := range stmts {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {

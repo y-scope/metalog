@@ -37,7 +37,7 @@ import (
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
 	"github.com/y-scope/metalog/node"
-	"github.com/y-scope/metalog/ddl"
+	"github.com/y-scope/metalog/schema"
 )
 
 var (
@@ -341,7 +341,7 @@ func writeSchemaTempFile() string {
 	if err != nil {
 		logger.Fatal("create temp schema file", zap.Error(err))
 	}
-	if _, err := f.WriteString(ddl.SQL); err != nil {
+	if _, err := f.WriteString(schema.SchemaSQL); err != nil {
 		f.Close()
 		logger.Fatal("write schema file", zap.Error(err))
 	}

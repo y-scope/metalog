@@ -23,7 +23,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/ddl"
+	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/taskqueue"
 )
 
@@ -270,7 +270,7 @@ func runCompletePhase(ctx context.Context, tq *taskqueue.Queue, allClaimed [][]*
 // --- Helper functions ---
 
 func execSchema(ctx context.Context, db *sql.DB) error {
-	stmts := splitStatements(ddl.SQL)
+	stmts := splitStatements(schema.SchemaSQL)
 	for _, stmt := range stmts {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
@@ -428,7 +428,7 @@ func writeSchemaTempFile() string {
 	if err != nil {
 		logger.Fatal("create temp schema file", zap.Error(err))
 	}
-	if _, err := f.WriteString(ddl.SQL); err != nil {
+	if _, err := f.WriteString(schema.SchemaSQL); err != nil {
 		f.Close()
 		logger.Fatal("write schema file", zap.Error(err))
 	}

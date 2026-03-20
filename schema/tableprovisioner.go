@@ -10,8 +10,6 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/ddl"
-
 	"github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/metastore"
 )
@@ -97,7 +95,7 @@ func createPhysicalTable(ctx context.Context, database *sql.DB, tableName string
 }
 
 func loadTemplateDDL() (string, error) {
-	content := ddl.SQL
+	content := SchemaSQL
 	// Strip SQL comments
 	lines := strings.Split(content, "\n")
 	var filtered []string

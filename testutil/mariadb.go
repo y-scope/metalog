@@ -12,7 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
 
-	"github.com/y-scope/metalog/ddl"
+	"github.com/y-scope/metalog/schema"
 )
 
 const (
@@ -85,7 +85,7 @@ func (mc *MariaDBContainer) Teardown(t *testing.T) {
 func (mc *MariaDBContainer) LoadSchema(t *testing.T) {
 	t.Helper()
 
-	schemaSQL := ddl.SQL
+	schemaSQL := schema.SchemaSQL
 
 	// Execute each statement separately
 	stmts := splitStatements(schemaSQL)
