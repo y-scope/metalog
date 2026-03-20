@@ -24,40 +24,43 @@ const (
 type IngestAggType int32
 
 const (
-	IngestAggType_EQ  IngestAggType = 0
-	IngestAggType_GTE IngestAggType = 1
-	IngestAggType_GT  IngestAggType = 2
-	IngestAggType_LTE IngestAggType = 3
-	IngestAggType_LT  IngestAggType = 4
-	IngestAggType_SUM IngestAggType = 5
-	IngestAggType_AVG IngestAggType = 6
-	IngestAggType_MIN IngestAggType = 7
-	IngestAggType_MAX IngestAggType = 8
+	IngestAggType_INGEST_AGG_TYPE_INVALID IngestAggType = 0
+	IngestAggType_EQ                      IngestAggType = 1 // Equality — exact match filter
+	IngestAggType_GTE                     IngestAggType = 2 // Greater than or equal
+	IngestAggType_GT                      IngestAggType = 3 // Greater than
+	IngestAggType_LTE                     IngestAggType = 4 // Less than or equal
+	IngestAggType_LT                      IngestAggType = 5 // Less than
+	IngestAggType_SUM                     IngestAggType = 6 // Summation
+	IngestAggType_AVG                     IngestAggType = 7 // Average
+	IngestAggType_MIN                     IngestAggType = 8 // Minimum
+	IngestAggType_MAX                     IngestAggType = 9 // Maximum
 )
 
 // Enum value maps for IngestAggType.
 var (
 	IngestAggType_name = map[int32]string{
-		0: "EQ",
-		1: "GTE",
-		2: "GT",
-		3: "LTE",
-		4: "LT",
-		5: "SUM",
-		6: "AVG",
-		7: "MIN",
-		8: "MAX",
+		0: "INGEST_AGG_TYPE_INVALID",
+		1: "EQ",
+		2: "GTE",
+		3: "GT",
+		4: "LTE",
+		5: "LT",
+		6: "SUM",
+		7: "AVG",
+		8: "MIN",
+		9: "MAX",
 	}
 	IngestAggType_value = map[string]int32{
-		"EQ":  0,
-		"GTE": 1,
-		"GT":  2,
-		"LTE": 3,
-		"LT":  4,
-		"SUM": 5,
-		"AVG": 6,
-		"MIN": 7,
-		"MAX": 8,
+		"INGEST_AGG_TYPE_INVALID": 0,
+		"EQ":                      1,
+		"GTE":                     2,
+		"GT":                      3,
+		"LTE":                     4,
+		"LT":                      5,
+		"SUM":                     6,
+		"AVG":                     7,
+		"MIN":                     8,
+		"MAX":                     9,
 	}
 )
 
@@ -385,7 +388,7 @@ func (x *IngestAggEntry) GetAggType() IngestAggType {
 	if x != nil {
 		return x.AggType
 	}
-	return IngestAggType_EQ
+	return IngestAggType_INGEST_AGG_TYPE_INVALID
 }
 
 func (x *IngestAggEntry) GetValue() isIngestAggEntry_Value {
@@ -990,11 +993,11 @@ const file_ingestion_proto_rawDesc = "" +
 	"\x05value\"g\n" +
 	"\bDimEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12I\n" +
-	"\x05value\x18\x02 \x01(\v23.com.yscope.metalog.coordinator.grpc.DimensionValueR\x05value\"\xed\x01\n" +
-	"\bAggEntry\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\v23.com.yscope.metalog.coordinator.grpc.DimensionValueR\x05value\"\xf9\x01\n" +
+	"\x0eIngestAggEntry\x12\x14\n" +
 	"\x05field\x18\x01 \x01(\tR\x05field\x12\x1c\n" +
-	"\tqualifier\x18\x02 \x01(\tR\tqualifier\x12G\n" +
-	"\bagg_type\x18\x03 \x01(\x0e2,.com.yscope.metalog.coordinator.grpc.AggTypeR\aaggType\x12\x19\n" +
+	"\tqualifier\x18\x02 \x01(\tR\tqualifier\x12M\n" +
+	"\bagg_type\x18\x03 \x01(\x0e22.com.yscope.metalog.coordinator.grpc.IngestAggTypeR\aaggType\x12\x19\n" +
 	"\aint_val\x18\x04 \x01(\x03H\x00R\x06intVal\x12\x1d\n" +
 	"\tfloat_val\x18\x05 \x01(\x01H\x00R\bfloatVal\x12!\n" +
 	"\falias_column\x18\x06 \x01(\tR\valiasColumnB\a\n" +
@@ -1029,10 +1032,10 @@ const file_ingestion_proto_rawDesc = "" +
 	"\vSketchEntry\x12\x1d\n" +
 	"\n" +
 	"sketch_key\x18\x01 \x01(\tR\tsketchKey\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\x89\x03\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\x8f\x03\n" +
 	"\x0eMetadataRecord\x12C\n" +
-	"\x04file\x18\x01 \x01(\v2/.com.yscope.metalog.coordinator.grpc.FileFieldsR\x04file\x12?\n" +
-	"\x03agg\x18\x02 \x03(\v2-.com.yscope.metalog.coordinator.grpc.AggEntryR\x03agg\x12?\n" +
+	"\x04file\x18\x01 \x01(\v2/.com.yscope.metalog.coordinator.grpc.FileFieldsR\x04file\x12E\n" +
+	"\x03agg\x18\x02 \x03(\v23.com.yscope.metalog.coordinator.grpc.IngestAggEntryR\x03agg\x12?\n" +
 	"\x03dim\x18\x03 \x03(\v2-.com.yscope.metalog.coordinator.grpc.DimEntryR\x03dim\x12f\n" +
 	"\x12self_describing_kv\x18\x04 \x03(\v28.com.yscope.metalog.coordinator.grpc.SelfDescribingEntryR\x10selfDescribingKv\x12H\n" +
 	"\x06sketch\x18\x05 \x03(\v20.com.yscope.metalog.coordinator.grpc.SketchEntryR\x06sketch\"{\n" +
@@ -1042,17 +1045,18 @@ const file_ingestion_proto_rawDesc = "" +
 	"\x06record\x18\x02 \x01(\v23.com.yscope.metalog.coordinator.grpc.MetadataRecordR\x06record\"B\n" +
 	"\x0eIngestResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error*W\n" +
-	"\aAggType\x12\x06\n" +
-	"\x02EQ\x10\x00\x12\a\n" +
-	"\x03GTE\x10\x01\x12\x06\n" +
-	"\x02GT\x10\x02\x12\a\n" +
-	"\x03LTE\x10\x03\x12\x06\n" +
-	"\x02LT\x10\x04\x12\a\n" +
-	"\x03SUM\x10\x05\x12\a\n" +
-	"\x03AVG\x10\x06\x12\a\n" +
-	"\x03MIN\x10\a\x12\a\n" +
-	"\x03MAX\x10\b2\x8d\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error*z\n" +
+	"\rIngestAggType\x12\x1b\n" +
+	"\x17INGEST_AGG_TYPE_INVALID\x10\x00\x12\x06\n" +
+	"\x02EQ\x10\x01\x12\a\n" +
+	"\x03GTE\x10\x02\x12\x06\n" +
+	"\x02GT\x10\x03\x12\a\n" +
+	"\x03LTE\x10\x04\x12\x06\n" +
+	"\x02LT\x10\x05\x12\a\n" +
+	"\x03SUM\x10\x06\x12\a\n" +
+	"\x03AVG\x10\a\x12\a\n" +
+	"\x03MIN\x10\b\x12\a\n" +
+	"\x03MAX\x10\t2\x8d\x01\n" +
 	"\x18MetadataIngestionService\x12q\n" +
 	"\x06Ingest\x122.com.yscope.metalog.coordinator.grpc.IngestRequest\x1a3.com.yscope.metalog.coordinator.grpc.IngestResponseB_\n" +
 	")com.yscope.metalog.coordinator.grpc.protoP\x01Z0github.com/y-scope/metalog/gen/proto/ingestionpbb\x06proto3"
@@ -1072,11 +1076,11 @@ func file_ingestion_proto_rawDescGZIP() []byte {
 var file_ingestion_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_ingestion_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_ingestion_proto_goTypes = []any{
-	(IngestAggType)(0),              // 0: com.yscope.metalog.coordinator.grpc.IngestAggType
+	(IngestAggType)(0),          // 0: com.yscope.metalog.coordinator.grpc.IngestAggType
 	(*StringDimension)(nil),     // 1: com.yscope.metalog.coordinator.grpc.StringDimension
 	(*DimensionValue)(nil),      // 2: com.yscope.metalog.coordinator.grpc.DimensionValue
 	(*DimEntry)(nil),            // 3: com.yscope.metalog.coordinator.grpc.DimEntry
-	(*IngestAggEntry)(nil),          // 4: com.yscope.metalog.coordinator.grpc.IngestAggEntry
+	(*IngestAggEntry)(nil),      // 4: com.yscope.metalog.coordinator.grpc.IngestAggEntry
 	(*IrFileInfo)(nil),          // 5: com.yscope.metalog.coordinator.grpc.IrFileInfo
 	(*ArchiveFileInfo)(nil),     // 6: com.yscope.metalog.coordinator.grpc.ArchiveFileInfo
 	(*FileFields)(nil),          // 7: com.yscope.metalog.coordinator.grpc.FileFields

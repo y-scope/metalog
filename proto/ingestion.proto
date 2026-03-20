@@ -33,15 +33,16 @@ message DimEntry {
 // ---------------------------------------------------------------------------
 
 enum IngestAggType {
-  EQ  = 0;
-  GTE = 1;
-  GT  = 2;
-  LTE = 3;
-  LT  = 4;
-  SUM = 5;
-  AVG = 6;
-  MIN = 7;
-  MAX = 8;
+  INGEST_AGG_TYPE_INVALID = 0;
+  EQ  = 1;  // Equality — exact match filter
+  GTE = 2;  // Greater than or equal
+  GT  = 3;  // Greater than
+  LTE = 4;  // Less than or equal
+  LT  = 5;  // Less than
+  SUM = 6;  // Summation
+  AVG = 7;  // Average
+  MIN = 8;  // Minimum
+  MAX = 9;  // Maximum
 }
 
 message IngestAggEntry {
