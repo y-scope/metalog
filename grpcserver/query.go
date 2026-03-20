@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -221,7 +222,7 @@ func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry, log *
 			AggregationType: pb.AggregationType(aggTypeVal),
 		}
 		if ra.HasResult {
-			if ra.ValueType == "FLOAT" {
+			if strings.EqualFold(ra.ValueType, "FLOAT") {
 				aggEntry.Result = &pb.AggEntry_FloatValue{FloatValue: ra.FloatResult}
 			} else {
 				aggEntry.Result = &pb.AggEntry_IntValue{IntValue: ra.IntResult}

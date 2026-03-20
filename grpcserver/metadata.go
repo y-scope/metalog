@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -81,7 +82,7 @@ func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 			AggregationType: splitspb.AggregationType(aggTypeVal),
 			AliasColumn:     a.AliasColumn,
 		}
-		if a.ValueType == "FLOAT" || a.ValueType == "float" {
+		if strings.EqualFold(a.ValueType, "FLOAT") {
 			aggInfo.ValueType = metapb.AggValueType_AGG_VALUE_TYPE_FLOAT
 		} else {
 			aggInfo.ValueType = metapb.AggValueType_AGG_VALUE_TYPE_INT
