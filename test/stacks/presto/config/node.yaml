@@ -1,0 +1,35 @@
+database:
+  primary:
+    host: db
+    port: 3306
+    database: metalog_metastore
+    user: root
+    password: password
+    poolSize: 10
+    poolMinIdle: 2
+
+storage:
+  defaultBackend: local
+  backends:
+    local:
+      type: fs
+      basePath: /tmp/metalog-storage
+
+grpc:
+  port: 9090
+  ingestion: true
+  admin: true
+  query: true
+  metadata: true
+
+health:
+  enabled: true
+  port: 8081
+
+coordinator:
+  enabled: true
+  nodeIdEnvVar: HOSTNAME
+  reconciliationIntervalSeconds: 5
+
+worker:
+  concurrency: 0
