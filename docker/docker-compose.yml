@@ -10,7 +10,7 @@ services:
       - "${DB_PORT:-3306}:3306"  # Customizable via DB_PORT env var (default: 3306)
     volumes:
       - mariadb-data:/var/lib/mysql
-      - ../pkg/ddl/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../schema/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
       interval: 5s

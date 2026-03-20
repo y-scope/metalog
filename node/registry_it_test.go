@@ -66,7 +66,7 @@ func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafka
 	}
 }
 
-func TestCoordinatorRegistry_EnsureSystemTables(t *testing.T) {
+func TestRegistry_EnsureSystemTables(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -79,7 +79,7 @@ func TestCoordinatorRegistry_EnsureSystemTables(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_RegisterAndList(t *testing.T) {
+func TestRegistry_RegisterAndList(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 
@@ -106,7 +106,7 @@ func TestCoordinatorRegistry_RegisterAndList(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_ClaimAndRelease(t *testing.T) {
+func TestRegistry_ClaimAndRelease(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -153,7 +153,7 @@ func TestCoordinatorRegistry_ClaimAndRelease(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_GetAssignedTables(t *testing.T) {
+func TestRegistry_GetAssignedTables(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -174,7 +174,7 @@ func TestCoordinatorRegistry_GetAssignedTables(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_SendHeartbeat(t *testing.T) {
+func TestRegistry_SendHeartbeat(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -203,7 +203,7 @@ func TestCoordinatorRegistry_SendHeartbeat(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_ReleaseAllTables(t *testing.T) {
+func TestRegistry_ReleaseAllTables(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -224,7 +224,7 @@ func TestCoordinatorRegistry_ReleaseAllTables(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
+func TestRegistry_ClaimByDifferentNodes(t *testing.T) {
 	mc := testutil.SetupMariaDB(t)
 	defer mc.Teardown(t)
 	mc.LoadSchema(t)
@@ -267,7 +267,7 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_GetTableConfig_Kafka(t *testing.T) {
+func TestRegistry_GetTableConfig_Kafka(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 	ctx := context.Background()
@@ -287,7 +287,7 @@ func TestCoordinatorRegistry_GetTableConfig_Kafka(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
+func TestRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	mc := testutil.SetupMariaDB(t)
 	defer mc.Teardown(t)
 	mc.LoadSchema(t)

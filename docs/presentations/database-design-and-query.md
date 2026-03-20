@@ -506,7 +506,7 @@ The producer stays one batch ahead of the consumer. Early termination is clean: 
 
 | Area | File |
 |------|------|
-| Full DDL | `pkg/ddl/schema.sql` |
+| Full DDL | `schema/schema.sql` |
 | Guarded UPSERT | `metastore/filerecords_upsert.go` |
 | File states | `metastore/model.go` |
 | Column registry | `schema/columnregistry.go` |

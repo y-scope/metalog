@@ -38,7 +38,7 @@ grpcurl -plaintext -d '{
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
-See [gRPC API — AdminService](../reference/grpc-api.md#coordinatorservice) for full field reference.
+See [gRPC API — AdminService](../reference/grpc-api.md#adminservice) for full field reference.
 
 ---
 
@@ -67,7 +67,7 @@ The Kafka consumer group ID is derived as `clp-coordinator-{table_name}-{table_i
 
 See [Coordinator HA Design](../design/coordinator-ha.md) for liveness, heartbeat, orphan detection, and failover mechanics built on `_table_assignment` and `_node_registry`.
 
-See `pkg/ddl/schema.sql` for the full DDL.
+See `schema/schema.sql` for the full DDL.
 
 ---
 

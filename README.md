@@ -82,10 +82,10 @@ The service has two roles: **coordinator nodes** that ingest metadata and manage
 ```mermaid
 flowchart TD
     gRPC["gRPC (push)"] -->|"commit-then-ack"| GrpcSvc
-    Kafka["Kafka (pull)"] -->|"offset watermark"| Poller
+    Kafka["Kafka (pull)"] -->|"offset watermark"| KafkaConsumer
 
     subgraph Owner["Per Table · 1 Owner Node"]
-        Poller["Kafka Poller (if enabled)"]
+        KafkaConsumer["Kafka Consumer (if enabled)"]
         Planner
         Cleanup["Retention + Deletion"]
     end
@@ -97,7 +97,7 @@ flowchart TD
     end
 
     GrpcSvc --> BW
-    Poller --> BW
+    KafkaConsumer --> BW
     BW -- "batch-UPSERT metadata" --> DB[("MariaDB/MySQL<br/>(source of truth)")]
     Planner -- "create tasks, process completions" --> DB
     HAAll -- "liveness, claiming, partitions" --> DB
@@ -107,9 +107,9 @@ flowchart TD
 **Each Node** runs the gRPC Ingestion Service, BatchingWriter, and HA & Maintenance. Both gRPC and Kafka feed into the `BatchingWriter`, which lazily creates one `tableWriter` goroutine per active table and batch-UPSERTs metadata to the database.
 
 - **gRPC** — multiple nodes can write metadata for the same table concurrently. Write to DB, then acknowledge to client (commit-then-ack).
-- **Kafka** — only the table's owner node runs the Kafka Poller. Advance consumer offset after batch commit (offset watermark).
+- **Kafka** — only the table's owner node runs the Kafka consumer. Advance consumer offset after batch commit (offset watermark).
 
-**Per Table · 1 Owner Node** — each table is owned by exactly one node at a time (assigned via database-backed leases, can move between nodes for failover). The owner runs the Kafka Poller (if enabled), Planner (creates consolidation tasks, processes completions), and Retention + Deletion (expires data from DB and object storage) for that table.
+**Per Table · 1 Owner Node** — each table is owned by exactly one node at a time (assigned via database-backed leases, can move between nodes for failover). The owner runs the Kafka consumer (if enabled), Planner (creates consolidation tasks, processes completions), and Retention + Deletion (expires data from DB and object storage) for that table.
 
 ### Worker Pool
 
@@ -225,14 +225,12 @@ query/                Query engine, filters, cursors, cache
 storage/              Object storage abstraction (S3, filesystem, HTTP)
 node/                 Node orchestration (lifecycle, shared resources)
 grpcserver/           gRPC server and service adapters
-kafka/                Kafka consumer and poller
-pkg/
-  ddl/                Embedded SQL schema definition
-  encoding/           LZ4 + msgpack codec
-  health/             HTTP liveness probe
-  logutil/            Throttled logging
-  testutil/           Integration test containers
-  timeutil/           Timestamp helpers
+kafka/                Kafka consumer and message transformers
+encoding/             LZ4 + msgpack codec
+health/               HTTP liveness probe
+logutil/              Throttled logging
+testutil/             Integration test containers
+timeutil/             Timestamp helpers
 proto/                Proto definitions (.proto files)
 gen/proto/            Generated Go protobuf/gRPC stubs
 test/                 Integration tests, benchmarks, docker stacks

@@ -79,9 +79,9 @@ func (h *IngestionHandler) mapToGRPCError(result *ingestion.IngestionResult) err
 	switch {
 	case errors.Is(err, ingestion.ErrChannelFull):
 		return status.Error(codes.ResourceExhausted, err.Error())
-	case err == context.DeadlineExceeded:
+	case errors.Is(err, context.DeadlineExceeded):
 		return status.Error(codes.DeadlineExceeded, err.Error())
-	case err == context.Canceled:
+	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	default:
 		var ve *ingestion.ValidationError

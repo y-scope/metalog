@@ -45,7 +45,6 @@ type Consumer struct {
 	// yet confirmed as flushed. Drained each poll cycle — no goroutines needed.
 	pendingFlushes []pendingFlush
 
-	lastOffsets   map[int32]kafka.Offset
 	pendingCommit []kafka.TopicPartition
 }
 
@@ -66,8 +65,7 @@ func NewConsumer(
 		tableName:        tableName,
 		transformer:      transformer,
 		service:          service,
-		log:              log.With(zap.String("topic", topic), zap.String("table", tableName)),
-		lastOffsets:      make(map[int32]kafka.Offset),
+		log: log.With(zap.String("topic", topic), zap.String("table", tableName)),
 	}
 }
 
@@ -262,9 +260,6 @@ func (c *Consumer) drainFlushes() {
 					zap.Error(err),
 				)
 				continue
-			}
-			if existing, ok := c.lastOffsets[pf.partition]; !ok || pf.offset > existing {
-				c.lastOffsets[pf.partition] = pf.offset
 			}
 			c.pendingCommit = append(c.pendingCommit, kafka.TopicPartition{
 				Topic:     pf.topic,

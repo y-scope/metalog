@@ -332,7 +332,7 @@ Standard MySQL recommended. Vitess is supported but suboptimal:
 
 | Component | Location |
 |-----------|----------|
-| Schema | `pkg/ddl/schema.sql` |
+| Schema | `schema/schema.sql` |
 | File Records | `metastore/filerecords.go` |
 | Partition Manager | `schema/partitionmanager.go` |
 | Performance | [Performance Tuning](../operations/performance-tuning.md) |
