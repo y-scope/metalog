@@ -1,4 +1,4 @@
-// Package grpc provides the gRPC server and service handlers for metalog.
+// Package grpcserver provides the gRPC server and service handlers for metalog.
 //
 // It exposes four services:
 //   - Metadata ingestion (push-based record ingestion)

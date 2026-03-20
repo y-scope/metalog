@@ -25,7 +25,8 @@ type KafkaAdapter interface {
 }
 
 // KafkaAdapterFactory creates a KafkaAdapter for a table.
-// Returns (nil, nil) if Kafka is not configured for this table.
+// Return [ErrKafkaNotConfigured] if Kafka is not configured for this table —
+// the caller will skip Kafka setup rather than treating it as a failure.
 type KafkaAdapterFactory func(
 	tableName, tableID string,
 	tableCfg metastore.TableConfig,

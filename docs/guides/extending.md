@@ -261,8 +261,9 @@ type KafkaAdapterFactory func(
 ) (KafkaAdapter, error)
 ```
 
-The factory is called once per table. Return `(nil, nil)` if the table does not
-use this transport (e.g., Kafka not configured). `Start` blocks and consumes
+The factory is called once per table. Return `(nil, node.ErrKafkaNotConfigured)`
+if the table does not use this transport (e.g., Kafka not configured) — the
+caller detects this sentinel and skips Kafka setup. `Start` blocks and consumes
 messages until the context is cancelled. `Stop` is called before context
 cancellation so push-based adapters can deregister cleanly.
 

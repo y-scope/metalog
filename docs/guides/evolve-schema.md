@@ -261,7 +261,7 @@ The Kafka ingestion benchmark exercises automatic schema evolution end-to-end. I
 go run ./test/benchmarks/ingestion --mode kafka-proto --records 10000
 ```
 
-Prerequisites: Docker, Go 1.22+.
+Prerequisites: Docker, Go 1.25+.
 
 ## Startup Behaviour
 

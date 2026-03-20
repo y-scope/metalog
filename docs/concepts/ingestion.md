@@ -63,7 +63,7 @@ The client publishes metadata to a Kafka topic. The coordinator's Kafka Consumer
 4. Each poll cycle, `drainFlushes()` non-blockingly checks all pending flush channels via `select`/`default`
 5. Completed flushes have their offsets queued in `pendingCommit`; `commitPending()` deduplicates and commits the highest offset+1 per partition
 
-**Why single-threaded drain?** All consumer state (`pendingFlushes`, `lastOffsets`, `pendingCommit`) is owned by the poll goroutine. No mutex, no goroutine-per-message — the `select`/`default` pattern non-blockingly checks each `Flushed` channel. Records whose flush hasn't completed yet are simply retained for the next cycle.
+**Why single-threaded drain?** All consumer state (`pendingFlushes`, `pendingCommit`) is owned by the poll goroutine. No mutex, no goroutine-per-message — the `select`/`default` pattern non-blockingly checks each `Flushed` channel. Records whose flush hasn't completed yet are simply retained for the next cycle.
 
 **Backpressure:** The Kafka consumer uses `SubmitWait()` — a blocking channel send that waits until space opens or the context is cancelled. When the channel is full, the poll loop blocks, the consumer stops polling, and Kafka retains messages in the topic. No messages are dropped due to channel capacity. Sustained backpressure indicates the database is slower than the Kafka ingestion rate — scale the DB or reduce topic throughput.
 

@@ -49,7 +49,7 @@ All protocols share the same Query Service — each is a thin adapter over the g
 |---------|-----------|---------|:---:|---------|
 | `SplitQueryService` | `splits.proto` | `splitspb` | 9090 | Stream split metadata with keyset pagination |
 | `MetadataService` | `metadata.proto` | `metadatapb` | 9090 | Schema introspection (tables, dimensions, aggregates, sketches) |
-| `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` / `ingestiongrpc` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
+| `MetadataIngestionService` | `ingestion.proto` | `ingestionpb` | 9090 | Ingest metadata records via gRPC (alternative to Kafka) |
 | `AdminService` | `admin.proto` | `coordinatorpb` | 9090 | Runtime table and column management |
 
 ### Proto Definitions

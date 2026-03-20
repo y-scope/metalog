@@ -25,7 +25,7 @@ The benchmark measures:
 2. **Realistic ingestion** (5K first-time inserts + 5K state-transition updates, reports both rates)
 3. **Query performance** for pending files
 4. **Concurrent upsert throughput** with 4 goroutines
-5. **IR-only lifecycle** (PENDING → BUFFERING → IR_CLOSED, 3 upserts/file)
+5. **IR-only lifecycle** (IR_BUFFERING → IR_CLOSED → IR_PURGING, 3 upserts/file)
 6. **Full archive lifecycle** (5 state transitions, full consolidation workflow)
 7. **Mixed workload** (existing data + new inserts + state updates)
 
