@@ -1,4 +1,4 @@
-package resources
+package node
 
 import (
 	"database/sql"

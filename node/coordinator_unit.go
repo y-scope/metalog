@@ -29,7 +29,7 @@ const aliasRefreshInterval = time.Minute
 type CoordinatorUnit struct {
 	tableName     string
 	tableCfg      metastore.TableConfig
-	shared        *SharedResources
+	shared        *Resources
 	writer        *ingestion.BatchingWriter
 	planner           *consolidation.Planner
 	retentionStrategy retention.Strategy
@@ -54,7 +54,7 @@ func NewCoordinatorUnit(
 	tableName string,
 	tableID string,
 	tableCfg metastore.TableConfig,
-	shared *SharedResources,
+	shared *Resources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
 	kafkaFactory KafkaAdapterFactory,

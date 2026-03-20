@@ -11,17 +11,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/metastore"
-	"github.com/y-scope/metalog/node"
+	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/testutil"
 )
 
-func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *node.CoordinatorRegistry) {
+func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *registry.Registry) {
 	t.Helper()
 	mc := testutil.SetupMariaDB(t)
 	mc.LoadSchema(t)
 
 	log := zap.NewNop()
-	cr := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
+	cr := registry.New(mc.DB, "node-1", true, log)
 	return mc, cr
 }
 
@@ -231,8 +231,8 @@ func TestCoordinatorRegistry_ClaimByDifferentNodes(t *testing.T) {
 	ctx := context.Background()
 	log := zap.NewNop()
 
-	node1 := node.NewCoordinatorRegistry(mc.DB, "node-1", true, log)
-	node2 := node.NewCoordinatorRegistry(mc.DB, "node-2", true, log)
+	node1 := registry.New(mc.DB, "node-1", true, log)
+	node2 := registry.New(mc.DB, "node-2", true, log)
 
 	registerTestTable(t, mc.DB, "contested", "Contested", "", "")
 
@@ -294,8 +294,8 @@ func TestCoordinatorRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	ctx := context.Background()
 	log := zap.NewNop()
 
-	node1 := node.NewCoordinatorRegistry(mc.DB, "dead-node", true, log)
-	node2 := node.NewCoordinatorRegistry(mc.DB, "alive-node", true, log)
+	node1 := registry.New(mc.DB, "dead-node", true, log)
+	node2 := registry.New(mc.DB, "alive-node", true, log)
 
 	// Dead node registers and claims a table
 	registerTestTable(t, mc.DB, "orphan_table", "Orphan", "", "")

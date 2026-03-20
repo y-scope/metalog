@@ -14,6 +14,7 @@ import (
 	"github.com/y-scope/metalog/db"
 	"github.com/y-scope/metalog/health"
 	"github.com/y-scope/metalog/logutil"
+	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/storage"
 )
@@ -22,8 +23,8 @@ import (
 type Node struct {
 	cfg          *config.NodeConfig
 	nodeID       string
-	shared       *SharedResources
-	registry     *CoordinatorRegistry
+	shared       *Resources
+	registry     *registry.Registry
 	writer       *ingestion.BatchingWriter
 	ingestSvc    *ingestion.Service
 	kafkaFactory KafkaAdapterFactory
@@ -127,7 +128,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	// Create archive creator
 	archiveCreator := storage.NewArchiveCreator(storageReg, compressor, log)
 
-	shared := &SharedResources{
+	shared := &Resources{
 		DB:                 pool,
 		ReadDB:             readPool,
 		StorageRegistry:    storageReg,
@@ -139,7 +140,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		Log:                log,
 	}
 
-	cr := NewCoordinatorRegistry(pool, nodeID, isMariaDB, log)
+	cr := registry.New(pool, nodeID, isMariaDB, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -324,7 +325,7 @@ func (n *Node) IngestionService() *ingestion.Service {
 }
 
 // Shared returns the node's shared resources.
-func (n *Node) Shared() *SharedResources {
+func (n *Node) Shared() *Resources {
 	return n.shared
 }
 
