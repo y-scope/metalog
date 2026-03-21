@@ -24,6 +24,11 @@ const (
 	statusAvailable   = "AVAILABLE"
 )
 
+// ErrSlotExhausted is returned when all 99 dim or agg slots are consumed.
+// Callers should log a warning and skip the dimension/aggregation — ingestion
+// continues without the exhausted columns rather than stalling.
+var ErrSlotExhausted = errors.New("column slot exhausted (max 99)")
+
 // recyclerScanInterval is how often the background recycler checks for reclaimable slots.
 const recyclerScanInterval = time.Hour
 
@@ -489,10 +494,8 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 		return col, nil
 	}
 
-	// Slot numbers above 99 would produce 3-digit names (dim_f100) breaking the
-	// %02d zero-padding convention.
 	if cr.nextDimSlot > 99 {
-		return "", fmt.Errorf("dim slot exhausted: slot %d exceeds maximum 99", cr.nextDimSlot)
+		return "", ErrSlotExhausted
 	}
 	colName := fmt.Sprintf("%s%02d", metastore.DimColumnPrefix, cr.nextDimSlot)
 
@@ -592,7 +595,7 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	}
 
 	if cr.nextAggSlot > 99 {
-		return "", fmt.Errorf("agg slot exhausted: slot %d exceeds maximum 99", cr.nextAggSlot)
+		return "", ErrSlotExhausted
 	}
 	colName := fmt.Sprintf("%s%02d", metastore.AggColumnPrefix, cr.nextAggSlot)
 
@@ -766,9 +769,16 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 		return result, nil
 	}
 
-	if cr.nextDimSlot+len(pending)-1 > 99 {
-		return nil, fmt.Errorf("dim slot exhausted: need %d slots, have %d remaining",
-			len(pending), 100-cr.nextDimSlot)
+	remaining := 100 - cr.nextDimSlot
+	if remaining <= 0 {
+		cr.log.Warn("dim slots exhausted, skipping new dimensions",
+			zap.Int("requested", len(pending)))
+		return result, nil
+	}
+	if len(pending) > remaining {
+		cr.log.Warn("dim slots partially exhausted, allocating what remains",
+			zap.Int("requested", len(pending)), zap.Int("available", remaining))
+		pending = pending[:remaining]
 	}
 
 	// Assign slot names and SQL types for fresh allocations.
@@ -933,9 +943,16 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 		return result, nil
 	}
 
-	if cr.nextAggSlot+len(pending)-1 > 99 {
-		return nil, fmt.Errorf("agg slot exhausted: need %d slots, have %d remaining",
-			len(pending), 100-cr.nextAggSlot)
+	remaining := 100 - cr.nextAggSlot
+	if remaining <= 0 {
+		cr.log.Warn("agg slots exhausted, skipping new aggregations",
+			zap.Int("requested", len(pending)))
+		return result, nil
+	}
+	if len(pending) > remaining {
+		cr.log.Warn("agg slots partially exhausted, allocating what remains",
+			zap.Int("requested", len(pending)), zap.Int("available", remaining))
+		pending = pending[:remaining]
 	}
 
 	type pendingSlot struct {
@@ -1095,7 +1112,7 @@ func (cr *ColumnRegistry) claimSketchSlot(ctx context.Context, key string, now i
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
-		return "", fmt.Errorf("sketch slots exhausted: no AVAILABLE slots for key %q", key)
+		return "", ErrSlotExhausted
 	}
 
 	// Read back the claimed slot name within the same transaction.
