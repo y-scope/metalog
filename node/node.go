@@ -34,6 +34,11 @@ type Node struct {
 	workerUnit   *WorkerUnit
 	healthSrv    *health.Server
 
+	// reconcileReg overrides the registry for reconciliation (testing only).
+	reconcileReg reconcileRegistry
+	// startCoordinatorFn overrides startCoordinator for testing.
+	startCoordinatorFn func(tableName string) error
+
 	log    *zap.Logger
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -426,16 +431,31 @@ func (n *Node) runReconciliation() {
 	}
 }
 
+func (n *Node) getReconcileRegistry() reconcileRegistry {
+	if n.reconcileReg != nil {
+		return n.reconcileReg
+	}
+	return n.registry
+}
+
+func (n *Node) doStartCoordinator(tableName string) error {
+	if n.startCoordinatorFn != nil {
+		return n.startCoordinatorFn(tableName)
+	}
+	return n.startCoordinator(tableName)
+}
+
 func (n *Node) reconcile() {
 	ctx := n.ctx
+	reg := n.getReconcileRegistry()
 
 	// Step 1: Claim orphans from dead nodes
 	var orphansClaimed []string
 	var err error
 	if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
-		orphansClaimed, err = n.registry.ClaimOrphansLease(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second)
+		orphansClaimed, err = reg.ClaimOrphansLease(ctx, time.Duration(n.cfg.Coordinator.LeaseTTLSeconds)*time.Second)
 	} else {
-		orphansClaimed, err = n.registry.ClaimOrphansHeartbeat(ctx, time.Duration(n.cfg.Coordinator.DeadNodeThresholdSeconds)*time.Second)
+		orphansClaimed, err = reg.ClaimOrphansHeartbeat(ctx, time.Duration(n.cfg.Coordinator.DeadNodeThresholdSeconds)*time.Second)
 	}
 	if err != nil {
 		n.log.Warn("orphan claim failed", zap.Error(err))
@@ -447,10 +467,10 @@ func (n *Node) reconcile() {
 		if exists {
 			continue
 		}
-		if err := n.startCoordinator(t); err != nil {
+		if err := n.doStartCoordinator(t); err != nil {
 			n.log.Error("failed to start coordinator for orphan",
 				zap.String("table", t), zap.Error(err))
-			if relErr := n.registry.ReleaseTable(ctx, t); relErr != nil {
+			if relErr := reg.ReleaseTable(ctx, t); relErr != nil {
 				n.log.Warn("failed to release orphan after start failure",
 					zap.String("table", t), zap.Error(relErr))
 			}
@@ -461,7 +481,7 @@ func (n *Node) reconcile() {
 	// Compute how many tables this node should own so that tables are
 	// distributed evenly. If we already own our share, skip claiming
 	// and leave the rest for other nodes.
-	unassigned, err := n.registry.GetUnassignedTables(ctx)
+	unassigned, err := reg.GetUnassignedTables(ctx)
 	if err != nil {
 		n.log.Warn("get unassigned tables failed", zap.Error(err))
 		return
@@ -470,10 +490,10 @@ func (n *Node) reconcile() {
 		var activeNodes int
 		var err error
 		if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
-			activeNodes, err = n.registry.CountActiveNodesLease(ctx)
+			activeNodes, err = reg.CountActiveNodesLease(ctx)
 		} else {
 			deadThreshold := time.Duration(n.cfg.Coordinator.DeadNodeThresholdSeconds) * time.Second
-			activeNodes, err = n.registry.CountActiveNodesHeartbeat(ctx, deadThreshold)
+			activeNodes, err = reg.CountActiveNodesHeartbeat(ctx, deadThreshold)
 		}
 		if err != nil {
 			n.log.Warn("count active nodes failed", zap.Error(err))
@@ -482,12 +502,12 @@ func (n *Node) reconcile() {
 		if activeNodes < 1 {
 			activeNodes = 1
 		}
-		myTables, err := n.registry.CountMyTables(ctx)
+		myTables, err := reg.CountMyTables(ctx)
 		if err != nil {
 			n.log.Warn("count my tables failed", zap.Error(err))
 			myTables = 0
 		}
-		totalAssigned, err := n.registry.CountAssignedTables(ctx)
+		totalAssigned, err := reg.CountAssignedTables(ctx)
 		if err != nil {
 			n.log.Warn("count assigned tables failed", zap.Error(err))
 			totalAssigned = 0
@@ -511,18 +531,18 @@ func (n *Node) reconcile() {
 			if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
 				leaseTTL = time.Duration(n.cfg.Coordinator.LeaseTTLSeconds) * time.Second
 			}
-			ok, err := n.registry.ClaimTable(ctx, t, leaseTTL)
+			ok, err := reg.ClaimTable(ctx, t, leaseTTL)
 			if err != nil {
 				n.log.Warn("claim unassigned table failed", zap.String("table", t), zap.Error(err))
 				continue
 			}
 			if ok {
 				myTables++
-				if err := n.startCoordinator(t); err != nil {
+				if err := n.doStartCoordinator(t); err != nil {
 					n.log.Error("failed to start coordinator for claimed table",
 						zap.String("table", t), zap.Error(err))
 					myTables--
-					if relErr := n.registry.ReleaseTable(ctx, t); relErr != nil {
+					if relErr := reg.ReleaseTable(ctx, t); relErr != nil {
 						n.log.Warn("failed to release table after start failure",
 							zap.String("table", t), zap.Error(relErr))
 					}
@@ -553,7 +573,7 @@ func (n *Node) reconcile() {
 			n.coordMu.Lock()
 			delete(n.coordinators, s.name)
 			n.coordMu.Unlock()
-			if relErr := n.registry.ReleaseTable(ctx, s.name); relErr != nil {
+			if relErr := reg.ReleaseTable(ctx, s.name); relErr != nil {
 				n.log.Warn("failed to release table after restart failure",
 					zap.String("table", s.name), zap.Error(relErr))
 			}
@@ -562,7 +582,7 @@ func (n *Node) reconcile() {
 
 	// Step 4: Ownership verification — stop coordinators for lost assignments,
 	// start coordinators for new assignments
-	assigned, err := n.registry.GetAssignedTables(ctx)
+	assigned, err := reg.GetAssignedTables(ctx)
 	if err != nil {
 		n.log.Warn("get assigned tables failed", zap.Error(err))
 		return
@@ -606,7 +626,7 @@ func (n *Node) reconcile() {
 	// Start coordinators outside the lock.
 	for _, t := range toStart {
 		n.log.Info("new assignment detected, starting coordinator", zap.String("table", t))
-		if err := n.startCoordinator(t); err != nil {
+		if err := n.doStartCoordinator(t); err != nil {
 			n.log.Error("failed to start coordinator for assignment",
 				zap.String("table", t), zap.Error(err))
 		}
