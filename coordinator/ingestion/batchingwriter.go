@@ -21,17 +21,21 @@ import (
 // shutdownFlushTimeout is the deadline for the final flush when shutting down.
 const shutdownFlushTimeout = 5 * time.Second
 
+// BatchFlusher handles column resolution and database writes for a batch of
+// records. Extracted as an interface so the batching machinery can be tested
+// without a real database.
+type BatchFlusher interface {
+	FlushBatch(ctx context.Context, tableName string, batch []*metastore.FileRecord) error
+}
+
 // tableWriter is a goroutine that batches and flushes records for a single table.
-// It does not own a ColumnRegistry — it borrows one from the parent BatchingWriter
-// on each flush to avoid data races and duplicate registry instances.
 type tableWriter struct {
-	tableName string
-	isMariaDB bool
-	ch        chan *metastore.FileRecord
-	db        *sql.DB
-	parent    *BatchingWriter
-	fileRecs  *metastore.FileRecords
-	log       *zap.Logger
+	tableName     string
+	ch            chan *metastore.FileRecord
+	flusher       BatchFlusher
+	batchSize     int
+	flushInterval time.Duration
+	log           *zap.Logger
 }
 
 // BatchingWriter manages per-table writer goroutines that batch records and
@@ -47,23 +51,48 @@ type BatchingWriter struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
+	batchSize     int
+	flushInterval time.Duration
+
+	// testFlusher overrides the default dbFlusher for unit testing.
+	testFlusher BatchFlusher
+
 	// registries provides column registry per table
 	registries map[string]*schema.ColumnRegistry
 	regMu      sync.RWMutex
 }
 
+// BatchingWriterOption configures optional BatchingWriter behavior.
+type BatchingWriterOption func(*BatchingWriter)
+
+// WithBatchSize sets the batch size for flushing (default: config.DefaultBatchSize).
+func WithBatchSize(n int) BatchingWriterOption {
+	return func(bw *BatchingWriter) { bw.batchSize = n }
+}
+
+// WithFlushInterval sets the flush timer interval (default: config.DefaultBatchFlushInterval).
+func WithFlushInterval(d time.Duration) BatchingWriterOption {
+	return func(bw *BatchingWriter) { bw.flushInterval = d }
+}
+
 // NewBatchingWriter creates a BatchingWriter.
-func NewBatchingWriter(ctx context.Context, db *sql.DB, isMariaDB bool, log *zap.Logger) *BatchingWriter {
+func NewBatchingWriter(ctx context.Context, db *sql.DB, isMariaDB bool, log *zap.Logger, opts ...BatchingWriterOption) *BatchingWriter {
 	ctx, cancel := context.WithCancel(ctx)
-	return &BatchingWriter{
-		db:         db,
-		isMariaDB:  isMariaDB,
-		log:        log,
-		writers:    make(map[string]*tableWriter),
-		registries: make(map[string]*schema.ColumnRegistry),
-		ctx:        ctx,
-		cancel:     cancel,
+	bw := &BatchingWriter{
+		db:            db,
+		isMariaDB:     isMariaDB,
+		log:           log,
+		writers:       make(map[string]*tableWriter),
+		registries:    make(map[string]*schema.ColumnRegistry),
+		ctx:           ctx,
+		cancel:        cancel,
+		batchSize:     config.DefaultBatchSize,
+		flushInterval: config.DefaultBatchFlushInterval,
 	}
+	for _, opt := range opts {
+		opt(bw)
+	}
+	return bw
 }
 
 // SetRegistry associates a column registry with a table. If a registry was
@@ -165,21 +194,18 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 		return tw
 	}
 
-	fr, err := metastore.NewFileRecords(bw.db, tableName, bw.isMariaDB, bw.log)
-	if err != nil {
-		bw.log.Error("failed to create file records for table writer", zap.String("table", tableName), zap.Error(err))
-		// Fall back to creating FileRecords per-flush.
-		fr = nil
+	flusher := bw.testFlusher
+	if flusher == nil {
+		flusher = &dbFlusher{bw: bw, tableName: tableName}
 	}
 
 	tw = &tableWriter{
-		tableName: tableName,
-		isMariaDB: bw.isMariaDB,
-		ch:        make(chan *metastore.FileRecord, config.DefaultBatchSize),
-		db:        bw.db,
-		parent:    bw,
-		fileRecs:  fr,
-		log:       bw.log.With(zap.String("table", tableName)),
+		tableName:     tableName,
+		ch:            make(chan *metastore.FileRecord, bw.batchSize),
+		flusher:       flusher,
+		batchSize:     bw.batchSize,
+		flushInterval: bw.flushInterval,
+		log:           bw.log.With(zap.String("table", tableName)),
 	}
 	bw.writers[tableName] = tw
 
@@ -193,16 +219,25 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 }
 
 func (tw *tableWriter) run(ctx context.Context) {
-	ticker := time.NewTicker(config.DefaultBatchFlushInterval)
+	ticker := time.NewTicker(tw.flushInterval)
 	defer ticker.Stop()
 
-	batch := make([]*metastore.FileRecord, 0, config.DefaultBatchSize)
+	batch := make([]*metastore.FileRecord, 0, tw.batchSize)
 
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
-		tw.flushBatch(ctx, batch)
+		if err := tw.flusher.FlushBatch(ctx, tw.tableName, batch); err != nil {
+			tw.log.Error("batch flush failed",
+				zap.Int("batchSize", len(batch)),
+				zap.Error(err),
+			)
+			tw.notifyBatch(batch, err)
+		} else {
+			tw.log.Debug("flushed batch", zap.Int("records", len(batch)))
+			tw.notifyBatch(batch, nil)
+		}
 		batch = batch[:0]
 	}
 
@@ -210,7 +245,7 @@ func (tw *tableWriter) run(ctx context.Context) {
 		select {
 		case rec := <-tw.ch:
 			batch = append(batch, rec)
-			if len(batch) >= config.DefaultBatchSize {
+			if len(batch) >= tw.batchSize {
 				flush()
 			}
 		case <-ticker.C:
@@ -224,7 +259,11 @@ func (tw *tableWriter) run(ctx context.Context) {
 				default:
 					// Flush what we can with a short deadline.
 					flushCtx, flushCancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
-					tw.flushBatch(flushCtx, batch)
+					if err := tw.flusher.FlushBatch(flushCtx, tw.tableName, batch); err != nil {
+						tw.notifyBatch(batch, err)
+					} else {
+						tw.notifyBatch(batch, nil)
+					}
 					flushCancel()
 					batch = batch[:0]
 
@@ -247,53 +286,43 @@ func (tw *tableWriter) run(ctx context.Context) {
 	}
 }
 
-func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRecord) {
-	fr := tw.fileRecs
+// dbFlusher is the production BatchFlusher that resolves columns and UPSERTs
+// to the database.
+type dbFlusher struct {
+	bw        *BatchingWriter
+	tableName string
+	fileRecs  *metastore.FileRecords
+}
+
+func (f *dbFlusher) FlushBatch(ctx context.Context, tableName string, batch []*metastore.FileRecord) error {
+	fr := f.fileRecs
 	if fr == nil {
 		var err error
-		fr, err = metastore.NewFileRecords(tw.db, tw.tableName, tw.isMariaDB, tw.log)
+		fr, err = metastore.NewFileRecords(f.bw.db, tableName, f.bw.isMariaDB, f.bw.log)
 		if err != nil {
-			tw.log.Error("failed to create file records", zap.Error(err))
-			tw.notifyBatch(batch, err)
-			return
+			return fmt.Errorf("create file records: %w", err)
 		}
+		f.fileRecs = fr
 	}
 
-	// Ensure column registry exists and resolve dims/aggs for the batch.
-	// This triggers schema evolution (ALTER TABLE ADD COLUMN) on first flush.
-	reg, err := tw.parent.ensureRegistry(ctx, tw.tableName)
+	reg, err := f.bw.ensureRegistry(ctx, tableName)
 	if err != nil {
-		tw.log.Error("column registry unavailable", zap.Error(err))
-		tw.notifyBatch(batch, err)
-		return
+		return fmt.Errorf("column registry: %w", err)
 	}
 
-	if err := tw.resolveAndRemapBatch(ctx, reg, batch); err != nil {
-		tw.log.Error("resolve columns failed", zap.Error(err))
-		tw.notifyBatch(batch, err)
-		return
+	if err := resolveAndRemapBatch(ctx, reg, batch); err != nil {
+		return fmt.Errorf("resolve columns: %w", err)
 	}
 
 	dimCols := reg.ActiveDimColumns()
 	aggCols := reg.ActiveAggColumns()
 	floatAggCols := reg.FloatAggColumns()
 
-	n, err := fr.UpsertBatch(ctx, batch, dimCols, aggCols, floatAggCols)
-	if err != nil {
-		tw.log.Error("batch upsert failed",
-			zap.Int("batchSize", len(batch)),
-			zap.Error(err),
-		)
-		tw.notifyBatch(batch, err)
-		return
+	if _, err := fr.UpsertBatch(ctx, batch, dimCols, aggCols, floatAggCols); err != nil {
+		return fmt.Errorf("upsert: %w", err)
 	}
 
-	tw.log.Debug("flushed batch",
-		zap.Int("records", len(batch)),
-		zap.Int64("rowsAffected", n),
-	)
-
-	tw.notifyBatch(batch, nil)
+	return nil
 }
 
 // resolveAndRemapBatch batch-resolves all dim/agg logical keys in the batch to
@@ -303,7 +332,7 @@ func (tw *tableWriter) flushBatch(ctx context.Context, batch []*metastore.FileRe
 // Invariant: records produced by extractDims/extractAggs have matching
 // Dims/DimMeta and Aggs/AggMeta entries. If a record has Dims but no DimMeta,
 // the values will be dropped during remap (dimMap will be empty).
-func (tw *tableWriter) resolveAndRemapBatch(ctx context.Context, reg *schema.ColumnRegistry, batch []*metastore.FileRecord) error {
+func resolveAndRemapBatch(ctx context.Context, reg *schema.ColumnRegistry, batch []*metastore.FileRecord) error {
 	// Collect unique dim requests across the batch.
 	dimSeen := make(map[string]struct{})
 	var dimReqs []schema.DimRequest
