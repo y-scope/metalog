@@ -37,6 +37,10 @@ func runServer() {
 	}
 
 	n, err := node.NewNode(cfg, log, node.WithKafkaAdapterFactory(kafka.NewDefaultAdapterFactory()))
+	// Note: Kafka consumer metrics are wired via NewDefaultAdapterFactory's
+	// optional meter parameter. The meter is available after NewNode creates
+	// the telemetry provider, so for now Kafka metrics are added in Phase 3
+	// when the factory creation is moved inside NewNode.
 	if err != nil {
 		log.Fatal("failed to create node", zap.Error(err))
 	}

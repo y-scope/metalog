@@ -218,7 +218,11 @@ func (n *Node) Start() error {
 			return err
 		}
 
-		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.shared.IsMariaDB, n.log)
+		var bwOpts []ingestion.BatchingWriterOption
+		if n.shared.Telemetry != nil {
+			bwOpts = append(bwOpts, ingestion.WithMeter(n.shared.Telemetry.Meter("metalog.ingestion")))
+		}
+		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.shared.IsMariaDB, n.log, bwOpts...)
 		n.ingestSvc = ingestion.NewService(n.writer, n.cfg.GRPC.IsBlockingIngestion(), n.log)
 
 		// Resume coordinators for tables assigned to this node in the DB

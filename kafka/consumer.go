@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
@@ -48,6 +50,11 @@ type Consumer struct {
 	pendingFlushes []pendingFlush
 
 	pendingCommit []kafka.TopicPartition
+
+	// Metrics (nil when telemetry is disabled).
+	mConsumed      metric.Int64Counter
+	mFailed        metric.Int64Counter
+	mPollBatchSize metric.Int64Histogram
 }
 
 // Compile-time check that Consumer implements MessageSource.
@@ -71,6 +78,19 @@ func NewConsumer(
 		log:              consumerLog,
 		dataFL:           logutil.NewFailureLogger(consumerLog, time.Minute),
 	}
+}
+
+// SetMeter configures OpenTelemetry metrics for this consumer.
+func (c *Consumer) SetMeter(m metric.Meter) {
+	c.mConsumed, _ = m.Int64Counter("metalog.kafka.messages_consumed",
+		metric.WithDescription("Kafka messages successfully consumed and submitted"),
+		metric.WithUnit("{message}"))
+	c.mFailed, _ = m.Int64Counter("metalog.kafka.messages_failed",
+		metric.WithDescription("Kafka messages that failed transform, convert, or ingest"),
+		metric.WithUnit("{message}"))
+	c.mPollBatchSize, _ = m.Int64Histogram("metalog.kafka.poll_batch_size",
+		metric.WithDescription("Number of messages processed per poll cycle"),
+		metric.WithUnit("{message}"))
 }
 
 // Run starts consuming from the Kafka topic until ctx is canceled.
@@ -147,6 +167,10 @@ func (c *Consumer) Run(ctx context.Context) {
 
 		if processed > 0 {
 			c.log.Debug("poll batch processed", zap.Int("messages", processed))
+			if c.mPollBatchSize != nil {
+				c.mPollBatchSize.Record(ctx, int64(processed),
+					metric.WithAttributes(attribute.String("topic", c.topic)))
+			}
 		}
 	}
 }
@@ -174,15 +198,23 @@ func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *i
 // Uses the blocking SubmitWait path so no messages are dropped on channel full —
 // the poll loop blocks until space opens, propagating backpressure to Kafka.
 func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
+	topicAttr := attribute.String("topic", c.topic)
+
 	record, err := c.transformer.Transform(msg.Value)
 	if err != nil {
 		c.dataFL.Fail("transform failed", zap.Error(err))
+		if c.mFailed != nil {
+			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
+		}
 		return
 	}
 
 	rec, err := ingestion.ConvertRecord(record)
 	if err != nil {
 		c.dataFL.Fail("convert failed", zap.Error(err))
+		if c.mFailed != nil {
+			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
+		}
 		return
 	}
 
@@ -194,7 +226,14 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 			zap.Any("offset", msg.TopicPartition.Offset),
 			zap.Error(err),
 		)
+		if c.mFailed != nil {
+			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "ingest")))
+		}
 		return
+	}
+
+	if c.mConsumed != nil {
+		c.mConsumed.Add(ctx, 1, metric.WithAttributes(topicAttr))
 	}
 
 	c.pendingFlushes = append(c.pendingFlushes, pendingFlush{

@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
@@ -16,7 +17,12 @@ const kafkaGroupPrefix = "clp-coordinator-"
 
 // NewDefaultAdapterFactory returns a KafkaAdapterFactory that creates
 // confluent-kafka consumers (the default upstream transport).
-func NewDefaultAdapterFactory() node.KafkaAdapterFactory {
+// If meter is non-nil, consumer metrics are registered.
+func NewDefaultAdapterFactory(meter ...metric.Meter) node.KafkaAdapterFactory {
+	var m metric.Meter
+	if len(meter) > 0 {
+		m = meter[0]
+	}
 	return func(
 		tableName, tableID string,
 		tableCfg metastore.TableConfig,
@@ -37,6 +43,9 @@ func NewDefaultAdapterFactory() node.KafkaAdapterFactory {
 			ingestSvc,
 			log,
 		)
+		if m != nil {
+			consumer.SetMeter(m)
+		}
 		return &confluentAdapter{consumer: consumer}, nil
 	}
 }
