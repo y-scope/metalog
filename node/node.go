@@ -196,7 +196,7 @@ func (n *Node) Start() error {
 		}
 
 		n.writer = ingestion.NewBatchingWriter(n.ctx, n.shared.DB, n.shared.IsMariaDB, n.log)
-		n.ingestSvc = ingestion.NewService(n.writer, n.log)
+		n.ingestSvc = ingestion.NewService(n.writer, n.cfg.GRPC.IsBlockingIngestion(), n.log)
 
 		// Resume coordinators for tables assigned to this node in the DB
 		// (registered via admin API, assigned by reconciliation).

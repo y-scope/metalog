@@ -14,15 +14,19 @@ import (
 // with type metadata. Physical column resolution and schema evolution happen
 // at batch flush time in the BatchingWriter.
 type Service struct {
-	writer *BatchingWriter
-	log    *zap.Logger
+	writer   *BatchingWriter
+	blocking bool
+	log      *zap.Logger
 }
 
-// NewService creates a Service.
-func NewService(writer *BatchingWriter, log *zap.Logger) *Service {
+// NewService creates a Service. If blocking is true, Ingest blocks until
+// the BatchingWriter channel has space (higher throughput). If false, it
+// returns ErrChannelFull immediately (fast backpressure signal).
+func NewService(writer *BatchingWriter, blocking bool, log *zap.Logger) *Service {
 	return &Service{
-		writer: writer,
-		log:    log,
+		writer:   writer,
+		blocking: blocking,
+		log:      log,
 	}
 }
 
@@ -40,9 +44,10 @@ type IngestionResult struct {
 	Err      error
 }
 
-// Ingest submits a single pre-converted record.
+// Ingest submits a single pre-converted record. Uses blocking or non-blocking
+// submit based on the Service configuration.
 func (s *Service) Ingest(ctx context.Context, tableName string, rec *metastore.FileRecord) *IngestionResult {
-	err := s.IngestWithCallback(ctx, tableName, rec, nil)
+	err := s.ingestWithCallback(ctx, tableName, rec, nil, s.blocking)
 	if err != nil {
 		return &IngestionResult{Accepted: false, Err: err}
 	}

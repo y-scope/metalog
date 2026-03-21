@@ -87,6 +87,23 @@ type GRPCConfig struct {
 	Admin     bool `yaml:"admin"`
 	Query     bool `yaml:"query"`
 	Metadata  bool `yaml:"metadata"`
+
+	// BlockingIngestion controls whether gRPC Ingest RPCs block until the
+	// BatchingWriter channel has space (true) or return RESOURCE_EXHAUSTED
+	// immediately when full (false). Blocking mode provides ~2x higher
+	// throughput by avoiding client retry overhead. Non-blocking mode gives
+	// clients a fast backpressure signal for load shedding.
+	// Default: true (blocking).
+	BlockingIngestion *bool `yaml:"blockingIngestion"`
+}
+
+// IsBlockingIngestion returns whether gRPC ingestion uses blocking submit.
+// Defaults to true if not explicitly set.
+func (c *GRPCConfig) IsBlockingIngestion() bool {
+	if c.BlockingIngestion == nil {
+		return true
+	}
+	return *c.BlockingIngestion
 }
 
 // HasAnyService returns true if at least one gRPC service is enabled.
