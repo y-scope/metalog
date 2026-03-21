@@ -112,10 +112,10 @@ services:
   # =========================================================================
   # Metalog Node (coordinators + workers)
   # =========================================================================
-  # Runs ServerMain.main() which:
+  # Runs "metalog serve" which:
   #   1. Resolves nodeId from HOSTNAME env var (automatic in Docker)
   #   2. Initializes coordination schema
-  #   3. Claims unassigned tables (fight-for-master)
+  #   3. Resumes assigned tables, claims unassigned via reconciliation
   #   4. Starts CoordinatorUnits + shared WorkerUnit
   #
   # Connects to MariaDB via the 'db' network alias.

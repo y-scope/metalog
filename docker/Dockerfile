@@ -3,6 +3,11 @@
 FROM golang:1.25-bookworm AS build
 WORKDIR /build
 
+# Install build-time dependency for confluent-kafka-go (CGO)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends librdkafka-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
@@ -20,7 +25,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates librdkafka1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install CLP core binaries from .deb (must be built first via scripts/build-clp.sh)
+# Install CLP core binaries from .deb (must be built first via docker/build-clp.sh)
 COPY clp-core_*.deb /tmp/
 RUN dpkg -i /tmp/clp-core_*.deb || apt-get -f install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/clp-core_*.deb

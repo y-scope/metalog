@@ -4,7 +4,7 @@ gRPC data loader for the presto-stack.
 
 Sends 12 hardcoded CockroachDB IR metadata records via the MetadataIngestionService
 Ingest RPC. The coordinator auto-creates the table on first insert via
-TableProvisioner.ensureTable(), so no pre-existing schema is required.
+schema.EnsureTable(), so no pre-existing schema is required.
 
 Environment variables:
     GRPC_HOST      — coordinator hostname (default: coordinator)

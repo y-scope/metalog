@@ -93,3 +93,7 @@ ADR-style documents capturing the "why" behind architectural decisions.
 - [Task Queue Design](design/task-queue.md) — Schema, claim protocol, recovery, design decisions
 - [Early Termination Design](design/early-termination.md) — Runnable example, Presto integration, streaming cursors
 - [Keyset Pagination](design/keyset-pagination.md) — PK-based keyset cursor design
+
+## Presentations
+
+- [Database Design & Query](presentations/database-design-and-query.md) — Schema design, UPSERT strategy, query optimization
