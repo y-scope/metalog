@@ -184,7 +184,7 @@ func (q *Queue) claimTasksOnce(ctx context.Context, tableName string, workerID s
 		t.State = TaskStateProcessing
 	}
 
-	q.log.Debug("claimed tasks", zap.String("worker", workerID), zap.Int("count", len(tasks)))
+	q.log.Debug("claimed tasks", zap.String("workerId", workerID), zap.Int("count", len(tasks)))
 	return tasks, nil
 }
 

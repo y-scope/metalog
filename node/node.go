@@ -248,7 +248,7 @@ func (n *Node) Start() error {
 		go func() {
 			defer n.wg.Done()
 			if err := n.healthSrv.Start(); err != nil {
-				n.log.Error("health HTTP server failed", zap.Error(err))
+				n.log.Error("health HTTP server failed", zap.Int("port", n.cfg.Health.Port), zap.Error(err))
 			}
 		}()
 		n.healthSrv.SetReady(true)
@@ -517,7 +517,7 @@ func (n *Node) reconcile() {
 
 		for _, t := range unassigned {
 			if myTables >= fairShare {
-				n.log.Info("fair-share reached, deferring remaining tables",
+				n.log.Debug("fair-share reached, deferring remaining tables",
 					zap.Int("myTables", myTables), zap.Int("fairShare", fairShare))
 				break
 			}

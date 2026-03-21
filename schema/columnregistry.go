@@ -1738,6 +1738,9 @@ func (cr *ColumnRegistry) recycleColumn(ctx context.Context, registryTable, colN
 
 	// NULL out remaining rows in batches.
 	if remaining > 0 {
+		cr.log.Info("recycler: clearing column data",
+			zap.String("column", colName), zap.Int64("rows", remaining))
+		var totalCleared int64
 		for {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -1752,9 +1755,10 @@ func (cr *ColumnRegistry) recycleColumn(ctx context.Context, registryTable, colN
 			if affected == 0 {
 				break
 			}
-			cr.log.Info("recycler: cleared column data batch",
-				zap.String("column", colName), zap.Int64("rows", affected))
+			totalCleared += affected
 		}
+		cr.log.Info("recycler: column data cleared",
+			zap.String("column", colName), zap.Int64("totalRows", totalCleared))
 	}
 
 	// Hold allocMu for the state transition only, so claimAvailable*Slot cannot

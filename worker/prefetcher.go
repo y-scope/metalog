@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
+	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/taskqueue"
 )
 
@@ -55,6 +56,7 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 	defer close(pf.tasks)
 
 	backoff := config.DefaultWorkerPollInterval
+	fl := logutil.NewFailureLogger(pf.log, time.Minute)
 
 	for {
 		select {
@@ -65,7 +67,7 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 
 		claimed, err := pf.taskQueue.ClaimTasks(ctx, "", pf.workerID, pf.batchSize)
 		if err != nil {
-			pf.log.Error("claim tasks failed", zap.Error(err))
+			fl.Fail("claim tasks failed", zap.Error(err))
 			sleep(ctx, backoff)
 			continue
 		}

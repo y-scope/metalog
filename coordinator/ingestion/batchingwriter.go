@@ -14,6 +14,7 @@ import (
 
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/encoding"
+	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
 )
@@ -35,6 +36,7 @@ type tableWriter struct {
 	flusher       BatchFlusher
 	batchSize     int
 	flushInterval time.Duration
+	flushFL       *logutil.FailureLogger
 	log           *zap.Logger
 }
 
@@ -202,13 +204,15 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 		flusher = &dbFlusher{bw: bw, tableName: tableName}
 	}
 
+	tableLog := bw.log.With(zap.String("table", tableName))
 	tw = &tableWriter{
 		tableName:     tableName,
 		ch:            make(chan *metastore.FileRecord, bw.batchSize),
 		flusher:       flusher,
 		batchSize:     bw.batchSize,
 		flushInterval: bw.flushInterval,
-		log:           bw.log.With(zap.String("table", tableName)),
+		flushFL:       logutil.NewFailureLogger(tableLog, time.Minute),
+		log:           tableLog,
 	}
 	bw.writers[tableName] = tw
 
@@ -232,12 +236,13 @@ func (tw *tableWriter) run(ctx context.Context) {
 			return
 		}
 		if err := tw.flusher.FlushBatch(ctx, tw.tableName, batch); err != nil {
-			tw.log.Error("batch flush failed",
+			tw.flushFL.Fail("batch flush failed",
 				zap.Int("batchSize", len(batch)),
 				zap.Error(err),
 			)
 			tw.notifyBatch(batch, err)
 		} else {
+			tw.flushFL.OK()
 			tw.log.Debug("flushed batch", zap.Int("records", len(batch)))
 			tw.notifyBatch(batch, nil)
 		}

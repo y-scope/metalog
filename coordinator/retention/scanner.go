@@ -57,7 +57,7 @@ func newDefaultStrategy(deps Deps) (Strategy, error) {
 		interval:           defaultScanInterval,
 		failureLogInterval: failureInterval,
 		deleteRate:         defaultDeleteRate,
-		log:                deps.Log.With(zap.String("component", "retention"), zap.String("table", deps.TableName)),
+		log:                deps.Log.With(zap.String("table", deps.TableName)),
 	}, nil
 }
 
