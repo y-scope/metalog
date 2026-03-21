@@ -367,7 +367,7 @@ LIMIT 100;
 #### 9. Extend Retention (Incident)
 ```sql
 UPDATE clp_spark
-SET retention_days = 395, expires_at = min_timestamp + (395 * 86400)
+SET retention_days = 395, expires_at = min_timestamp + (395 * 86400 * 1000000000)
 WHERE dim_str128_service = 'auth-service'
   AND min_timestamp >= [INCIDENT_START]
   AND min_timestamp <= [INCIDENT_END]

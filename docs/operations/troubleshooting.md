@@ -207,7 +207,7 @@ Dead-letter tasks indicate repeated worker failures. Common causes:
 To retry a dead-letter task manually, reset its state:
 
 ```sql
-UPDATE _task_queue SET state = 'pending', retry_count = 0 WHERE id = <task_id>;
+UPDATE _task_queue SET state = 'pending', retry_count = 0 WHERE task_id = <task_id>;
 ```
 
 ---

@@ -91,7 +91,7 @@ Files progress through lifecycle states. See [Naming Conventions](../reference/n
 | `IR_ARCHIVE_CONSOLIDATION_PENDING` | IR file closed, awaiting consolidation into archive |
 
 ### Retention
-How long data is kept before expiration. Set at ingestion time via `retention_days`. The `expires_at` timestamp is computed as `min_timestamp + (retention_days * 86400)`. See [Metadata Schema](../concepts/metadata-schema.md).
+How long data is kept before expiration. Set at ingestion time via `retention_days`. The `expires_at` timestamp is computed as `min_timestamp + (retention_days * 86400 * 1e9)` (epoch nanoseconds). See [Metadata Schema](../concepts/metadata-schema.md).
 
 ### FOR UPDATE (task claiming)
 `SELECT ... FOR UPDATE` + `UPDATE` pattern used by the `Prefetcher` to batch-claim tasks from `_task_queue`. The `SELECT ... FOR UPDATE` pre-locks matching rows and returns their payload; a subsequent `UPDATE` transitions them to `processing`. The prefetcher uses READ COMMITTED isolation so that a locked row (already claimed by another node) is skipped and the prefetcher advances to the next pending task, providing correct fan-out across nodes. Worker goroutines then receive from the prefetcher's buffered channel instead of hitting the database directly. See [Task Queue Design](../design/task-queue.md).
