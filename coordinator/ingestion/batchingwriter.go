@@ -140,12 +140,15 @@ func (bw *BatchingWriter) ensureRegistry(ctx context.Context, tableName string) 
 }
 
 // ErrChannelFull is returned when the per-table writer channel is at capacity.
-// The gRPC handler maps this to RESOURCE_EXHAUSTED so clients retry with backoff.
+// In non-blocking mode (blockingIngestion: false), the gRPC handler maps this
+// to RESOURCE_EXHAUSTED. In blocking mode (default), the gRPC path uses
+// SubmitWait instead and ErrChannelFull is never returned.
 var ErrChannelFull = fmt.Errorf("ingestion channel full")
 
 // Submit sends a record to the appropriate per-table writer goroutine.
 // If no writer exists for the table, one is created. Returns ErrChannelFull
-// immediately if the channel is at capacity (non-blocking — used by gRPC).
+// immediately if the channel is at capacity (non-blocking). Used by
+// non-blocking gRPC ingestion and any caller that needs a fast rejection signal.
 func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *metastore.FileRecord) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -258,14 +261,16 @@ func (tw *tableWriter) run(ctx context.Context) {
 					batch = append(batch, rec)
 				default:
 					// Flush what we can with a short deadline.
-					flushCtx, flushCancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
-					if err := tw.flusher.FlushBatch(flushCtx, tw.tableName, batch); err != nil {
-						tw.notifyBatch(batch, err)
-					} else {
-						tw.notifyBatch(batch, nil)
+					if len(batch) > 0 {
+						flushCtx, flushCancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
+						if err := tw.flusher.FlushBatch(flushCtx, tw.tableName, batch); err != nil {
+							tw.notifyBatch(batch, err)
+						} else {
+							tw.notifyBatch(batch, nil)
+						}
+						flushCancel()
+						batch = batch[:0]
 					}
-					flushCancel()
-					batch = batch[:0]
 
 					// Any records that arrive after this drain are orphaned.
 					// Drain once more and notify them with an error.

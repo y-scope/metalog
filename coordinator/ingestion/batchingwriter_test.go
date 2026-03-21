@@ -182,19 +182,22 @@ func TestBatchingWriter_Submit_ChannelFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use a flusher that blocks forever to keep the channel full
-	var blocking atomic.Bool
-	blocking.Store(true)
+	// Use a flusher that blocks until signalled, so the channel stays full
+	// while we test the non-blocking Submit path.
+	flushStarted := make(chan struct{}, 1)
+	flushRelease := make(chan struct{})
 	mock := &mockFlusher{
 		flushFunc: func(ctx context.Context, _ string, _ []*metastore.FileRecord) error {
-			for blocking.Load() {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(10 * time.Millisecond):
-				}
+			select {
+			case flushStarted <- struct{}{}:
+			default:
 			}
-			return nil
+			select {
+			case <-flushRelease:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		},
 	}
 
@@ -208,8 +211,11 @@ func TestBatchingWriter_Submit_ChannelFull(t *testing.T) {
 	bw.Submit(ctx, "t", makeRecord())
 	bw.Submit(ctx, "t", makeRecord())
 
-	// Wait for the batch to start flushing (blocking), then fill again
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the tableWriter to drain the channel into its batch and
+	// start the blocking flush — no timing assumptions.
+	<-flushStarted
+
+	// Channel is now empty (records moved to batch), fill it again
 	bw.Submit(ctx, "t", makeRecord())
 	bw.Submit(ctx, "t", makeRecord())
 
@@ -219,7 +225,7 @@ func TestBatchingWriter_Submit_ChannelFull(t *testing.T) {
 		t.Errorf("expected ErrChannelFull, got %v", err)
 	}
 
-	blocking.Store(false)
+	close(flushRelease)
 }
 
 func TestBatchingWriter_Stop_DrainsAndFlushes(t *testing.T) {

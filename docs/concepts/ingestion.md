@@ -114,7 +114,7 @@ The Kafka path decouples the client from the coordinator — events persist in t
 | **Metadata durability** | Lost if metastore down AND client node dies before retry | Persists in topic regardless |
 | **Failure points** | MariaDB/MySQL + this service | MariaDB/MySQL + this service + Kafka |
 | **Operational complexity** | Lower — no additional infrastructure | Higher — Kafka cluster management |
-| **Latency** | Lower — client receives ACK after commit | Slightly higher — commit-then-offset cycle |
+| **Latency** | Lower — client receives ACK after record is queued (async DB write) | Slightly higher — commit-then-offset cycle |
 | **Scaling model** | Any node (load-balanced, sticky sessions recommended) | Single owner per table (HA-managed) |
 
 Both paths can run simultaneously. For most deployments, gRPC is the simpler starting point.
