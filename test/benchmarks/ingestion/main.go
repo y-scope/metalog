@@ -53,6 +53,7 @@ func main() {
 	apps := flag.Int("apps", 10000, "Number of distinct app IDs")
 	table := flag.String("table", "clp_spark", "Target table name")
 	concurrency := flag.Int("concurrency", 5000, "Max concurrent in-flight RPCs (grpc mode)")
+	blocking := flag.Bool("blocking", true, "Use blocking ingestion (grpc mode). true=higher throughput, false=RESOURCE_EXHAUSTED on full channel")
 	batchSize := flag.Int("batch-size", 1000, "Kafka producer batch size")
 	partitions := flag.Int("partitions", 2, "Kafka topic partitions")
 	timeout := flag.Int("timeout", 120, "Timeout in seconds for DB convergence")
@@ -180,9 +181,10 @@ func main() {
 			ReconciliationIntervalSeconds: 2,
 		},
 		GRPC: config.GRPCConfig{
-			Port:      grpcPortResolved,
-			Ingestion: *mode == "grpc",
-			Admin:     true,
+			Port:              grpcPortResolved,
+			Ingestion:         *mode == "grpc",
+			Admin:             true,
+			BlockingIngestion: blocking,
 		},
 	}
 
@@ -224,7 +226,7 @@ func main() {
 	// Run the appropriate benchmark.
 	switch *mode {
 	case "grpc":
-		accepted := runGRPC("127.0.0.1", grpcPortResolved, *table, *records, *apps, *concurrency)
+		accepted := runGRPC("127.0.0.1", grpcPortResolved, *table, *records, *apps, *concurrency, *blocking)
 		if !waitForDBCount(db, *table, accepted, time.Duration(*timeout)*time.Second) {
 			logger.Fatal("DB did not converge after gRPC benchmark")
 		}
@@ -355,7 +357,7 @@ func writeSchemaTempFile() string {
 // gRPC mode
 // ---------------------------------------------------------------------------
 
-func runGRPC(host string, port int, table string, records, apps, concurrency int) int {
+func runGRPC(host string, port int, table string, records, apps, concurrency int, blocking bool) int {
 	target := fmt.Sprintf("%s:%d", host, port)
 	logger.Info("connecting to gRPC", zap.String("target", target))
 
@@ -424,6 +426,7 @@ func runGRPC(host string, port int, table string, records, apps, concurrency int
 	fmt.Printf("  Records     : %d sent, %d accepted, %d rejected\n", records, acc, rej)
 	fmt.Printf("  Apps        : %d distinct\n", apps)
 	fmt.Printf("  Concurrency : %d max in-flight\n", concurrency)
+	fmt.Printf("  Blocking    : %v\n", blocking)
 	fmt.Println("  ----------------------------------------")
 	fmt.Printf("  Duration    : %d ms  (%.1f s)\n", elapsed.Milliseconds(), elapsed.Seconds())
 	fmt.Printf("  Throughput  : %.0f rec/s\n", float64(acc)/elapsed.Seconds())
