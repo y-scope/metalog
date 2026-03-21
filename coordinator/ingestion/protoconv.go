@@ -3,6 +3,7 @@ package ingestion
 import (
 	"database/sql"
 	"fmt"
+	"math"
 
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/metastore"
@@ -16,7 +17,10 @@ func ConvertRecord(record *pb.MetadataRecord) (*metastore.FileRecord, error) {
 		return nil, err
 	}
 
-	rec := fileRecordFromProto(record)
+	rec, err := fileRecordFromProto(record)
+	if err != nil {
+		return nil, err
+	}
 	extractDims(record.Dim, rec)
 	extractAggs(record.Agg, rec)
 	extractSketches(record.Sketch, rec)
@@ -63,9 +67,9 @@ func validateRecord(record *pb.MetadataRecord) error {
 }
 
 // fileRecordFromProto converts a protobuf MetadataRecord to a FileRecord.
-func fileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
+func fileRecordFromProto(record *pb.MetadataRecord) (*metastore.FileRecord, error) {
 	if record == nil || record.File == nil {
-		return nil
+		return nil, nil
 	}
 
 	f := record.File
@@ -97,7 +101,10 @@ func fileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
 		rec.ClpIRBucket = toNullString(f.Ir.ClpIrBucket)
 		rec.ClpIRPath = toNullString(f.Ir.ClpIrPath)
 		if f.Ir.ClpIrSizeBytes > 0 {
-			rec.ClpIRSizeBytes = sql.NullInt32{Int32: int32(f.Ir.ClpIrSizeBytes), Valid: true}
+			if f.Ir.ClpIrSizeBytes > math.MaxUint32 {
+				return nil, &ValidationError{Msg: fmt.Sprintf("clp_ir_size_bytes %d exceeds INT UNSIGNED max", f.Ir.ClpIrSizeBytes)}
+			}
+			rec.ClpIRSizeBytes = sql.NullInt64{Int64: f.Ir.ClpIrSizeBytes, Valid: true}
 		}
 	}
 
@@ -107,11 +114,14 @@ func fileRecordFromProto(record *pb.MetadataRecord) *metastore.FileRecord {
 		rec.ClpArchivePath = toNullString(f.Archive.ClpArchivePath)
 		rec.ClpArchiveCreatedAt = f.Archive.ClpArchiveCreatedAt
 		if f.Archive.ClpArchiveSizeBytes > 0 {
-			rec.ClpArchiveSizeBytes = sql.NullInt32{Int32: int32(f.Archive.ClpArchiveSizeBytes), Valid: true}
+			if f.Archive.ClpArchiveSizeBytes > math.MaxUint32 {
+				return nil, &ValidationError{Msg: fmt.Sprintf("clp_archive_size_bytes %d exceeds INT UNSIGNED max", f.Archive.ClpArchiveSizeBytes)}
+			}
+			rec.ClpArchiveSizeBytes = sql.NullInt64{Int64: f.Archive.ClpArchiveSizeBytes, Valid: true}
 		}
 	}
 
-	return rec
+	return rec, nil
 }
 
 func toNullString(s string) sql.NullString {

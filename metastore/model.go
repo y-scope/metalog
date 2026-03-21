@@ -83,8 +83,8 @@ type FileRecord struct {
 	State                    FileState
 	RecordCount              uint32
 	RawSizeBytes             sql.NullInt64
-	ClpIRSizeBytes           sql.NullInt32
-	ClpArchiveSizeBytes      sql.NullInt32
+	ClpIRSizeBytes           sql.NullInt64
+	ClpArchiveSizeBytes      sql.NullInt64
 	RetentionDays            uint16
 	ExpiresAt                int64
 

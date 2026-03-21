@@ -23,7 +23,7 @@ func TestConvertRecord_NilFile(t *testing.T) {
 }
 
 func TestFileRecordFromProto_NilInput(t *testing.T) {
-	result := fileRecordFromProto(nil)
+	result, _ := fileRecordFromProto(nil)
 	if result != nil {
 		t.Error("fileRecordFromProto(nil) should return nil")
 	}
@@ -31,7 +31,7 @@ func TestFileRecordFromProto_NilInput(t *testing.T) {
 
 func TestFileRecordFromProto_NilFile(t *testing.T) {
 	record := &pb.MetadataRecord{File: nil}
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 	if result != nil {
 		t.Error("fileRecordFromProto with nil File should return nil")
 	}
@@ -50,7 +50,7 @@ func TestFileRecordFromProto_BasicFields(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if result == nil {
 		t.Fatal("fileRecordFromProto returned nil")
@@ -87,7 +87,7 @@ func TestFileRecordFromProto_RawSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	// Zero or negative should result in Invalid NullInt64
 	if result.RawSizeBytes.Valid {
@@ -108,7 +108,7 @@ func TestFileRecordFromProto_IRFields(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if !result.ClpIRStorageBackend.Valid || result.ClpIRStorageBackend.String != "s3" {
 		t.Errorf("ClpIRStorageBackend = %v, want s3", result.ClpIRStorageBackend)
@@ -119,7 +119,7 @@ func TestFileRecordFromProto_IRFields(t *testing.T) {
 	if !result.ClpIRPath.Valid || result.ClpIRPath.String != "/path/to/file.ir" {
 		t.Errorf("ClpIRPath = %v, want /path/to/file.ir", result.ClpIRPath)
 	}
-	if !result.ClpIRSizeBytes.Valid || result.ClpIRSizeBytes.Int32 != 2048 {
+	if !result.ClpIRSizeBytes.Valid || result.ClpIRSizeBytes.Int64 != 2048 {
 		t.Errorf("ClpIRSizeBytes = %v, want 2048", result.ClpIRSizeBytes)
 	}
 }
@@ -138,7 +138,7 @@ func TestFileRecordFromProto_ArchiveFields(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if !result.ClpArchiveStorageBackend.Valid || result.ClpArchiveStorageBackend.String != "gcs" {
 		t.Errorf("ClpArchiveStorageBackend = %v, want gcs", result.ClpArchiveStorageBackend)
@@ -152,7 +152,7 @@ func TestFileRecordFromProto_ArchiveFields(t *testing.T) {
 	if result.ClpArchiveCreatedAt != 1704067200000000000 {
 		t.Errorf("ClpArchiveCreatedAt = %d, want 1704067200000000000", result.ClpArchiveCreatedAt)
 	}
-	if !result.ClpArchiveSizeBytes.Valid || result.ClpArchiveSizeBytes.Int32 != 4096 {
+	if !result.ClpArchiveSizeBytes.Valid || result.ClpArchiveSizeBytes.Int64 != 4096 {
 		t.Errorf("ClpArchiveSizeBytes = %v, want 4096", result.ClpArchiveSizeBytes)
 	}
 }
@@ -165,7 +165,7 @@ func TestFileRecordFromProto_NoArchive(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	// Archive fields should be null/invalid
 	if result.ClpArchiveStorageBackend.Valid {
@@ -189,7 +189,7 @@ func TestFileRecordFromProto_DimsAndAggsInitialized(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if result.Dims == nil {
 		t.Error("Dims should be initialized (not nil)")
@@ -216,7 +216,7 @@ func TestFileRecordFromProto_ExpiresAtComputed(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	want := int64(1704067200000000000) + 30*86400*1e9
 	if result.ExpiresAt != want {
@@ -235,7 +235,7 @@ func TestFileRecordFromProto_ExpiresAtExplicit(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if result.ExpiresAt != 3000000000000000000 {
 		t.Errorf("ExpiresAt = %d, want 3000000000000000000 (explicit value preserved)", result.ExpiresAt)
@@ -253,7 +253,7 @@ func TestFileRecordFromProto_DefaultRetentionDays(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	if result.RetentionDays != metastore.DefaultRetentionDays {
 		t.Errorf("RetentionDays = %d, want %d", result.RetentionDays, metastore.DefaultRetentionDays)
@@ -275,7 +275,7 @@ func TestFileRecordFromProto_IRSizeBytesZero(t *testing.T) {
 		},
 	}
 
-	result := fileRecordFromProto(record)
+	result, _ := fileRecordFromProto(record)
 
 	// Zero size should be invalid
 	if result.ClpIRSizeBytes.Valid {
@@ -307,5 +307,34 @@ func TestConvertRecord_WithDimsAndSketches(t *testing.T) {
 	}
 	if string(rec.Sketches["uuid"]) != string([]byte{1, 2, 3}) {
 		t.Error("uuid sketch data mismatch")
+	}
+}
+
+func TestFileRecordFromProto_SizeBytesOverflow(t *testing.T) {
+	record := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State: "IR_BUFFERING",
+			Ir: &pb.IrFileInfo{
+				ClpIrPath:      "/path/to/file.ir",
+				ClpIrSizeBytes: 1 << 33, // 8GB, exceeds UINT32 max
+			},
+		},
+	}
+	_, err := fileRecordFromProto(record)
+	if err == nil {
+		t.Fatal("expected error for IR size exceeding INT UNSIGNED max")
+	}
+
+	record2 := &pb.MetadataRecord{
+		File: &pb.FileFields{
+			State: "ARCHIVE_CLOSED",
+			Archive: &pb.ArchiveFileInfo{
+				ClpArchiveSizeBytes: 1 << 33,
+			},
+		},
+	}
+	_, err = fileRecordFromProto(record2)
+	if err == nil {
+		t.Fatal("expected error for archive size exceeding INT UNSIGNED max")
 	}
 }
