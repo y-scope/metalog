@@ -72,13 +72,11 @@ The service does not currently expose a Prometheus scrape endpoint. Use the data
 ### Ingestion throughput
 
 ```sql
--- Files registered in the last minute, by table
-SELECT table_name,
-       COUNT(*) AS files_last_minute,
+-- Files ingested in the last minute
+SELECT COUNT(*) AS files_last_minute,
        COUNT(*) * 60 AS projected_hourly_rate
 FROM clp_spark
-WHERE created_at >= (UNIX_TIMESTAMP() - 60) * 1000000000    -- last 60 seconds, in epoch nanos
-GROUP BY table_name;
+WHERE min_timestamp >= (UNIX_TIMESTAMP() - 60) * 1000000000;    -- last 60 seconds, in epoch nanos
 ```
 
 Expected: matches your producer throughput. A sudden drop to 0 indicates an ingestion or coordinator failure.

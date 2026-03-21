@@ -782,7 +782,7 @@ metalog admin register-table \
 
 ## Configuration
 
-See [Configuration Reference: API Server Configuration](configuration.md#api-server-configuration) for all API server environment variables.
+See [Configuration Reference](configuration.md) for all server configuration options.
 
 ---
 
@@ -805,15 +805,15 @@ See [Configuration Reference: API Server Configuration](configuration.md#api-ser
 │   ├── cache.go            — TTL-based in-memory cache
 │   ├── resolve.go          — column resolution and projection
 │   └── sketch.go           — bloom filter sketch evaluation
-kafka/
-├── consumer.go             — Kafka consumer with offset watermark tracking
-├── transformer.go          — MessageTransformer interface and registry
-└── jsonunmarshal.go        — JSON → protobuf MetadataRecord conversion
-proto/
-├── splits.proto            — SplitQueryService + Split messages
-├── metadata.proto          — MetadataService messages
-├── ingestion.proto         — MetadataIngestionService + record types
-└── admin.proto             — AdminService messages
+├── kafka/
+│   ├── consumer.go             — Kafka consumer with offset tracking
+│   ├── transformer.go          — MessageTransformer interface and registry
+│   └── jsonunmarshal.go        — JSON → protobuf MetadataRecord conversion
+└── proto/
+    ├── splits.proto            — SplitQueryService + Split messages
+    ├── metadata.proto          — MetadataService messages
+    ├── ingestion.proto         — MetadataIngestionService + record types
+    └── admin.proto             — AdminService messages
 ```
 
 ---

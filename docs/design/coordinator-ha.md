@@ -280,6 +280,7 @@ Everything is derived from timestamps — no status flags:
 | Column | Type | Description |
 |--------|------|-------------|
 | node_id | VARCHAR(64) PK | Node identifier |
+| started_at | BIGINT | When the node process started (epoch nanoseconds) |
 | last_heartbeat_at | BIGINT | Last liveness timestamp (epoch nanoseconds) |
 
 Stale rows from dead nodes accumulate harmlessly. Manual `DELETE` is safe at any time. In lease mode, this table is unused.

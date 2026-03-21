@@ -129,13 +129,13 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 ## Goroutine Model
 
-Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Four per-coordinator goroutines are always-on (retention, partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` columns (Kafka consumer, planner).
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); three are conditional on `_table_config` settings (retention, Kafka consumer, planner).
 
 Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
 
 ### Per-Coordinator Goroutines (up to 6 per table)
 
-Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Four are always-on; two are conditional on feature flags.
+Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; three are conditional on feature flags.
 
 | Goroutine | Name | Always On | Reads From | Writes To | Purpose |
 |-----------|------|:---------:|------------|-----------|---------|

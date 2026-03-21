@@ -19,7 +19,8 @@ Every extension point follows the same three-step pattern:
 
 Extensions live in a separate Go module that imports metalog. A blank import
 in your binary's `main.go` ensures `init()` runs and the extension is
-registered before the node starts:
+registered before the node starts. Copy `cmd/metalog/main.go` as your
+starting point and add blank imports for your extension packages:
 
 ```go
 package main
@@ -27,13 +28,9 @@ package main
 import (
     _ "your.company/metalog-extensions/kafka"   // registers custom transformers
     _ "your.company/metalog-extensions/storage"  // registers custom storage backend
-
-    "github.com/y-scope/metalog/cmd/metalog"
 )
 
-func main() {
-    metalog.Run()
-}
+// ... rest of main.go copied from cmd/metalog/main.go
 ```
 
 This is the same pattern used by `database/sql` drivers and `image` decoders
