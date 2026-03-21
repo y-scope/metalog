@@ -33,15 +33,44 @@ The client sends metadata directly to the coordinator via the `Ingest` RPC (`Ing
 
 **Backpressure:**
 
-`Submit()` uses a non-blocking send on a buffered channel (size 5000). If the channel is full, the request is rejected immediately with `RESOURCE_EXHAUSTED` — the gRPC goroutine is freed and the client retries with backoff.
+The `BatchingWriter` channel (capacity 5000 per table) is a bounded queue between gRPC handler goroutines and the `tableWriter` that flushes to the database. When the channel is full, the behavior depends on the `grpc.blockingIngestion` config:
+
+**Blocking mode** (`blockingIngestion: true`, default):
+
+The gRPC goroutine **parks** on the channel send until space opens or the client deadline expires. The Go scheduler removes the goroutine from the run queue — zero CPU consumed, no network traffic, no retry overhead. When the `tableWriter` flushes a batch, a slot opens and the scheduler wakes one of the parked goroutines. From the client's perspective, the RPC latency increases from ~1ms to ~50-100ms under load, but it always succeeds (unless the deadline fires).
+
+This is ~2x higher throughput than non-blocking mode because there are no wasted gRPC round-trips for retries. Each request does exactly one network round-trip.
+
+**Non-blocking mode** (`blockingIngestion: false`):
+
+The gRPC goroutine returns `RESOURCE_EXHAUSTED` immediately when the channel is full. The client must retry with backoff. Each retry is a full gRPC round-trip (serialize → send → receive → deserialize → sleep → repeat), which adds significant overhead under high concurrency.
+
+**Safety valve:** In both modes, the client's context deadline acts as the safety valve. Production clients should always set a deadline (e.g., 5-10s):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+resp, err := client.Ingest(ctx, req)
+```
+
+If the channel is backed up beyond the deadline (e.g., database is unreachable), the goroutine unblocks with `DEADLINE_EXCEEDED` and the client can fail over to another node or shed load.
+
+**Memory under pressure:** Blocked goroutines consume ~4-8KB each. 50,000 simultaneously blocked goroutines = ~400MB — manageable for a server with 4-8GB of RAM, and this extreme scenario only occurs when the database is completely unresponsive.
 
 | Condition | gRPC status | Client action |
 |-----------|-------------|---------------|
 | Channel has space | `OK` (`IngestResponse.Accepted: true`) | Record queued for async batch write |
-| Channel full | `RESOURCE_EXHAUSTED` | Retry with backoff |
-| Request deadline passed | `DEADLINE_EXCEEDED` | Retry |
+| Channel full (blocking mode) | *(RPC latency increases)* | Request completes when space opens |
+| Channel full (non-blocking mode) | `RESOURCE_EXHAUSTED` | Retry with backoff |
+| Client deadline passed | `DEADLINE_EXCEEDED` | Fail over or shed load |
 | Validation error | `INVALID_ARGUMENT` | Fix request |
 | Internal error | `OK` (`IngestResponse.Accepted: false`) | Retry |
+
+**Choosing a mode:**
+
+| Mode | Throughput | Best for |
+|------|-----------|----------|
+| **Blocking** (default) | ~19K rec/s | Internal services, trusted clients, high-throughput pipelines |
+| **Non-blocking** | ~11K rec/s | Public-facing APIs, load balancers needing fast failure signals |
 
 **Characteristics:**
 

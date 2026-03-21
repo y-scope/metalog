@@ -112,6 +112,7 @@ worker:
 | `grpc.admin` | `false` | Enable admin gRPC service (requires `database.primary`) |
 | `grpc.query` | `false` | Enable query gRPC service (uses `database.replica`, falls back to primary) |
 | `grpc.metadata` | `false` | Enable metadata gRPC service (uses `database.replica`, falls back to primary) |
+| `grpc.blockingIngestion` | `true` | Block gRPC Ingest RPCs until channel has space (`true`, ~2x throughput) or return `RESOURCE_EXHAUSTED` immediately (`false`). See [Ingestion Backpressure](../concepts/ingestion.md#grpc-push). |
 | `logging.failureLogIntervalSeconds` | `60` | Throttle interval for repeated failure log messages. First failure always logged immediately; subsequent repeat at this interval. |
 | `coordinator.enabled` | `false` | Enable coordinator subsystem |
 | `coordinator.name` | (hostname) | Human-readable coordinator name |
