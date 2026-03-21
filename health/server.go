@@ -21,23 +21,30 @@ type ReadinessChecker interface {
 // Server provides an HTTP health check endpoint.
 type Server struct {
 	srv      *http.Server
+	mux      *http.ServeMux
 	ready    atomic.Bool
 	checkers []ReadinessChecker
 	mu       sync.RWMutex
 	log      *zap.Logger
 }
 
+// SetMetricsHandler registers an HTTP handler for the /metrics endpoint
+// (typically the Prometheus exporter handler from OpenTelemetry).
+func (s *Server) SetMetricsHandler(h http.Handler) {
+	s.mux.Handle("/metrics", h)
+}
+
 // NewServer creates a health server on the given port.
 func NewServer(port int, log *zap.Logger) *Server {
 	s := &Server{log: log}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/health/live", s.handleHealth)
-	mux.HandleFunc("/ready", s.handleReady)
-	mux.HandleFunc("/health/ready", s.handleReady)
+	s.mux = http.NewServeMux()
+	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/health/live", s.handleHealth)
+	s.mux.HandleFunc("/ready", s.handleReady)
+	s.mux.HandleFunc("/health/ready", s.handleReady)
 	s.srv = &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           mux,
+		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Second,
 		IdleTimeout:       60 * time.Second,

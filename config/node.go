@@ -16,8 +16,16 @@ type NodeConfig struct {
 	GRPC        GRPCConfig         `yaml:"grpc"`
 	Health      HealthConfig       `yaml:"health"`
 	Logging     LoggingConfig      `yaml:"logging"`
+	Telemetry   TelemetryConfig    `yaml:"telemetry"`
 	Coordinator CoordinatorConfig  `yaml:"coordinator"`
 	Worker      WorkerConfig       `yaml:"worker"`
+}
+
+// TelemetryConfig controls OpenTelemetry metrics collection and export.
+type TelemetryConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	Exporter string            `yaml:"exporter"` // "prometheus" (default), "otlp", or custom
+	Options  map[string]string `yaml:"options"`   // exporter-specific key-value options
 }
 
 // LoggingConfig holds logging tuning parameters.

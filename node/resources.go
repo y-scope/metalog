@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"database/sql"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/storage"
+	"github.com/y-scope/metalog/telemetry"
 )
 
 // Resources holds resources shared across all units in a node.
@@ -26,6 +28,10 @@ type Resources struct {
 	// FailureLogInterval controls how often periodic loops repeat failure
 	// warnings. Set from logging.failureLogIntervalSeconds in node.yaml.
 	FailureLogInterval time.Duration
+
+	// Telemetry provides the OpenTelemetry MeterProvider for metrics.
+	// Nil when telemetry is disabled (subsystems use no-op meters).
+	Telemetry *telemetry.Provider
 
 	regMu      sync.RWMutex
 	registries map[string]*schema.ColumnRegistry
@@ -59,6 +65,11 @@ func (s *Resources) GetColumnRegistry(tableName string) *schema.ColumnRegistry {
 
 // Close releases all shared resources.
 func (s *Resources) Close() {
+	if s.Telemetry != nil {
+		if err := s.Telemetry.Shutdown(context.Background()); err != nil {
+			s.Log.Warn("failed to shutdown telemetry", zap.Error(err))
+		}
+	}
 	if s.ReadDB != nil {
 		if err := s.ReadDB.Close(); err != nil {
 			s.Log.Warn("failed to close read DB", zap.Error(err))

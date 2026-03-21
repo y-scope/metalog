@@ -17,6 +17,7 @@ import (
 	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/storage"
+	"github.com/y-scope/metalog/telemetry"
 )
 
 // Node is the top-level orchestrator that manages coordinator and worker units.
@@ -133,6 +134,21 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	// Create archive creator
 	archiveCreator := storage.NewArchiveCreator(storageReg, compressor, log)
 
+	// Create telemetry provider
+	var telemetryProvider *telemetry.Provider
+	if cfg.Telemetry.Enabled {
+		var err error
+		telemetryProvider, err = telemetry.NewProvider(telemetry.Config{
+			Enabled:  cfg.Telemetry.Enabled,
+			Exporter: cfg.Telemetry.Exporter,
+			Options:  cfg.Telemetry.Options,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create telemetry provider: %w", err)
+		}
+		log.Info("telemetry enabled", zap.String("exporter", cfg.Telemetry.Exporter))
+	}
+
 	shared := &Resources{
 		DB:                 pool,
 		ReadDB:             readPool,
@@ -142,6 +158,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		ArchiveBucket:      cfg.Storage.Backends[cfg.Storage.DefaultBackend].Bucket,
 		IsMariaDB:          isMariaDB,
 		FailureLogInterval: cfg.Logging.FailureLogInterval(),
+		Telemetry:          telemetryProvider,
 		Log:                log,
 	}
 
@@ -164,11 +181,17 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		opt(n)
 	}
 
-	// Health server with DB readiness check
+	// Health server with DB readiness check and metrics endpoint
 	if cfg.Health.Enabled {
 		n.healthSrv = health.NewServer(cfg.Health.Port, log)
 		if pool != nil {
 			n.healthSrv.AddChecker(&health.DBChecker{DB: pool})
+		}
+		if telemetryProvider != nil {
+			if h := telemetryProvider.Handler(); h != nil {
+				n.healthSrv.SetMetricsHandler(h)
+				log.Info("metrics endpoint registered", zap.Int("port", cfg.Health.Port), zap.String("path", "/metrics"))
+			}
 		}
 	}
 
