@@ -207,6 +207,10 @@ const MaxStuckBufferingBatch = 1000
 // Returns the number of rows promoted. Files that raced ahead to another state
 // are naturally skipped by the WHERE clause.
 func (fr *FileRecords) PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error) {
+	const from, to = StateIRArchiveBuffering, StateIRArchiveConsolidationPending
+	if !from.CanTransitionTo(to) {
+		return 0, fmt.Errorf("invalid state transition: %s → %s", from, to)
+	}
 	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(StateIRArchiveConsolidationPending)).
 		Where(sq.Eq{ColState: string(StateIRArchiveBuffering)}).
@@ -439,6 +443,9 @@ func (fr *FileRecords) TransitionExpiredToPurging(ctx context.Context, currentNa
 // transitionStateBatch updates up to MaxExpirationBatch rows from fromState to toState
 // where expires_at > 0 AND expires_at < currentNanos.
 func (fr *FileRecords) transitionStateBatch(ctx context.Context, currentNanos int64, fromState, toState FileState) (int64, error) {
+	if !fromState.CanTransitionTo(toState) {
+		return 0, fmt.Errorf("invalid state transition: %s → %s", fromState, toState)
+	}
 	query, args, err := sq.Update(dbutil.QuoteIdentifier(fr.tableName)).
 		Set(ColState, string(toState)).
 		Where(sq.Gt{ColExpiresAt: 0}).
