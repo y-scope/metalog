@@ -404,6 +404,50 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 	return entry.ColumnName, nil
 }
 
+// lookupDimFromDB checks the database for an existing ACTIVE dim mapping,
+// updating the in-memory cache if found. Used after acquiring the advisory
+// lock to detect allocations by other nodes.
+func (cr *ColumnRegistry) lookupDimFromDB(ctx context.Context, dimKey string) (string, error) {
+	query, args, _ := sq.Select("column_name").
+		From(metastore.DimRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "dim_key": dimKey, "state": statusActive}).
+		Limit(1).
+		ToSql()
+	var col string
+	err := cr.db.QueryRowContext(ctx, query, args...).Scan(&col)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup dim from DB: %w", err)
+	}
+	return col, nil
+}
+
+// lookupAggFromDB checks the database for an existing ACTIVE agg mapping.
+func (cr *ColumnRegistry) lookupAggFromDB(ctx context.Context, aggKey, aggValue, aggType string) (string, error) {
+	query, args, _ := sq.Select("column_name").
+		From(metastore.AggRegistryTable).
+		Where(sq.Eq{"table_name": cr.tableName, "agg_key": aggKey, "aggregation_type": aggType, "state": statusActive}).
+		ToSql()
+	if aggValue != "" {
+		query, args, _ = sq.Select("column_name").
+			From(metastore.AggRegistryTable).
+			Where(sq.Eq{"table_name": cr.tableName, "agg_key": aggKey, "agg_value": aggValue, "aggregation_type": aggType, "state": statusActive}).
+			Limit(1).
+			ToSql()
+	}
+	var col string
+	err := cr.db.QueryRowContext(ctx, query, args...).Scan(&col)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup agg from DB: %w", err)
+	}
+	return col, nil
+}
+
 func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseType string, width int) (string, error) {
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
@@ -416,6 +460,27 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 		return e.ColumnName, nil
 	}
 	cr.mu.RUnlock()
+
+	// Acquire cross-node advisory lock to prevent multi-node slot races.
+	// Column allocation is infrequent (~10x on first day, then rarely),
+	// so the lock overhead is negligible.
+	lock, err := metastore.AcquireAdvisoryLock(ctx, cr.db, "col_alloc_"+cr.tableName, 10)
+	if err != nil {
+		return "", fmt.Errorf("acquire column allocation lock: %w", err)
+	}
+	defer func() {
+		if err := lock.Release(ctx); err != nil {
+			cr.log.Warn("release column allocation lock failed", zap.Error(err))
+		}
+	}()
+
+	// Re-check from DB — another node may have allocated this dim while we
+	// were waiting for the advisory lock.
+	if col, err := cr.lookupDimFromDB(ctx, dimKey); err != nil {
+		return "", err
+	} else if col != "" {
+		return col, nil
+	}
 
 	// Try to claim an AVAILABLE (recycled) slot before allocating a fresh one.
 	if col, err := cr.claimAvailableDimSlot(ctx, dimKey, baseType, width); err != nil {
@@ -435,10 +500,9 @@ func (cr *ColumnRegistry) allocateNewDimSlot(ctx context.Context, dimKey, baseTy
 	sqlType := dimSQLType(baseType, width)
 
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
-	_, err := cr.db.ExecContext(ctx,
+	if _, err = cr.db.ExecContext(ctx,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
-			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB)))
-	if err != nil {
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB))); err != nil {
 		// Column may already exist from a previous crashed attempt — check.
 		if !isDuplicateColumn(err) {
 			return "", fmt.Errorf("alter table add dim: %w", err)
@@ -501,6 +565,25 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	}
 	cr.mu.RUnlock()
 
+	// Acquire cross-node advisory lock (same lock as dim allocation —
+	// serializes all column changes for this table).
+	lock, err := metastore.AcquireAdvisoryLock(ctx, cr.db, "col_alloc_"+cr.tableName, 10)
+	if err != nil {
+		return "", fmt.Errorf("acquire column allocation lock: %w", err)
+	}
+	defer func() {
+		if err := lock.Release(ctx); err != nil {
+			cr.log.Warn("release column allocation lock failed", zap.Error(err))
+		}
+	}()
+
+	// Re-check from DB — another node may have allocated this agg.
+	if col, err := cr.lookupAggFromDB(ctx, aggKey, aggValue, aggType); err != nil {
+		return "", err
+	} else if col != "" {
+		return col, nil
+	}
+
 	// Try to claim an AVAILABLE (recycled) slot before allocating a fresh one.
 	if col, err := cr.claimAvailableAggSlot(ctx, aggKey, aggValue, aggType, valueType); err != nil {
 		return "", err
@@ -519,10 +602,9 @@ func (cr *ColumnRegistry) allocateNewAggSlot(ctx context.Context, aggKey, aggVal
 	}
 
 	// ALTER TABLE ADD COLUMN first — if it fails, no orphaned registry row is left.
-	_, err := cr.db.ExecContext(ctx,
+	if _, err = cr.db.ExecContext(ctx,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NULL, ALGORITHM=INPLACE, LOCK=%s",
-			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB)))
-	if err != nil {
+			db.QuoteIdentifier(cr.tableName), db.QuoteIdentifier(colName), sqlType, lockMode(cr.isMariaDB))); err != nil {
 		if !isDuplicateColumn(err) {
 			return "", fmt.Errorf("alter table add agg: %w", err)
 		}
@@ -628,19 +710,39 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
-	// Double-check: filter out any allocated while we waited for allocMu.
+	// Acquire cross-node advisory lock.
+	lock, err := metastore.AcquireAdvisoryLock(ctx, cr.db, "col_alloc_"+cr.tableName, 10)
+	if err != nil {
+		return nil, fmt.Errorf("acquire column allocation lock: %w", err)
+	}
+	defer func() {
+		if err := lock.Release(ctx); err != nil {
+			cr.log.Warn("release column allocation lock failed", zap.Error(err))
+		}
+	}()
+
+	// Double-check: filter out any allocated while we waited for locks.
+	// Check DB (not just cache) to catch allocations by other nodes.
 	var pending []DimRequest
 	result := make(map[string]string)
 
-	cr.mu.RLock()
 	for _, r := range reqs {
-		if e, ok := cr.dimByKey[r.DimKey]; ok {
+		cr.mu.RLock()
+		e, ok := cr.dimByKey[r.DimKey]
+		cr.mu.RUnlock()
+		if ok {
 			result[r.DimKey] = e.ColumnName
+			continue
+		}
+		// Check DB for cross-node allocation
+		if col, err := cr.lookupDimFromDB(ctx, r.DimKey); err != nil {
+			return nil, err
+		} else if col != "" {
+			result[r.DimKey] = col
 		} else {
 			pending = append(pending, r)
 		}
 	}
-	cr.mu.RUnlock()
 
 	if len(pending) == 0 {
 		return result, nil
@@ -775,19 +877,38 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 	cr.allocMu.Lock()
 	defer cr.allocMu.Unlock()
 
+	// Acquire cross-node advisory lock.
+	lock, err := metastore.AcquireAdvisoryLock(ctx, cr.db, "col_alloc_"+cr.tableName, 10)
+	if err != nil {
+		return nil, fmt.Errorf("acquire column allocation lock: %w", err)
+	}
+	defer func() {
+		if err := lock.Release(ctx); err != nil {
+			cr.log.Warn("release column allocation lock failed", zap.Error(err))
+		}
+	}()
+
+	// Double-check: filter out any allocated (cache + DB) while we waited.
 	var pending []AggRequest
 	result := make(map[string]string)
 
-	cr.mu.RLock()
 	for _, r := range reqs {
 		key := AggCacheKey(r.AggKey, r.AggValue, r.AggType)
-		if e, ok := cr.aggByKey[key]; ok {
+		cr.mu.RLock()
+		e, ok := cr.aggByKey[key]
+		cr.mu.RUnlock()
+		if ok {
 			result[key] = e.ColumnName
+			continue
+		}
+		if col, err := cr.lookupAggFromDB(ctx, r.AggKey, r.AggValue, r.AggType); err != nil {
+			return nil, err
+		} else if col != "" {
+			result[key] = col
 		} else {
 			pending = append(pending, r)
 		}
 	}
-	cr.mu.RUnlock()
 
 	if len(pending) == 0 {
 		return result, nil
