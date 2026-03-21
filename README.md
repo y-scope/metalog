@@ -212,6 +212,22 @@ go test -race ./...
 go test -tags=integration ./...
 ```
 
+### Docker troubleshooting
+
+Integration tests and benchmarks use [testcontainers-go](https://golang.testcontainers.org/)
+to start MariaDB and MinIO containers. If you see errors like
+`unexpected container status "removing"` or `could not start container`
+related to the Ryuk reaper container, set:
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
+```
+
+This is typically needed in **rootless Docker** environments (common in
+devpods and some CI systems) where Ryuk cannot access cgroup-based
+container lifecycle management. Disabling Ryuk is safe when the
+environment handles container cleanup automatically (ephemeral CI, devpods).
+
 ## Project Structure
 
 ```

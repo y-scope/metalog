@@ -1,4 +1,10 @@
 // Package testutil provides shared test infrastructure for integration tests.
+//
+// Integration tests use testcontainers-go to start MariaDB and MinIO
+// containers. In rootless Docker environments (devpods, some CI systems),
+// the Ryuk reaper container may fail to start. Set the environment variable
+// TESTCONTAINERS_RYUK_DISABLED=true to work around this. See the README
+// "Docker troubleshooting" section for details.
 package testutil
 
 import (

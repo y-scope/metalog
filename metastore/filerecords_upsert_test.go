@@ -43,16 +43,21 @@ func TestBuildGuardedUpsertSQL(t *testing.T) {
 		t.Error("missing ON DUPLICATE KEY UPDATE")
 	}
 
-	// Check guard condition
-	if !strings.Contains(sql, "`state` NOT IN ('IR_PURGING','IR_ARCHIVE_CONSOLIDATION_PENDING','ARCHIVE_CLOSED','ARCHIVE_PURGING')") {
-		t.Error("missing guard condition")
+	// Check guard condition — existing-row columns are always table-qualified
+	if !strings.Contains(sql, "`test_table`.`state` NOT IN ('IR_PURGING','IR_ARCHIVE_CONSOLIDATION_PENDING','ARCHIVE_CLOSED','ARCHIVE_PURGING')") {
+		t.Error("missing guard condition with table-qualified state")
 	}
 
 	// Check max_timestamp is last
-	lastGuard := strings.LastIndex(sql, "max_timestamp = IF(")
-	otherGuard := strings.Index(sql, "state = IF(")
+	lastGuard := strings.LastIndex(sql, "max_timestamp` = IF(")
+	otherGuard := strings.Index(sql, "state` = IF(")
 	if lastGuard < otherGuard {
 		t.Error("max_timestamp should be the last guarded assignment")
+	}
+
+	// Check existing-row references use table qualification
+	if !strings.Contains(sql, "`test_table`.`max_timestamp`") {
+		t.Error("guard should use table-qualified max_timestamp for existing row reference")
 	}
 
 	// Check paramsPerRow = baseCols + dimCols + aggCols
@@ -80,5 +85,25 @@ func TestBuildGuardedUpsertSQLNoDynamic(t *testing.T) {
 	valuesSection := sql[valuesIdx:onDupIdx]
 	if strings.Count(valuesSection, "(") != 1 {
 		t.Errorf("expected 1 value row in: %s", valuesSection)
+	}
+}
+
+func TestBuildGuardedUpsertSQL_MariaDB(t *testing.T) {
+	sql, _, _, err := BuildGuardedUpsertSQL("my_table", []string{"dim_f01"}, nil, nil, 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// MariaDB mode uses VALUES(col) for new-row references
+	if !strings.Contains(sql, "VALUES(`state`)") {
+		t.Error("MariaDB mode should use VALUES() for new-row references")
+	}
+
+	// Existing-row references should still be table-qualified
+	if !strings.Contains(sql, "`my_table`.`state`") {
+		t.Error("MariaDB mode should use table-qualified existing-row references")
+	}
+	if !strings.Contains(sql, "`my_table`.`max_timestamp`") {
+		t.Error("MariaDB mode should use table-qualified max_timestamp")
 	}
 }

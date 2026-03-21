@@ -102,7 +102,14 @@ func BuildGuardedUpsertSQL(
 		return rowAlias + "." + quoted
 	}
 
-	guard := dbutil.QuoteIdentifier(ColState) + " NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + dbutil.QuoteIdentifier(ColMaxTimestamp)
+	// existingRef returns a reference to the existing row's column value.
+	// Always table-qualified to avoid ambiguity — required for MySQL 8.0's
+	// AS alias form, and harmless on MariaDB's VALUES() syntax.
+	existingRef := func(col string) string {
+		return dbutil.QuoteIdentifier(tableName) + "." + dbutil.QuoteIdentifier(col)
+	}
+
+	guard := existingRef(ColState) + " NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + existingRef(ColMaxTimestamp)
 
 	// Guarded columns: everything except max_timestamp (which goes last)
 	first := true
@@ -113,31 +120,31 @@ func BuildGuardedUpsertSQL(
 		if !first {
 			b.WriteString(", ")
 		}
-		writeGuardedAssignment(&b, col, guard, newRef)
+		writeGuardedAssignment(&b, col, guard, newRef, existingRef)
 		first = false
 	}
 
 	// Dim columns
 	for _, col := range dimCols {
 		b.WriteString(", ")
-		writeGuardedAssignment(&b, col, guard, newRef)
+		writeGuardedAssignment(&b, col, guard, newRef, existingRef)
 	}
 
 	// Agg columns
 	for _, col := range aggCols {
 		b.WriteString(", ")
-		writeGuardedAssignment(&b, col, guard, newRef)
+		writeGuardedAssignment(&b, col, guard, newRef, existingRef)
 	}
 
 	// max_timestamp LAST (guard references it)
 	b.WriteString(", ")
-	writeGuardedAssignment(&b, ColMaxTimestamp, guard, newRef)
+	writeGuardedAssignment(&b, ColMaxTimestamp, guard, newRef, existingRef)
 
 	return b.String(), nil, paramsPerRow, nil
 }
 
-// writeGuardedAssignment writes: `col` = IF(guard, <newRef(col)>, `col`)
-func writeGuardedAssignment(b *strings.Builder, col string, guard string, newRef func(string) string) {
+// writeGuardedAssignment writes: `col` = IF(guard, <newRef(col)>, <existingRef(col)>)
+func writeGuardedAssignment(b *strings.Builder, col string, guard string, newRef, existingRef func(string) string) {
 	quoted := dbutil.QuoteIdentifier(col)
 	b.WriteString(quoted)
 	b.WriteString(" = IF(")
@@ -145,6 +152,6 @@ func writeGuardedAssignment(b *strings.Builder, col string, guard string, newRef
 	b.WriteString(", ")
 	b.WriteString(newRef(col))
 	b.WriteString(", ")
-	b.WriteString(quoted)
+	b.WriteString(existingRef(col))
 	b.WriteString(")")
 }
