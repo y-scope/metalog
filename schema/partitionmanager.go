@@ -269,9 +269,11 @@ func createLookaheadPartitions(ctx context.Context, database *sql.DB, tableName 
 			return created, fmt.Errorf("create partition %s: %w", partName, err)
 		}
 		created++
-		log.Info("created partition", zap.String("partition", partName))
 	}
 
+	if created > 0 {
+		log.Info("created lookahead partitions", zap.Int("count", created))
+	}
 	return created, nil
 }
 

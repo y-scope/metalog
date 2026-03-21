@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/logutil"
 )
 
 // pollTimeoutMs is the timeout for the initial Poll call when no messages are buffered.
@@ -40,6 +41,7 @@ type Consumer struct {
 	service          *ingestion.Service
 	tableName        string
 	log              *zap.Logger
+	dataFL           *logutil.FailureLogger // throttles transform/convert failures
 
 	// pendingFlushes tracks records submitted to the BatchingWriter but not
 	// yet confirmed as flushed. Drained each poll cycle — no goroutines needed.
@@ -58,6 +60,7 @@ func NewConsumer(
 	service *ingestion.Service,
 	log *zap.Logger,
 ) *Consumer {
+	consumerLog := log.With(zap.String("topic", topic), zap.String("table", tableName))
 	return &Consumer{
 		bootstrapServers: bootstrapServers,
 		groupID:          groupID,
@@ -65,7 +68,8 @@ func NewConsumer(
 		tableName:        tableName,
 		transformer:      transformer,
 		service:          service,
-		log: log.With(zap.String("topic", topic), zap.String("table", tableName)),
+		log:              consumerLog,
+		dataFL:           logutil.NewFailureLogger(consumerLog, time.Minute),
 	}
 }
 
@@ -172,21 +176,13 @@ func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *i
 func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	record, err := c.transformer.Transform(msg.Value)
 	if err != nil {
-		c.log.Warn("transform failed",
-			zap.Int32("partition", msg.TopicPartition.Partition),
-			zap.Any("offset", msg.TopicPartition.Offset),
-			zap.Error(err),
-		)
+		c.dataFL.Fail("transform failed", zap.Error(err))
 		return
 	}
 
 	rec, err := ingestion.ConvertRecord(record)
 	if err != nil {
-		c.log.Warn("convert failed",
-			zap.Int32("partition", msg.TopicPartition.Partition),
-			zap.Any("offset", msg.TopicPartition.Offset),
-			zap.Error(err),
-		)
+		c.dataFL.Fail("convert failed", zap.Error(err))
 		return
 	}
 

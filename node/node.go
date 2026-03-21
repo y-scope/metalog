@@ -421,12 +421,17 @@ func (n *Node) runReconciliation() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	fl := logutil.NewFailureLogger(n.log, n.shared.FailureLogInterval)
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
-			n.reconcile()
+			if err := n.reconcile(); err != nil {
+				fl.Fail("reconciliation failed", zap.Error(err))
+			} else {
+				fl.OK()
+			}
 		}
 	}
 }
@@ -445,7 +450,7 @@ func (n *Node) doStartCoordinator(tableName string) error {
 	return n.startCoordinator(tableName)
 }
 
-func (n *Node) reconcile() {
+func (n *Node) reconcile() error {
 	ctx := n.ctx
 	reg := n.getReconcileRegistry()
 
@@ -483,8 +488,7 @@ func (n *Node) reconcile() {
 	// and leave the rest for other nodes.
 	unassigned, err := reg.GetUnassignedTables(ctx)
 	if err != nil {
-		n.log.Warn("get unassigned tables failed", zap.Error(err))
-		return
+		return fmt.Errorf("get unassigned tables: %w", err)
 	}
 	if len(unassigned) > 0 {
 		var activeNodes int
@@ -533,7 +537,7 @@ func (n *Node) reconcile() {
 			}
 			ok, err := reg.ClaimTable(ctx, t, leaseTTL)
 			if err != nil {
-				n.log.Warn("claim unassigned table failed", zap.String("table", t), zap.Error(err))
+				n.log.Debug("claim unassigned table failed", zap.String("table", t), zap.Error(err))
 				continue
 			}
 			if ok {
@@ -584,8 +588,7 @@ func (n *Node) reconcile() {
 	// start coordinators for new assignments
 	assigned, err := reg.GetAssignedTables(ctx)
 	if err != nil {
-		n.log.Warn("get assigned tables failed", zap.Error(err))
-		return
+		return fmt.Errorf("get assigned tables: %w", err)
 	}
 	assignedSet := make(map[string]bool, len(assigned))
 	for _, t := range assigned {
@@ -631,4 +634,5 @@ func (n *Node) reconcile() {
 				zap.String("table", t), zap.Error(err))
 		}
 	}
+	return nil
 }

@@ -256,7 +256,7 @@ func (u *CoordinatorUnit) Start() {
 		}()
 	}
 
-	u.log.Info("coordinator unit started")
+	u.log.Debug("coordinator unit started")
 }
 
 // Stop signals all goroutines to stop and waits for completion.
@@ -272,7 +272,7 @@ func (u *CoordinatorUnit) Stop() {
 	u.ctxMu.Unlock()
 	cancel()
 	u.wg.Wait()
-	u.log.Info("coordinator unit stopped")
+	u.log.Debug("coordinator unit stopped")
 }
 
 func (u *CoordinatorUnit) runAliasRefresh(ctx context.Context) {

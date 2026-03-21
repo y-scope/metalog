@@ -124,10 +124,10 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 		result := &taskqueue.TaskResult{Error: err.Error()}
 		output, marshalErr := taskqueue.MarshalResult(result)
 		if marshalErr != nil {
-			log.Error("marshal error result failed", zap.Error(marshalErr))
+			log.Warn("marshal error result failed", zap.Error(marshalErr))
 		}
 		if _, cErr := c.taskQueue.CompleteTask(ctx, task.TaskID, output); cErr != nil {
-			log.Error("complete task with error result failed", zap.Error(cErr))
+			log.Warn("complete task with error result failed — task will be reclaimed", zap.Error(cErr))
 		}
 		return
 	}

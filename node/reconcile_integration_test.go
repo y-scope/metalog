@@ -138,7 +138,7 @@ func TestReconcile_ClaimsOrphansAndStartsCoordinators(t *testing.T) {
 		return nil
 	}
 
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	if !started["orphan_a"] {
 		t.Error("expected orphan_a to be started")
@@ -164,7 +164,7 @@ func TestReconcile_SkipsAlreadyRunningOrphans(t *testing.T) {
 	// Pre-populate as already running
 	n.coordinators["already_running"] = newTestCU()
 
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	if started["already_running"] {
 		t.Error("should not restart already running coordinator")
@@ -187,7 +187,7 @@ func TestReconcile_FairShareLimitsClaims(t *testing.T) {
 		return nil
 	}
 
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	// fairShare = ceil(6/3) = 2; should claim at most 2
 	claimed := reg.getClaimCalls()
@@ -208,7 +208,7 @@ func TestReconcile_FairShareAlreadyAtLimit(t *testing.T) {
 	n := newTestNode(reg)
 	n.startCoordinatorFn = func(_ string) error { return nil }
 
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	// fairShare = ceil(6/2) = 3; myTables already 3 → should claim 0
 	claimed := reg.getClaimCalls()
@@ -233,7 +233,7 @@ func TestReconcile_OwnershipVerification_StopsLostAssignment(t *testing.T) {
 	// We can't easily call Stop() on a zero-value CoordinatorUnit, so track
 	// the ownership verification logic by checking the coordinators map after
 	// reconcile. The Stop() call on a zero-value CU is a no-op (no goroutines).
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	if _, running := n.coordinators["table_b"]; running {
 		stopped["table_b"] = false
@@ -262,7 +262,7 @@ func TestReconcile_OwnershipVerification_StartsNewAssignment(t *testing.T) {
 	}
 	n.coordinators["existing"] = newTestCU()
 
-	n.reconcile()
+	n.reconcile() //nolint:errcheck
 
 	if !started["new_table"] {
 		t.Error("new_table should be started")
