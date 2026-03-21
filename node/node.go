@@ -159,9 +159,12 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		opt(n)
 	}
 
-	// Health server
+	// Health server with DB readiness check
 	if cfg.Health.Enabled {
 		n.healthSrv = health.NewServer(cfg.Health.Port, log)
+		if pool != nil {
+			n.healthSrv.AddChecker(&health.DBChecker{DB: pool})
+		}
 	}
 
 	success = true

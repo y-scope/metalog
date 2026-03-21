@@ -240,12 +240,19 @@ func (u *CoordinatorUnit) Start() {
 		u.registry.RunRecycler(ctx)
 	}()
 
-	// Kafka adapter goroutine
+	// Kafka adapter goroutine — if the adapter exits unexpectedly (fatal
+	// Kafka error), cancel the coordinator so the reconciliation loop can
+	// restart it. Without this, other goroutines (partition maintenance,
+	// alias refresh) mask the failure and IsStalled() never fires.
 	if u.kafkaAdapter != nil {
 		u.wg.Add(1)
 		go func() {
 			defer u.wg.Done()
 			u.kafkaAdapter.Start(ctx)
+			if ctx.Err() == nil {
+				u.log.Error("kafka adapter exited unexpectedly, cancelling coordinator")
+				u.cancel()
+			}
 		}()
 	}
 

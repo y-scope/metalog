@@ -5,17 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 )
 
+// ReadinessChecker performs a deep health check for the readiness probe.
+// Implementations should be fast (< 2s) and safe to call concurrently.
+type ReadinessChecker interface {
+	CheckReady(ctx context.Context) error
+}
+
 // Server provides an HTTP health check endpoint.
 type Server struct {
-	srv   *http.Server
-	ready atomic.Bool
-	log   *zap.Logger
+	srv      *http.Server
+	ready    atomic.Bool
+	checkers []ReadinessChecker
+	mu       sync.RWMutex
+	log      *zap.Logger
 }
 
 // NewServer creates a health server on the given port.
@@ -34,6 +43,15 @@ func NewServer(port int, log *zap.Logger) *Server {
 		IdleTimeout:       60 * time.Second,
 	}
 	return s
+}
+
+// AddChecker registers a readiness checker that is evaluated on every
+// readiness probe. Checkers are called sequentially; the first failure
+// makes the probe return 503.
+func (s *Server) AddChecker(c ReadinessChecker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkers = append(s.checkers, c)
 }
 
 // SetReady marks the server as ready to serve traffic.
@@ -62,11 +80,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	if s.ready.Load() {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "READY")
-	} else {
+	if !s.ready.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, "NOT READY")
+		return
 	}
+
+	// Run deep health checks with a short timeout.
+	s.mu.RLock()
+	checkers := s.checkers
+	s.mu.RUnlock()
+
+	if len(checkers) > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		for _, c := range checkers {
+			if err := c.CheckReady(ctx); err != nil {
+				s.log.Warn("readiness check failed", zap.Error(err))
+				w.WriteHeader(http.StatusServiceUnavailable)
+				fmt.Fprint(w, "NOT READY")
+				return
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "READY")
 }
