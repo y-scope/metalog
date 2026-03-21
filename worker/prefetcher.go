@@ -10,9 +10,15 @@ import (
 	"github.com/y-scope/metalog/taskqueue"
 )
 
+// TaskClaimer claims tasks from a task store. Extracted as an interface so the
+// Prefetcher can be unit-tested with a mock instead of a real database.
+type TaskClaimer interface {
+	ClaimTasks(ctx context.Context, tableName string, workerID string, batchSize int) ([]*taskqueue.Task, error)
+}
+
 // Prefetcher batch-claims tasks from the database and feeds them into a channel.
 type Prefetcher struct {
-	taskQueue *taskqueue.Queue
+	taskQueue TaskClaimer
 	workerID  string
 	batchSize int
 	tasks     chan *taskqueue.Task
@@ -21,7 +27,7 @@ type Prefetcher struct {
 }
 
 // NewPrefetcher creates a Prefetcher.
-func NewPrefetcher(tq *taskqueue.Queue, workerID string, batchSize int, log *zap.Logger) *Prefetcher {
+func NewPrefetcher(tq TaskClaimer, workerID string, batchSize int, log *zap.Logger) *Prefetcher {
 	return &Prefetcher{
 		taskQueue: tq,
 		workerID:  workerID,
