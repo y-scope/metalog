@@ -85,11 +85,16 @@ including field mapping, error handling, and dimension key formats.
 
 **Package:** `coordinator/ingestion` · **Interface:** `RecordTransformer`
 
-Transforms structured key-value data into `FileRecord` dimension and
-aggregation fields. This layer runs after the `MessageTransformer` (or after
-gRPC proto conversion) and handles semantic field mapping — deciding which
-fields become dimensions, how to parse nested payloads, and what aggregations
-to compute.
+> **Note:** The `RecordTransformer` registry infrastructure exists but is not
+> yet wired into the production ingestion pipeline. Records currently flow
+> through `MessageTransformer` (bytes → proto) and `ConvertRecord` (proto →
+> FileRecord) without invoking a `RecordTransformer`. The interface and
+> registry are available for internal use and will be connected in a future
+> release.
+
+Intended to transform structured key-value data into `FileRecord` dimension
+and aggregation fields after the `MessageTransformer` stage — handling
+semantic field mapping, nested payload parsing, and aggregation computation.
 
 ```go
 type RecordTransformer interface {
@@ -291,7 +296,7 @@ func main() {
 | Extension Point | Interface | Registration | Config |
 |----------------|-----------|--------------|--------|
 | Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_table_config` `kafka.record_transformer` |
-| Record Transformers | `ingestion.RecordTransformer` | `ingestion.RegisterRecordTransformer()` | `_table_config` `kafka.record_transformer` |
+| Record Transformers | `ingestion.RecordTransformer` | `ingestion.RegisterRecordTransformer()` | Not yet wired |
 | Storage Backends | `storage.Backend` | `storage.RegisterType()` | `node.yaml` `storage.backends` |
 | Consolidation Policies | `consolidation.Policy` | `consolidation.RegisterPolicyType()` | `_table_config` `consolidation.policies` |
 | Kafka Adapters | `node.KafkaAdapter` | `node.WithKafkaAdapterFactory()` | Programmatic (`NodeOption`) |

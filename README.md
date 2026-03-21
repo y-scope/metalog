@@ -158,11 +158,14 @@ For the full system design — data lifecycle, end-to-end data flow, and deploym
 <tbody>
 <tr><td rowspan="2">Getting Started</td><td><a href="docs/getting-started/quickstart.md">Quickstart</a></td><td>Prerequisites, build, run, verify</td></tr>
 <tr><td><a href="docs/getting-started/tutorial-ingestion.md">Tutorial: Ingestion</a></td><td>End-to-end Kafka ingestion walkthrough</td></tr>
-<tr><td rowspan="9">Concepts</td><td><a href="docs/concepts/data-model.md">Data Model</a></td><td>What data CLP handles, file formats, deployment modes</td></tr>
+<tr><td rowspan="12">Concepts</td><td><a href="docs/concepts/data-model.md">Data Model</a></td><td>What data CLP handles, file formats, deployment modes</td></tr>
 <tr><td><a href="docs/concepts/overview.md">Architecture Overview</a></td><td>System overview, data lifecycle, goroutine model</td></tr>
 <tr><td><a href="docs/concepts/metadata-schema.md">Metadata Schema</a></td><td>Entry types, lifecycle, denormalization, partitioning</td></tr>
 <tr><td><a href="docs/concepts/ingestion.md">Ingestion Paths</a></td><td>gRPC and Kafka ingestion, BatchingWriter</td></tr>
 <tr><td><a href="docs/concepts/consolidation.md">Consolidation</a></td><td>IR→Archive pipeline, policies, worker workflow</td></tr>
+<tr><td><a href="docs/concepts/deletion-lifecycle.md">Deletion & Lifecycle</a></td><td>File state machine, retention, purging, partition cleanup</td></tr>
+<tr><td><a href="docs/concepts/high-availability.md">High Availability</a></td><td>Coordination, heartbeat/lease, watchdog, shutdown</td></tr>
+<tr><td><a href="docs/concepts/sketches.md">Sketches</a></td><td>Bloom filter acceleration for high-cardinality fields</td></tr>
 <tr><td><a href="docs/design/task-queue.md">Task Queue</a></td><td>Database-backed task queue, claim protocol, recovery</td></tr>
 <tr><td><a href="docs/concepts/query-execution.md">Query Execution</a></td><td>Pruning pipeline, early termination, query catalog</td></tr>
 <tr><td><a href="docs/concepts/semantic-extraction.md">Semantic Extraction</a></td><td>log-surgeon, MPT, ERTs, LLM-powered schema generation</td></tr>

@@ -45,7 +45,9 @@ Built-in transformers are registered via `RegisterTransformer` and looked up by 
 
 ### RecordTransformer (Ingestion Layer)
 
-Defined in `coordinator/ingestion/transformer.go`. Transforms structured key-value data into `FileRecord` dimension and aggregation fields.
+> **Note:** The `RecordTransformer` interface and registry exist but are not yet wired into the production pipeline. The interface is available for future use.
+
+Defined in `coordinator/ingestion/transformer.go`. Intended to transform structured key-value data into `FileRecord` dimension and aggregation fields.
 
 ```go
 type RecordTransformer interface {

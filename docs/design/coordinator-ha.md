@@ -15,23 +15,12 @@ When a node starts:
 1. Resolve its `node_id` (see [Appendix A.1](#a1-node_id-resolution))
 2. Initialize coordination schema (`CREATE TABLE IF NOT EXISTS` for `_table*` and `_node_registry`)
 3. Signal liveness — heartbeat mode: register in `_node_registry`; lease mode: renew `lease_expiry` on any previously owned tables. This happens before claiming so other nodes can see this node as alive when computing fair share.
-4. Claim unassigned active tables via staggered fight-for-master — each node independently tries to claim tables, and the database ensures only one succeeds per table (tables are expected to be pre-registered; if added later, the reconciliation goroutine picks them up on its next cycle):
-   ```
-   loop:
-     compute fair_share = ceil(currently_assigned_tables / active_nodes)
-     if my_load >= fair_share → done
-     query one unassigned active table
-     if none → done
-     attempt atomic claim (UPDATE ... WHERE node_id IS NULL)
-     if claimed → signal liveness (lease mode), short random delay (0–1s), repeat
-   ```
-   Fair share is computed from currently assigned tables (those with a non-NULL `node_id`), not all active tables. Recomputing between each claim gives concurrent nodes time to become visible — especially in lease mode, where a node's first claim creates its first visible lease. This prevents a single fast-starting node from claiming all tables.
-5. Start a per-table coordinator for each assigned table
-6. Start background goroutines:
+4. Resume coordinators for tables already assigned to this node in the database (tables assigned via prior reconciliation cycles or manual DB assignment)
+5. Start background goroutines:
 
    Per-node (one instance regardless of how many tables the node owns):
    - **gRPC server** — accepts metadata from gRPC clients; not HA-related (see [Ingestion Paths](../concepts/ingestion.md))
-   - **Reconciliation goroutine** — claims unassigned tables, detects dead owners, reconciles running units with DB assignments, detects stalled coordinators (see [Health Monitoring](#health-monitoring))
+   - **Reconciliation goroutine** — claims unassigned tables via fair-share fight-for-master (`UPDATE ... WHERE node_id IS NULL`), detects dead owners, reconciles running units with DB assignments, detects stalled coordinators. Claiming of unassigned tables happens here (not at startup), on each reconciliation cycle (default: every 60s). See [Health Monitoring](#health-monitoring)
    - **Liveness goroutine** — heartbeat mode writes to `_node_registry`; lease mode renews `lease_expiry`
 
    Per-table (one instance per claimed table):
