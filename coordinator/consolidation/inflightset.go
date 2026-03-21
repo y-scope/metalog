@@ -3,7 +3,17 @@ package consolidation
 import "sync"
 
 // InFlightSet tracks IR paths that are currently being consolidated,
-// preventing the planner from creating duplicate tasks.
+// preventing the planner from creating duplicate tasks within a single
+// planner lifecycle.
+//
+// By design, InFlightSet is process-local and starts empty on every restart.
+// It is NOT persisted to the database. The database is the source of truth
+// for task state — if the planner restarts, it may create duplicate tasks for
+// files that already have pending tasks, but this is harmless: both workers
+// produce the same archive output, and the MarkArchiveClosed state guard
+// ensures only one succeeds. The cost of occasional duplicate work on restart
+// is far lower than the complexity of persisting and synchronizing in-flight
+// state across nodes.
 type InFlightSet struct {
 	mu    sync.RWMutex
 	paths map[string]bool

@@ -331,11 +331,12 @@ LIMIT 1000
 | Worker completes task from previous coordinator | UPDATE returns 0 (row deleted), worker deletes orphan archive |
 | Worker still processing when coordinator restarts | Worker eventually completes, finds no row, deletes orphan archive |
 
-**Duplicate work on recovery (accepted):** When the coordinator restarts, workers may still be processing old tasks. These workers complete their work, fail to UPDATE (row deleted), and delete their archives. Meanwhile, the new coordinator reprocesses the same source data. This is accepted because:
+**Duplicate work on recovery (by design):** The InFlightSet is intentionally process-local and starts empty on every planner restart. The database is the source of truth for task state — not the InFlightSet. On restart, the planner may create duplicate tasks for files that already have pending tasks, but this is harmless:
+- `MarkArchiveClosed` has a state guard that ensures only one task's result is applied
+- The second worker's archive is orphaned and cleaned up
 - Rare (only during coordinator restarts)
-- No correctness issues (self-healing cleans up orphans)
 - Cost is minimal (small amount of redundant compute)
-- Simpler than tracking in-flight workers across coordinator restarts
+- Far simpler than persisting and synchronizing in-flight state across nodes
 
 ### Clock Skew
 

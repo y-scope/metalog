@@ -204,7 +204,7 @@ The Planner runs on a configurable interval (default 60s) per table. Each cycle 
 | Step | Action | Details |
 |------|--------|---------|
 | 6 | Apply policy | Group candidate files using the configured policy (time window, spark job). |
-| 7 | Create tasks | For each group, build an LZ4+msgpack payload and insert a `pending` task into `_task_queue`. Files are tracked in an in-flight set to prevent duplicate tasks. |
+| 7 | Create tasks | For each group, build an LZ4+msgpack payload and insert a `pending` task into `_task_queue`. Files are tracked in a process-local in-flight set to prevent duplicate tasks within the same planner lifecycle. The set starts empty on restart by design — the database is the source of truth, and duplicate tasks are harmless (state guards prevent double-marking). |
 
 ### Stuck-File Promotion
 
