@@ -31,7 +31,7 @@ type DimensionInfo struct {
 // AggInfo holds aggregation metadata for a single column.
 type AggInfo struct {
 	Name            string
-	Value           string
+	Qualifier       string
 	AggregationType string // raw DB value, e.g. "EQ", "GTE"
 	ValueType       string // "INT" or "FLOAT"
 	AliasColumn     string
@@ -116,7 +116,7 @@ func (q *MetadataReader) ListAggs(ctx context.Context, tableName string) ([]AggI
 	for rows.Next() {
 		var colName string
 		var a AggInfo
-		if err := rows.Scan(&colName, &a.Name, &a.Value, &a.AggregationType, &a.ValueType, &a.AliasColumn); err != nil {
+		if err := rows.Scan(&colName, &a.Name, &a.Qualifier, &a.AggregationType, &a.ValueType, &a.AliasColumn); err != nil {
 			return nil, err
 		}
 		aggs = append(aggs, a)

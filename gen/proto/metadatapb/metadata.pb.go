@@ -398,7 +398,7 @@ func (x *ListAggsResponse) GetAggs() []*AggInfo {
 type AggInfo struct {
 	state           protoimpl.MessageState   `protogen:"open.v1"`
 	Name            string                   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Value           string                   `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Qualifier       string                   `protobuf:"bytes,2,opt,name=qualifier,proto3" json:"qualifier,omitempty"`
 	AggregationType splitspb.AggregationType `protobuf:"varint,3,opt,name=aggregation_type,json=aggregationType,proto3,enum=com.yscope.metalog.query.api.proto.grpc.AggregationType" json:"aggregation_type,omitempty"`
 	ValueType       AggValueType             `protobuf:"varint,4,opt,name=value_type,json=valueType,proto3,enum=com.yscope.metalog.query.api.proto.grpc.AggValueType" json:"value_type,omitempty"`
 	AliasColumn     string                   `protobuf:"bytes,5,opt,name=alias_column,json=aliasColumn,proto3" json:"alias_column,omitempty"`
@@ -443,9 +443,9 @@ func (x *AggInfo) GetName() string {
 	return ""
 }
 
-func (x *AggInfo) GetValue() string {
+func (x *AggInfo) GetQualifier() string {
 	if x != nil {
-		return x.Value
+		return x.Qualifier
 	}
 	return ""
 }

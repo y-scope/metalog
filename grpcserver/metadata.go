@@ -78,7 +78,7 @@ func (h *MetadataHandler) ListAggs(ctx context.Context, req *metapb.ListAggsRequ
 		}
 		aggInfo := &metapb.AggInfo{
 			Name:            a.Name,
-			Value:           a.Value,
+			Qualifier:       a.Qualifier,
 			AggregationType: splitspb.AggregationType(aggTypeVal),
 			AliasColumn:     a.AliasColumn,
 		}

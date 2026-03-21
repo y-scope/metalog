@@ -53,7 +53,7 @@ enum AggValueType {
 
 message AggInfo {
     string name = 1;
-    string value = 2;
+    string qualifier = 2;
     AggregationType aggregation_type = 3;
     AggValueType value_type = 4;
     string alias_column = 5;
