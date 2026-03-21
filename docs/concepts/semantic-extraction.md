@@ -84,9 +84,7 @@ Semantic processing occurs at multiple stages in the CLP pipeline:
 
 **Stage 3 — Consolidation Workers:** Load schema files, apply semantic labels during CLP-IR to CLP-Archive consolidation, extract variable keys and sync to metastore. See [Consolidation](consolidation.md).
 
-**Stage 4 — Metastore _(planned)_:** Variable keys (and optionally values) stored as a field in the `ext` column for fast metadata lookup and file pruning. The `ext` column (`MEDIUMBLOB`, LZ4+msgpack) currently stores sketch/bloom filter data; a `tags` field will be added to the ext payload in a future release.
-
-**Stage 5 — Query Layer _(planned)_:** Generated configs (from schema files) expose variables to Presto connectors, query APIs, and analytics tools as queryable semantic fields.
+> **Roadmap:** Stages 4 and 5 are planned. Stage 4 (Metastore) will store variable keys in the `ext` column's `tags` field for file pruning. Stage 5 (Query Layer) will expose extracted variables to Presto connectors and query APIs as queryable semantic fields.
 
 ```
 [Stage 1: Edge]                      [Stage 2: Training — periodic]
@@ -94,15 +92,6 @@ Logs -> log-surgeon -> IR files       Logs -> LLM -> Schema files
          |                                               |
          |                  [Stage 3: Workers]           |
          +----------------> IR + Schema -> Archive <-----+
-                                        |
-                                        | (variable sync — planned)
-                                        v
-                            [Stage 4: Metastore]
-                            ext column (tags field — planned)
-                                        |
-                                        v
-                            [Stage 5: Query]
-                            Presto, APIs, tools
 ```
 
 **Key points:**
@@ -465,7 +454,9 @@ variables:
 
 1. **Schema loading**: Workers poll, load, and cache schemas per table/service (auto-reload on updates)
 2. **Variable extraction**: CLP binaries apply schema patterns, extract variables, assign semantic labels, and place them in JSON output (root or nested, configurable via `JsonParser.on_conflict()`)
-3. **Storage and sync**: Variable values stored in columnar CLP-Archive format. _(Planned)_ A configurable subset of high-value correlation fields (e.g., `pipeline_id`, `request_id`) will be synced to the metastore `ext` column as a `tags` field for file pruning
+3. **Storage and sync**: Variable values stored in columnar CLP-Archive format.
+
+> **Roadmap:** A configurable subset of high-value correlation fields (e.g., `pipeline_id`, `request_id`) will be synced to the metastore `ext` column as a `tags` field for file pruning.
 
 ### Implementation Options
 
@@ -516,25 +507,7 @@ WHERE s.job_id = 'job-20241201-001' AND s.log_level = 'ERROR'
 ORDER BY s.timestamp
 ```
 
-### File Selection Workflow _(planned)_
-
-> **Not yet implemented.** The following SQL illustrates the planned query pattern once variable tags are synced to the `ext` column.
-
-```sql
--- Step 1: Find files with specific variables and errors (planned — tags field in ext)
-WITH relevant_files AS (
-  SELECT file_path FROM clp_files
-  WHERE JSON_CONTAINS(tags->>'$.variable_values.application_id', '"app-20241201143052-0042"')
-    AND JSON_CONTAINS(tags->>'$.variable_values.log_level', '"ERROR"')
-    AND timestamp_start BETWEEN '2024-12-01 14:00:00' AND '2024-12-01 15:00:00'
-)
--- Step 2: Query selected files
-SELECT spark_app_id, stage_id, executor_id, error_message, timestamp
-FROM logs
-WHERE file_path IN (SELECT file_path FROM relevant_files)
-  AND GET_CLP_STRING('log_level') = 'ERROR'
-ORDER BY timestamp DESC LIMIT 100
-```
+> **Roadmap: File Selection Workflow.** Once variable tags are synced to the `ext` column (Stage 4), queries will be able to prune files by extracted variable values (e.g., `application_id`, `log_level`) before opening any log files, enabling fast targeted searches across billions of files.
 
 ---
 
@@ -557,4 +530,4 @@ ORDER BY timestamp DESC LIMIT 100
 
 - [Architecture Overview](overview.md) — System overview, data lifecycle
 - [Consolidation](consolidation.md) — IR-Archive pipeline where schema files are applied
-- [Metadata Tables](../reference/metadata-tables.md) — Database schema, ext column (planned tags field for variable keys)
+- [Metadata Tables](../reference/metadata-tables.md) — Database schema, ext column

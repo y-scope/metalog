@@ -14,12 +14,11 @@ The gRPC server (default port `9090`) exposes services for querying split metada
 +------------------------------------------------------------------+
 |                        API Server (gRPC)                          |
 |                                                                   |
-|  +--------------+    +--------------+    +--------------+         |
-|  |     REST     |    |     gRPC     |    |     MCP      |         |
-|  |   (future)   |    |    :9090     |    |   (future)   |         |
-|  +------+-------+    +------+-------+    +------+-------+         |
-|         |                   |                   |                  |
-|         +-------------------+-------------------+                  |
+|                       +--------------+                              |
+|                       |     gRPC     |                              |
+|                       |    :9090     |                              |
+|                       +------+-------+                              |
+|                              |                                      |
 |                             v                                     |
 |                    +----------------+                              |
 |                    | Query Service  |                              |
@@ -442,9 +441,8 @@ accidental scans.
 | Protocol | Approach |
 |----------|----------|
 | **gRPC** | Native streaming with early termination |
-| **REST** (future) | Cursor-based (server remains stateless) |
 
-**gRPC cursor (implemented):**
+**gRPC cursor:**
 
 Set `include_cursor=true` in `StreamSplitsRequest`. Each `StreamSplitsResponse` includes a `KeysetCursor` with one typed `CursorValue` per `order_by` field plus the row's `id`. Pass the cursor back in a new `StreamSplitsRequest` (with the same `order_by`) to resume iteration from that position.
 
@@ -560,16 +558,7 @@ grpcurl -plaintext -d '{"table": "clp_spark"}' localhost:9090 \
 
 ---
 
-## Future API Categories
-
-> **Note:** The query APIs (`SplitQueryService`, `MetadataService`), the ingestion API (`MetadataIngestionService`), and the coordinator management API (`AdminService`) are all implemented. The categories below describe higher-level planned APIs built on top of these primitives.
-
-| Category | Primary Use Case |
-|----------|------------------|
-| **Analytics** (future) | Dashboards, cost attribution |
-| **Search** (future) | Find files by trace ID, known patterns |
-| **Semantic** (future) | Explore structure, find similar patterns |
-| **MCP** (future) | LLM integration via natural language |
+> **Roadmap:** Future API categories (Analytics, Search, Semantic, MCP) are planned as higher-level services built on top of the implemented `SplitQueryService`, `MetadataService`, `MetadataIngestionService`, and `AdminService` primitives.
 
 ---
 

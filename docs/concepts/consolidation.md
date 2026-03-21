@@ -38,15 +38,14 @@ Consolidation is a full data transformation pipeline — not just compression or
 
 **Pipeline stages:**
 
-| Stage | Description |
-|-------|-------------|
-| **Semantic extraction** ([log-surgeon](https://github.com/y-scope/log-surgeon)) | Variable-first parsing with automatic template inference; domain-specific labels consistent across services |
-| **PII detection** _(planned)_ | Identify sensitive data via patterns, NER, and ML models |
-| **PII obfuscation** _(planned)_ | Mask, redact, or tokenize detected sensitive fields |
-| **Encryption** _(planned)_ | Encrypt sensitive content for compliance requirements |
-| **Filter computation** | Build bloom filters for search acceleration |
-| **Grouping** | Combine files by dimensions (app_id, service, time window) |
-| **Compression** (CLP encoding) | Columnar encoding, cross-file deduplication, entropy coding |
+| Stage | Status | Description |
+|-------|--------|-------------|
+| **Semantic extraction** ([log-surgeon](https://github.com/y-scope/log-surgeon)) | Implemented | Variable-first parsing with automatic template inference; domain-specific labels consistent across services |
+| **Filter computation** | Implemented | Build bloom filters for search acceleration |
+| **Grouping** | Implemented | Combine files by dimensions (app_id, service, time window) |
+| **Compression** (CLP encoding) | Implemented | Columnar encoding, cross-file deduplication, entropy coding |
+
+> **Roadmap:** PII detection, PII obfuscation, and encryption are planned for a future release.
 
 At scale (billions of files, tens to hundreds of petabytes), CLP-IR alone is insufficient for analytical workloads. Point queries (debugging a single job) work well with CLP-IR, but analytical queries (e.g., "all auth failures across all services in 7 days") hit bottlenecks: file count overhead dominates query time, row-based scans read entire records, and there is no semantic variable extraction.
 
@@ -150,18 +149,7 @@ Two built-in policy types are registered in the `consolidation` package:
 
 Both policies support `minFiles` (minimum files to form a group) and `maxFiles` (maximum files per task) thresholds. `spark_job` also supports a `jobTimeout` duration for forcing consolidation of incomplete groups.
 
-### Archive Size Feedback Loop _(planned)_
-
-> **Not yet implemented.** The planner currently groups files by count (`min_files`/`max_files`) without size estimation. The following describes the planned design.
-
-The system will target 32–64 MB archives using a learned compression ratio per table.
-
-**Planned design:**
-
-1. **Estimate** — before consolidation, estimate archive size from total IR size divided by the learned ratio (default: 2.5x, meaning IR is approximately 2.5x the size of the resulting archive)
-2. **Split if needed** — if the estimate exceeds the target, split the task into smaller tasks
-3. **Update ratio** — after consolidation, compute the actual ratio (IR size / archive size) and blend it with the learned ratio using exponential moving average (alpha = 0.1)
-4. **Converge** — the ratio stabilizes after a few consolidation cycles without manual tuning
+> **Roadmap: Archive Size Feedback Loop.** The planner currently groups files by count (`min_files`/`max_files`) without size estimation. A future release will target 32–64 MB archives using a learned compression ratio per table, splitting oversized tasks automatically.
 
 ---
 
@@ -174,11 +162,11 @@ Workers execute the full consolidation pipeline:
 | Step | Action | Details |
 |------|--------|---------|
 | 1 | Read IR files from object storage | Download source files for this task |
-| 2 | Semantic extraction _(planned)_ | Extract trace IDs, user IDs, etc. via [log-surgeon](https://github.com/y-scope/log-surgeon) |
-| 3 | PII detection and obfuscation _(planned)_ | If configured — mask, redact, or tokenize sensitive fields |
-| 4 | Build CLP-Archive | Columnar layout, cross-file deduplication, entropy encoding |
-| 5 | Write archive to object storage | Atomic upload of the finished archive |
-| 6 | Report completion | Archive path, size, and metadata written back to the database |
+| 2 | Build CLP-Archive | Columnar layout, cross-file deduplication, entropy encoding |
+| 3 | Write archive to object storage | Atomic upload of the finished archive |
+| 4 | Report completion | Archive path, size, and metadata written back to the database |
+
+> **Roadmap:** Semantic extraction (log-surgeon variable extraction) and PII detection/obfuscation will be added as pipeline stages between steps 1 and 2 in a future release.
 
 ### Worker Lifecycle
 

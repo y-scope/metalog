@@ -45,14 +45,10 @@ graph TD
 ```mermaid
 graph TD
     QueryGRPC["Query gRPC"]
-    QueryREST["REST (planned)"]
-    QueryMCP["MCP (planned)"]
     QS["Query Service"]
     DB[("Database<br/>(replicas preferred)")]
 
     QueryGRPC --> QS
-    QueryREST --> QS
-    QueryMCP --> QS
     QS -->|"(4) query metadata"| DB
 ```
 
@@ -60,8 +56,8 @@ graph TD
 
 1. **Ingestion** — the Client SDK writes files (IR or archives) to object storage and sends file metadata to the coordinator via gRPC (push, commit-then-ack) or Kafka (pull, poll-based consumption). IR files may be destined for consolidation into archives or left as-is.
 2. **Persistence** — the coordinator batch-UPSERTs metadata to the database and generates workflow tasks (e.g., consolidation).
-3. **Processing** — a `Prefetcher` batch-claims tasks from `_task_queue`; workers pull tasks from the in-memory queue, consolidate IR → Archive (semantic extraction and enrichment, PII handling), and report results back for metadata updates.
-4. **Data access** — the Query Service exposes metadata via gRPC (REST and MCP planned); queries go to database replicas when available, primary otherwise.
+3. **Processing** — a `Prefetcher` batch-claims tasks from `_task_queue`; workers pull tasks from the in-memory queue, consolidate IR → Archive, and report results back for metadata updates.
+4. **Data access** — the Query Service exposes metadata via gRPC; queries go to database replicas when available, primary otherwise.
 
 ---
 
@@ -113,7 +109,7 @@ Stateless processes that transform IR files into Archives — row-to-column tran
 
 ### Query Service
 
-Read-only metadata access via gRPC (streaming with early termination), with REST and MCP planned. All protocols share the same `QueryService` implementation. Queries go to database replicas when available, primary otherwise.
+Read-only metadata access via gRPC streaming with early termination. All query protocols share the same `QueryService` implementation. Queries go to database replicas when available, primary otherwise.
 
 - **[gRPC API Reference](../reference/grpc-api.md)** — gRPC services, proto messages, keyset pagination, configuration
 

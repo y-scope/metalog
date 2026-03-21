@@ -152,7 +152,7 @@ Both involve timestamps, but they detect different failures at different layers:
 | `last_heartbeat_at` / `lease_expiry` | Dead node (process gone) | DB writes by liveness goroutine, checked by remote peers | Peers claim the table |
 | `ProgressTracker` (in-memory) | Stalled coordinator (node alive, goroutines hung) | Atomic timestamp updated by alias refresh + partition maintenance, checked during reconciliation | Local node restarts the coordinator |
 
-Stall detection is currently **in-memory only** — the `ProgressTracker` uses an `atomic.Int64` per coordinator unit, not a database write. The `_table_assignment.last_progress_at` column exists in the schema but is not yet written by the coordinator. Cross-node stall visibility via SQL is planned but not yet implemented.
+**Limitation:** Stall detection is currently **in-memory only** — the `ProgressTracker` uses an `atomic.Int64` per coordinator unit, not a database write. The `_table_assignment.last_progress_at` column exists in the schema but is not written by the coordinator. Cross-node stall visibility via SQL is not yet available; stalls are only detected by the local node's reconciliation loop.
 
 ### Visibility Queries
 
