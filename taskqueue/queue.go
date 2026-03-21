@@ -40,7 +40,12 @@ func NewQueue(database *sql.DB, log *zap.Logger) *Queue {
 func (q *Queue) SetMaxRetries(n int) { q.maxRetries = n }
 
 // SetCleanupBatchLimit sets the max rows deleted per CleanupOldTasks call.
-func (q *Queue) SetCleanupBatchLimit(n int) { q.cleanupBatchLimit = n }
+// Values <= 0 are ignored (keeps the current limit).
+func (q *Queue) SetCleanupBatchLimit(n int) {
+	if n > 0 {
+		q.cleanupBatchLimit = n
+	}
+}
 
 // CreateTask inserts a new pending task and returns its ID.
 func (q *Queue) CreateTask(ctx context.Context, tableName string, version uint8, input []byte) (int64, error) {

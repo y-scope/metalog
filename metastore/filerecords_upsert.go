@@ -102,7 +102,7 @@ func BuildGuardedUpsertSQL(
 		return rowAlias + "." + quoted
 	}
 
-	guard := ColState + " NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + dbutil.QuoteIdentifier(ColMaxTimestamp)
+	guard := dbutil.QuoteIdentifier(ColState) + " NOT IN (" + strings.Join(guardStates, ",") + ") AND " + newRef(ColMaxTimestamp) + " > " + dbutil.QuoteIdentifier(ColMaxTimestamp)
 
 	// Guarded columns: everything except max_timestamp (which goes last)
 	first := true

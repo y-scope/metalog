@@ -706,12 +706,11 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 		}
 	}
 
-	// Advance slot counter immediately after ALTER succeeds so that any
-	// retry (if a registry INSERT below fails) will generate fresh slot names
-	// rather than colliding with the physical columns we just added.
-	cr.nextDimSlot += len(slots)
-
-	// Insert registry rows and update cache individually.
+	// Insert registry rows and update cache individually. The slot counter
+	// is advanced per successful INSERT so that on a partial failure, only
+	// the successfully registered slots are consumed — orphaned physical
+	// columns (from the ALTER) will be reused on the next attempt since
+	// isDuplicateColumn handles the already-existing column gracefully.
 	now := time.Now().UnixNano()
 	for _, s := range slots {
 		insertQuery, insertArgs, _ := sq.Insert(metastore.DimRegistryTable).
@@ -721,6 +720,7 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 		if _, err := cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 			return nil, fmt.Errorf("insert dim registry for %s: %w", s.req.DimKey, err)
 		}
+		cr.nextDimSlot++
 
 		entry := &DimRegistryEntry{
 			TableName: cr.tableName, ColumnName: s.colName,
@@ -853,9 +853,8 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 		}
 	}
 
-	// Advance slot counter immediately after ALTER succeeds (same rationale as dims).
-	cr.nextAggSlot += len(slots)
-
+	// Insert registry rows and advance slot counter per successful INSERT
+	// (same rationale as dims — avoids orphaning slots on partial failure).
 	now := time.Now().UnixNano()
 	for _, s := range slots {
 		insertQuery, insertArgs, _ := sq.Insert(metastore.AggRegistryTable).
@@ -865,6 +864,7 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 		if _, err := cr.db.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
 			return nil, fmt.Errorf("insert agg registry for %s: %w", s.req.AggKey, err)
 		}
+		cr.nextAggSlot++
 
 		key := AggCacheKey(s.req.AggKey, s.req.AggValue, s.req.AggType)
 		entry := &AggRegistryEntry{
