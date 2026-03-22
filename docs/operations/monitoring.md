@@ -65,9 +65,36 @@ curl -s http://coordinator:8081/health/ready
 
 ---
 
-## Key Metrics
+## Prometheus Metrics
 
-The service does not currently expose a Prometheus scrape endpoint. Use the database visibility queries below as your primary observability layer — everything is in MariaDB/MySQL.
+When telemetry is enabled (`telemetry.enabled: true` in `node.yaml`), the node exposes a Prometheus-compatible `/metrics` endpoint on the health port (default 8081):
+
+```yaml
+telemetry:
+  enabled: true
+  exporter: prometheus  # default
+```
+
+```bash
+curl http://localhost:8081/metrics
+```
+
+Key metrics exposed:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `metalog_ingestion_records_submitted` | Counter | Records submitted to BatchingWriter (by table) |
+| `metalog_ingestion_records_flushed` | Counter | Records flushed to DB (by table, status) |
+| `metalog_ingestion_flush_duration_seconds` | Histogram | Batch flush latency (by table) |
+| `metalog_ingestion_submit_rejected` | Counter | Records rejected (by table, reason) |
+| `metalog_kafka_messages_consumed` | Counter | Kafka messages consumed (by topic) |
+| `metalog_kafka_messages_failed` | Counter | Kafka message failures (by topic, reason) |
+
+For custom exporters (Datadog, M3, etc.), see [Extending — Telemetry Exporters](../guides/extending.md#5-telemetry-exporters-metrics-backend).
+
+## Database Visibility Queries
+
+The database is supplementary to Prometheus metrics — useful for ad-hoc investigation and for environments where Prometheus is not yet configured.
 
 ### Ingestion throughput
 

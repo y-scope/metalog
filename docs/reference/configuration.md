@@ -114,6 +114,9 @@ worker:
 | `grpc.metadata` | `false` | Enable metadata gRPC service (uses `database.replica`, falls back to primary) |
 | `grpc.blockingIngestion` | `true` | Block gRPC Ingest RPCs until channel has space (`true`, ~2x throughput) or return `RESOURCE_EXHAUSTED` immediately (`false`). See [Ingestion Backpressure](../concepts/ingestion.md#grpc-push). |
 | `logging.failureLogIntervalSeconds` | `60` | Throttle interval for repeated failure log messages. First failure always logged immediately; subsequent repeat at this interval. |
+| `telemetry.enabled` | `false` | Enable OpenTelemetry metrics collection |
+| `telemetry.exporter` | `prometheus` | Metrics exporter: `"prometheus"` (serves `/metrics` on health port), or a custom name registered via `telemetry.RegisterExporter()`. See [Extending — Telemetry Exporters](../guides/extending.md#5-telemetry-exporters-metrics-backend). |
+| `telemetry.options` | `{}` | Exporter-specific key-value options passed to the factory |
 | `coordinator.enabled` | `false` | Enable coordinator subsystem |
 | `coordinator.name` | (hostname) | Human-readable coordinator name |
 | `coordinator.nodeIdEnvVar` | `HOSTNAME` | Env var for node identity |
