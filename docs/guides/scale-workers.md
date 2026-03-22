@@ -1,0 +1,255 @@
+# Scale Workers
+
+[← Back to docs](../README.md)
+
+How to configure, scale, and troubleshoot the consolidation worker pool. Workers execute consolidation tasks by claiming from `_task_queue` and accessing object storage directly without going through the coordinator.
+
+There are two worker deployment modes with different claiming strategies:
+
+- **In-process workers** — run as goroutines inside the Node process alongside coordinators (`worker.concurrency > 0` in the same config). A single `Prefetcher` goroutine batch-claims tasks from any table into a buffered channel; worker goroutines receive from the channel instead of hitting the database directly. Used for development and testing.
+- **Dedicated worker nodes** — run `./metalog serve` with a worker-only config (`worker.concurrency > 0`, no coordinator settings) on dedicated machines. Each process runs its own Prefetcher + worker goroutines with the same architecture. Used in production for fault isolation and independent scaling.
+
+## Overview
+
+| Component | Role |
+|-----------|------|
+| **Coordinator** | Per-table goroutines + Node-level goroutines (BatchingWriter, watchdog, HA, reconciliation) |
+| **Workers (in-process)** | Goroutines inside the Node process, sharing resources (dev/test) |
+| **Workers (dedicated)** | `./metalog serve` with worker-only config on dedicated machines (production) |
+| **Communication** | Database polling (`_task_queue` table) |
+| **Storage** | Workers access object storage directly (no coordinator bottleneck) |
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| In-process mode | Simple deployment for dev/test, shared connection pool, single config |
+| Dedicated worker nodes | Fault isolation, independent scaling (production) |
+| Prefetcher + channel | One DB claim transaction per batch instead of one per worker; workers wake via channel receive at zero CPU cost |
+| `FOR UPDATE SKIP LOCKED` + `UPDATE` | Transactional task claiming in READ COMMITTED isolation; concurrent claimers skip locked rows instead of blocking |
+| Direct storage access | Workers bypass coordinator for data transfer |
+| Failure reporting | Workers report failures via `CompleteTask` (with error result) or `FailTask`; the coordinator's planner handles retry and dead-lettering |
+
+## Task Lifecycle
+
+### State Transitions
+
+| State | Description | Transition |
+|-------|-------------|------------|
+| **pending** | Task created by Planner, waiting for worker | → processing (on claim) |
+| **processing** | Worker executing task | → completed (success) or failed (error) |
+| **completed** | Archive created successfully | Deleted after grace period |
+| **failed** | Execution failed | Deleted after grace period |
+| **timed_out** | Worker took too long, task reclaimed | New pending task created |
+| **dead_letter** | Max retries exceeded | Preserved for investigation |
+
+### Detailed Flow
+
+1. **Task Creation** (Planner goroutine)
+   - Queries database for files in `IR_ARCHIVE_CONSOLIDATION_PENDING` state
+   - Groups files by policy (TimeWindow, SparkJob)
+   - Creates `TaskPayload` with consolidation data (IR paths, storage info)
+   - Inserts to `_task_queue` table with state = `pending`
+
+2. **Task Claiming**
+   - A single `Prefetcher` goroutine executes `SELECT ... FOR UPDATE` + `UPDATE` in a READ COMMITTED transaction to batch-claim tasks. Claimed tasks are sent to a buffered channel. Worker goroutines receive from the channel (blocking). Prefetcher backs off (2s → 30s) when no tasks are available.
+   - Both in-process and dedicated worker nodes use the same Prefetcher + channel architecture.
+
+3. **Task Execution** (Worker)
+   - Deserializes `TaskPayload` from task
+   - Downloads IR files from object storage
+   - Creates compressed archive (CLP compression)
+   - Uploads archive to object storage
+   - Measures actual archive size
+
+4. **Task Completion** (Worker via Database)
+   - Worker calls `completeTask(taskId, result)` - UPDATE with state = `completed`
+   - Returns number of rows affected (0 = task was already reclaimed by coordinator)
+   - If rows affected = 0, worker logs a warning and leaves the archive in place — the coordinator's reclaim/retry logic handles cleanup
+
+5. **Failure Handling**
+   - Worker calls `completeTask(taskId, errorResult)` for archive creation failures, or `failTask(taskId)` for version/unmarshal errors
+   - Planner reclaims stale tasks (processing > timeout)
+   - Retry creates new pending task with incremented retry_count
+   - After max retries, task moves to dead_letter
+
+## Database Protocol
+
+Workers interact with the `_task_queue` table using `SELECT ... FOR UPDATE` + `UPDATE` (READ COMMITTED isolation) for transactional task claiming. For the complete task queue schema, claiming protocol, state machine, recovery model, and performance analysis, see [Task Queue Design](../design/task-queue.md).
+
+### TaskPayload Fields
+
+The payload version is stored as a column in `_task_queue` (not inside the blob). Consolidation-specific data is nested under `consolidation` in the LZ4+msgpack blob:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `_task_queue.version` | uint8 | Payload schema version (column, currently 1) |
+| `table_name` | String | Target metadata table |
+| `consolidation.ir_paths` | List\<String\> | Source IR file object keys to consolidate |
+| `consolidation.ir_buckets` | List\<String\> | Source IR storage bucket per file |
+| `consolidation.ir_backend` | String | Source IR storage backend name |
+| `consolidation.archive_bucket` | String | Target archive storage bucket |
+| `consolidation.archive_backend` | String | Target archive storage backend name |
+| `consolidation.file_ids` | List\<int64\> | Database primary keys of the grouped files |
+| `consolidation.min_timestamp` | int64 | Earliest event timestamp across all files (epoch nanos) |
+| `consolidation.archive_path` | String | Target archive object key (UUIDv7 + `.clp.zst`, generated by policy) |
+
+## Scaling with Docker Compose
+
+Workers are configured via a YAML file (not environment variables), the same as coordinator nodes. Create a `worker.yaml` with `worker.concurrency > 0` and no `coordinator` section:
+
+```yaml
+# worker.yaml — worker-only node
+database:
+  primary:
+    host: db
+    port: 3306
+    database: metalog_metastore
+    user: root
+    password: password
+
+storage:
+  defaultBackend: minio
+  backends:
+    minio:
+      type: s3
+      endpoint: http://minio:9000
+      accessKey: minioadmin
+      secretKey: minioadmin
+      bucket: logs
+      forcePathStyle: true
+
+worker:
+  concurrency: 4
+  # clpBinaryPath: /usr/bin/clp-s  # auto-resolved from $PATH if omitted
+```
+
+```yaml
+# docker-compose worker service
+worker:
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  depends_on:
+    mariadb:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  volumes:
+    - ./worker.yaml:/etc/clp/node.yaml:ro
+  deploy:
+    replicas: 2  # Scale here
+```
+
+### Scaling Commands
+
+```bash
+# Scale to 5 workers
+docker compose -f docker/docker-compose.yml up -d --scale worker=5
+
+# Check worker status
+docker compose -f docker/docker-compose.yml ps | grep worker
+```
+
+### Scaling Guidelines
+
+| Workload | Workers | Notes |
+|----------|--------:|-------|
+| Development | 1-2 | Minimal resources |
+| Testing | 2-4 | Parallel task execution |
+| Production (small) | 4-8 | ~1000 archives/hour |
+| Production (large) | 10-20 | ~5000 archives/hour |
+
+**Scaling considerations:**
+- Archive creation is I/O bound (storage throughput)
+- More workers = more parallel downloads/uploads
+- Diminishing returns beyond storage bandwidth
+- Monitor object storage request rates for bottlenecks
+- Database polling scales well with `FOR UPDATE` transactional claims
+
+## Configuration
+
+Workers are configured entirely via YAML — no environment variables are used. The relevant YAML sections are:
+
+| YAML property | Default | Description |
+|---------------|---------|-------------|
+| `worker.concurrency` | `0` (disabled) | Number of concurrent worker goroutines |
+| `worker.clpBinaryPath` | `$PATH` lookup | Path to the `clp-s` binary |
+| `worker.clpProcessTimeoutSeconds` | `300` | Timeout for each `clp-s` invocation |
+| `database.primary.*` | — | Database connection (shared with coordinator if co-located) |
+| `storage.backends.*` | — | Storage backends for IR download and archive upload |
+
+See [Configuration Reference](../reference/configuration.md) for the full property list.
+
+## Error Handling
+
+### Worker-Side Errors
+
+| Error | Behavior | Recovery |
+|-------|----------|----------|
+| No task available | Prefetcher backs off (2s → 30s); workers block on channel receive at zero CPU cost | Automatic |
+| Database connection error | Log and retry | Automatic retry |
+| Task execution failure | Report via `completeTask()` with error result | Planner processes error result |
+| Storage download error | Report via `completeTask()` with error result | Planner processes error result |
+| Storage upload error | Report via `completeTask()` with error result; orphan archive deleted | Planner processes error result |
+| Completion returns 0 rows | Log warning, leave archive (coordinator handles reclaim) | N/A |
+
+### Coordinator-Side Errors (Planner)
+
+| Error | Behavior | Recovery |
+|-------|----------|----------|
+| Task timeout | Mark timed_out, create retry | Automatic |
+| Max retries exceeded | Move to dead_letter | Manual investigation |
+| Database error | Log and continue | Next planning cycle |
+
+### Retry Semantics
+
+- **Limited retries** — tasks retry up to `max_retries` (default: 3)
+- **Exponential backoff** — workers back off when no tasks are available
+- **Idempotent execution** — archive creation overwrites existing files
+- **At-least-once delivery** — tasks may execute multiple times on failure
+- **Dead letter** — tasks that exceed max retries are preserved for investigation
+
+## Troubleshooting
+
+### Workers Not Claiming Tasks
+
+| Check | Command |
+|-------|---------|
+| Tasks available? | `SELECT COUNT(*) FROM _task_queue WHERE state = 'pending'` |
+| Database connectivity? | `mariadb -h db -u root -p -e "SELECT 1"` |
+| Worker logs | `docker compose -f docker/docker-compose.yml logs worker` |
+| Index exists? | `SHOW INDEX FROM _task_queue` |
+
+### Tasks Stuck in Processing
+
+| Check | Solution |
+|-------|----------|
+| Worker health | `docker compose -f docker/docker-compose.yml ps \| grep worker` |
+| Task age | `SELECT *, (UNIX_TIMESTAMP() * 1000000000 - claimed_at) DIV 1000000000 AS age_seconds FROM _task_queue WHERE state = 'processing'` |
+| Planner running? | Check coordinator logs for "planner" |
+| Stale timeout | `DefaultTaskStaleTimeout = 5m` (internal constant in `config/timeouts.go`) |
+
+### Archive Creation Failures
+
+| Check | Solution |
+|-------|----------|
+| Object storage connectivity | Workers need direct object storage access |
+| Bucket permissions | IR and archive buckets must be accessible |
+| Disk space | Object storage volume may be full |
+| Worker logs | `docker compose -f docker/docker-compose.yml logs worker \| grep -i error` |
+
+### Orphan Archives
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Archives without metadata | Worker created archive but failed before completing the task | Check worker logs, manual cleanup |
+| Growing storage usage | Repeated worker failures leaving partial archives | Verify storage connectivity; check worker logs |
+
+## See Also
+
+- [Task Queue Design](../design/task-queue.md) — Full task queue protocol, schema, recovery, performance
+- [CLP Integration](integrate-clp.md) — Worker-CLP binary integration for IR→Archive
+- [Consolidation](../concepts/consolidation.md) — Consolidation pipeline and policies
+- [Architecture Overview](../concepts/overview.md) — System overview and data lifecycle
+- [Performance Tuning](../operations/performance-tuning.md) — Benchmarks and tuning
