@@ -419,7 +419,57 @@ Policies are evaluated in order (waterfall). See [Consolidation](../concepts/con
 
 ---
 
-### 5. Record Transformers (semantic enrichment)
+### 5. Telemetry Exporters (metrics backend)
+
+**Package:** `telemetry` · **Interface:** `ExporterFactory`
+
+Plugs in a custom OpenTelemetry metrics exporter. The built-in Prometheus
+exporter serves metrics on the health port's `/metrics` endpoint. Enterprise
+deployments can register additional exporters (Datadog, M3, Cortex, etc.)
+to send metrics to their internal observability stack.
+
+```go
+type ExporterFactory func(cfg map[string]string) (sdkmetric.Reader, error)
+```
+
+**Built-in:** `"prometheus"` (default — serves `/metrics` on health port)
+
+**Register:**
+
+```go
+package metrics
+
+import (
+    "github.com/y-scope/metalog/telemetry"
+    sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+)
+
+func init() {
+    telemetry.RegisterExporter("m3", func(cfg map[string]string) (sdkmetric.Reader, error) {
+        endpoint := cfg["endpoint"]
+        // Create your M3/Datadog/custom exporter and return it as a Reader
+        return newM3Reader(endpoint)
+    })
+}
+```
+
+**Activate** in `node.yaml`:
+
+```yaml
+telemetry:
+  enabled: true
+  exporter: m3
+  options:
+    endpoint: "m3-collector.internal:9000"
+```
+
+The `options` map is passed directly to your factory — parse whatever
+keys your exporter needs. The built-in `"prometheus"` exporter ignores
+options (it uses the health port).
+
+---
+
+### 6. Record Transformers (semantic enrichment)
 
 **Package:** `coordinator/ingestion` · **Interface:** `RecordTransformer`
 
@@ -591,6 +641,7 @@ This keeps the binary identical and simplifies rollouts.
 | Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_table_config` `kafka.record_transformer` |
 | Kafka Adapters | `node.KafkaAdapter` | `node.WithKafkaAdapterFactory()` | Programmatic (`NodeOption`) |
 | Consolidation Policies | `consolidation.Policy` | `consolidation.RegisterPolicyType()` | `_table_config` `consolidation.policies` |
+| Telemetry Exporters | `telemetry.ExporterFactory` | `telemetry.RegisterExporter()` | `node.yaml` `telemetry.exporter` |
 | Record Transformers | `ingestion.RecordTransformer` | `ingestion.RegisterRecordTransformer()` | Not yet wired |
 
 ---
