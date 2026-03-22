@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	coordinatorpb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
@@ -19,6 +20,7 @@ import (
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/query"
+	"github.com/y-scope/metalog/telemetry"
 )
 
 // Server implements the "metalog serve" subcommand. It parses --config, starts
@@ -36,7 +38,25 @@ func runServer() {
 		log.Fatal("failed to load config", zap.String("path", *configPath), zap.Error(err))
 	}
 
-	n, err := node.NewNode(cfg, log, node.WithKafkaAdapterFactory(kafka.NewDefaultAdapterFactory(nil)))
+	// Create telemetry provider before the node so the Kafka adapter factory
+	// can receive its meter at construction time.
+	var telProv *telemetry.Provider
+	if cfg.Telemetry.Enabled {
+		telProv, err = telemetry.NewProvider(cfg.Telemetry)
+		if err != nil {
+			log.Fatal("failed to create telemetry provider", zap.Error(err))
+		}
+	}
+
+	var kafkaMeter metric.Meter
+	if telProv != nil {
+		kafkaMeter = telProv.Meter("metalog.kafka")
+	}
+
+	n, err := node.NewNode(cfg, log,
+		node.WithKafkaAdapterFactory(kafka.NewDefaultAdapterFactory(kafkaMeter)),
+		node.WithTelemetryProvider(telProv),
+	)
 	if err != nil {
 		log.Fatal("failed to create node", zap.Error(err))
 	}

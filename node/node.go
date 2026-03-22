@@ -39,6 +39,9 @@ type Node struct {
 	reconcileReg reconcileRegistry
 	// startCoordinatorFn overrides startCoordinator for testing.
 	startCoordinatorFn func(tableName string) error
+	// externalTelemetry is set via WithTelemetryProvider when the caller
+	// creates the provider externally (e.g., to share it with Kafka factory).
+	externalTelemetry *telemetry.Provider
 
 	log    *zap.Logger
 	ctx    context.Context
@@ -134,16 +137,8 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	// Create archive creator
 	archiveCreator := storage.NewArchiveCreator(storageReg, compressor, log)
 
-	// Create telemetry provider
+	// Create telemetry provider (or use externally provided one)
 	var telemetryProvider *telemetry.Provider
-	if cfg.Telemetry.Enabled {
-		var err error
-		telemetryProvider, err = telemetry.NewProvider(cfg.Telemetry)
-		if err != nil {
-			return nil, fmt.Errorf("create telemetry provider: %w", err)
-		}
-		log.Info("telemetry enabled", zap.String("exporter", cfg.Telemetry.Exporter))
-	}
 
 	shared := &Resources{
 		DB:                 pool,
@@ -176,6 +171,20 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	for _, opt := range opts {
 		opt(n)
 	}
+
+	// Resolve telemetry provider: use external (from WithTelemetryProvider)
+	// or create from config.
+	if n.externalTelemetry != nil {
+		telemetryProvider = n.externalTelemetry
+	} else if cfg.Telemetry.Enabled {
+		var err error
+		telemetryProvider, err = telemetry.NewProvider(cfg.Telemetry)
+		if err != nil {
+			return nil, fmt.Errorf("create telemetry provider: %w", err)
+		}
+		log.Info("telemetry enabled", zap.String("exporter", cfg.Telemetry.Exporter))
+	}
+	n.shared.Telemetry = telemetryProvider
 
 	// Health server with DB readiness check and metrics endpoint
 	if cfg.Health.Enabled {

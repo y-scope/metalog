@@ -8,6 +8,7 @@ import (
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
 	"github.com/y-scope/metalog/metastore"
+	"github.com/y-scope/metalog/telemetry"
 )
 
 // ErrKafkaNotConfigured is returned by a KafkaAdapterFactory when the table
@@ -43,5 +44,13 @@ type NodeOption func(*Node)
 func WithKafkaAdapterFactory(f KafkaAdapterFactory) NodeOption {
 	return func(n *Node) {
 		n.kafkaFactory = f
+	}
+}
+
+// WithTelemetryProvider sets a pre-created telemetry provider. When set,
+// NewNode uses this provider instead of creating its own from config.
+func WithTelemetryProvider(p *telemetry.Provider) NodeOption {
+	return func(n *Node) {
+		n.externalTelemetry = p
 	}
 }
