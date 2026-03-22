@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
@@ -19,24 +21,34 @@ type TaskClaimer interface {
 
 // Prefetcher batch-claims tasks from the database and feeds them into a channel.
 type Prefetcher struct {
-	taskQueue TaskClaimer
-	workerID  string
-	batchSize int
-	tasks     chan *taskqueue.Task
-	done      chan struct{} // closed when Run() returns
-	log       *zap.Logger
+	taskQueue    TaskClaimer
+	workerID     string
+	batchSize    int
+	tasks        chan *taskqueue.Task
+	done         chan struct{} // closed when Run() returns
+	log          *zap.Logger
+	mTasksClaimed metric.Int64Counter
 }
 
 // NewPrefetcher creates a Prefetcher.
 func NewPrefetcher(tq TaskClaimer, workerID string, batchSize int, log *zap.Logger) *Prefetcher {
+	noopM := noop.Meter{}
+	mClaimed, _ := noopM.Int64Counter("metalog.worker.tasks_claimed")
 	return &Prefetcher{
-		taskQueue: tq,
-		workerID:  workerID,
-		batchSize: batchSize,
-		tasks:     make(chan *taskqueue.Task, batchSize*2),
-		done:      make(chan struct{}),
-		log:       log,
+		taskQueue:     tq,
+		workerID:      workerID,
+		batchSize:     batchSize,
+		tasks:         make(chan *taskqueue.Task, batchSize*2),
+		done:          make(chan struct{}),
+		log:           log,
+		mTasksClaimed: mClaimed,
 	}
+}
+
+// SetMeter configures OpenTelemetry metrics. Must be called before Run.
+func (pf *Prefetcher) SetMeter(m metric.Meter) {
+	pf.mTasksClaimed, _ = m.Int64Counter("metalog.worker.tasks_claimed",
+		metric.WithDescription("Tasks batch-claimed from the database"), metric.WithUnit("{task}"))
 }
 
 // Tasks returns the channel from which workers consume tasks.
@@ -82,6 +94,7 @@ func (pf *Prefetcher) Run(ctx context.Context) {
 		}
 
 		backoff = config.DefaultWorkerPollInterval
+		pf.mTasksClaimed.Add(ctx, int64(len(claimed)))
 
 		for i, task := range claimed {
 			select {

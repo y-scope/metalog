@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -40,11 +43,29 @@ type QueryHandler struct {
 	engine         *query.SplitQueryEngine
 	registryLookup RegistryLookup
 	log            *zap.Logger
+
+	mRequests      metric.Int64Counter
+	mDuration      metric.Float64Histogram
+	mSplitsMatched metric.Int64Counter
 }
 
 // NewQueryHandler creates a QueryHandler.
 func NewQueryHandler(engine *query.SplitQueryEngine, lookup RegistryLookup, log *zap.Logger) *QueryHandler {
-	return &QueryHandler{engine: engine, registryLookup: lookup, log: log}
+	h := &QueryHandler{engine: engine, registryLookup: lookup, log: log}
+	h.initMetrics(noop.Meter{})
+	return h
+}
+
+// SetMeter configures OpenTelemetry metrics. Must be called before serving.
+func (h *QueryHandler) SetMeter(m metric.Meter) { h.initMetrics(m) }
+
+func (h *QueryHandler) initMetrics(m metric.Meter) {
+	h.mRequests, _ = m.Int64Counter("metalog.query.requests",
+		metric.WithDescription("Split query requests"), metric.WithUnit("{request}"))
+	h.mDuration, _ = m.Float64Histogram("metalog.query.duration_seconds",
+		metric.WithDescription("Split query duration"), metric.WithUnit("s"))
+	h.mSplitsMatched, _ = m.Int64Counter("metalog.query.splits_matched",
+		metric.WithDescription("Splits matched by queries"), metric.WithUnit("{split}"))
 }
 
 // StreamSplits handles server-streaming split queries. It fetches all matching
@@ -169,9 +190,13 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		return true, nil
 	}
 
+	queryStart := time.Now()
+	tableAttr := attribute.String("table", req.GetTable())
+
 	result, err := h.engine.StreamSplitsAsync(streamCtx, params, totalLimit, pageSize, consumer)
 	if err != nil {
-		// Distinguish client cancellation from real errors to avoid noisy logs.
+		h.mRequests.Add(stream.Context(), 1, metric.WithAttributes(tableAttr, attribute.String("status", "error")))
+		h.mDuration.Record(stream.Context(), time.Since(queryStart).Seconds(), metric.WithAttributes(tableAttr))
 		if streamCtx.Err() != nil {
 			h.log.Debug("stream cancelled", zap.String("table", req.GetTable()), zap.Error(streamCtx.Err()))
 			return status.FromContextError(streamCtx.Err()).Err()
@@ -179,6 +204,9 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		h.log.Error("query failed", zap.String("table", req.GetTable()), zap.Error(err))
 		return status.Errorf(codes.Internal, "query: %v", err)
 	}
+	h.mRequests.Add(stream.Context(), 1, metric.WithAttributes(tableAttr, attribute.String("status", "success")))
+	h.mDuration.Record(stream.Context(), time.Since(queryStart).Seconds(), metric.WithAttributes(tableAttr))
+	h.mSplitsMatched.Add(stream.Context(), result.SplitsMatched, metric.WithAttributes(tableAttr))
 
 	// Send final response with stats
 	seq++

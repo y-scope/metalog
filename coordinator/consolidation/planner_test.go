@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/metastore"
@@ -82,7 +83,7 @@ func (s *staticResolver) ResolveAgg(_, _, _ string) string            { return "
 // --- Helpers ---
 
 func newTestPlanner(fr fileRecordStore, ts taskStore) *Planner {
-	return &Planner{
+	p := &Planner{
 		tableName:       "test_table",
 		policy:          NewTimeWindowPolicy(24*time.Hour, 2, 100),
 		inFlight:        NewInFlightSet(),
@@ -95,6 +96,8 @@ func newTestPlanner(fr fileRecordStore, ts taskStore) *Planner {
 		resolver:        &staticResolver{},
 		log:             zap.NewNop(),
 	}
+	p.initMetrics(noop.Meter{})
+	return p
 }
 
 func makePendingRecords(n int) []*metastore.FileRecord {

@@ -26,6 +26,15 @@ type MessageSource interface {
 	Run(ctx context.Context)
 }
 
+// DeadLetterHandler receives messages that failed transform or convert.
+// Implementations can write to a dead-letter Kafka topic, a database table,
+// or an object storage bucket. The default (nil) silently drops the message
+// after logging via FailureLogger.
+type DeadLetterHandler interface {
+	// Handle processes a failed message. reason is "transform" or "convert".
+	Handle(ctx context.Context, topic string, partition int32, offset int64, payload []byte, reason string, err error)
+}
+
 // pendingFlush tracks a submitted record awaiting DB flush confirmation.
 type pendingFlush struct {
 	flushed   chan error
@@ -45,6 +54,7 @@ type Consumer struct {
 	tableName        string
 	log              *zap.Logger
 	dataFL           *logutil.FailureLogger // throttles transform/convert failures
+	dlq              DeadLetterHandler      // nil = drop after logging
 
 	// pendingFlushes tracks records submitted to the BatchingWriter but not
 	// yet confirmed as flushed. Drained each poll cycle — no goroutines needed.
@@ -82,6 +92,12 @@ func NewConsumer(
 	// Initialize no-op metrics; SetMeter replaces with real instruments.
 	c.SetMeter(noop.Meter{})
 	return c
+}
+
+// SetDeadLetterHandler sets a handler for messages that fail transform or
+// convert. Must be called before Run — not safe for concurrent use.
+func (c *Consumer) SetDeadLetterHandler(h DeadLetterHandler) {
+	c.dlq = h
 }
 
 // SetMeter configures OpenTelemetry metrics for this consumer.
@@ -207,6 +223,9 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	if err != nil {
 		c.dataFL.Fail("transform failed", zap.Error(err))
 		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
+		if c.dlq != nil {
+			c.dlq.Handle(ctx, c.topic, msg.TopicPartition.Partition, int64(msg.TopicPartition.Offset), msg.Value, "transform", err)
+		}
 		return
 	}
 
@@ -214,6 +233,9 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	if err != nil {
 		c.dataFL.Fail("convert failed", zap.Error(err))
 		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
+		if c.dlq != nil {
+			c.dlq.Handle(ctx, c.topic, msg.TopicPartition.Partition, int64(msg.TopicPartition.Offset), msg.Value, "convert", err)
+		}
 		return
 	}
 

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
@@ -75,6 +78,10 @@ type Planner struct {
 	activeTaskCount    int           // in-memory counter for backpressure (pending + processing)
 	resolver           ColumnResolver
 	log                *zap.Logger
+
+	mTasksCreated   metric.Int64Counter
+	mTasksCompleted metric.Int64Counter
+	mPlanDuration   metric.Float64Histogram
 }
 
 // PlannerConfig holds configuration for creating a Planner.
@@ -112,7 +119,7 @@ func NewPlanner(cfg PlannerConfig) (*Planner, error) {
 		sr = &registryAdapter{reg: cfg.StorageRegistry}
 	}
 
-	return &Planner{
+	p := &Planner{
 		tableName:       cfg.TableName,
 		policy:          cfg.Policy,
 		inFlight:        cfg.InFlight,
@@ -126,7 +133,21 @@ func NewPlanner(cfg PlannerConfig) (*Planner, error) {
 		staleThreshold:     cfg.StaleThreshold,
 		resolver:           cfg.Resolver,
 		log:                cfg.Log.With(zap.String("table", cfg.TableName)),
-	}, nil
+	}
+	p.initMetrics(noop.Meter{})
+	return p, nil
+}
+
+// SetMeter configures OpenTelemetry metrics. Must be called before Run.
+func (p *Planner) SetMeter(m metric.Meter) { p.initMetrics(m) }
+
+func (p *Planner) initMetrics(m metric.Meter) {
+	p.mTasksCreated, _ = m.Int64Counter("metalog.consolidation.tasks_created",
+		metric.WithDescription("Consolidation tasks created"), metric.WithUnit("{task}"))
+	p.mTasksCompleted, _ = m.Int64Counter("metalog.consolidation.tasks_completed",
+		metric.WithDescription("Consolidation tasks completed"), metric.WithUnit("{task}"))
+	p.mPlanDuration, _ = m.Float64Histogram("metalog.consolidation.plan_duration_seconds",
+		metric.WithDescription("Time per planning cycle"), metric.WithUnit("s"))
 }
 
 // queueAdapter wraps *taskqueue.Queue to satisfy taskStore.
@@ -187,6 +208,8 @@ func (p *Planner) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			planStart := time.Now()
+			tableAttr := attribute.String("table", p.tableName)
 			if err := p.planOnce(ctx); err != nil {
 				if ctx.Err() != nil {
 					return
@@ -195,6 +218,7 @@ func (p *Planner) Run(ctx context.Context) {
 			} else {
 				fl.OK()
 			}
+			p.mPlanDuration.Record(ctx, time.Since(planStart).Seconds(), metric.WithAttributes(tableAttr))
 		}
 	}
 }
@@ -286,6 +310,7 @@ func (p *Planner) planOnce(ctx context.Context) error {
 		return fmt.Errorf("create tasks: %w", err)
 	}
 	p.activeTaskCount += int(n)
+	p.mTasksCreated.Add(ctx, n, metric.WithAttributes(attribute.String("table", p.tableName)))
 
 	p.log.Debug("created consolidation tasks",
 		zap.Int64("count", n),

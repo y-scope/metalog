@@ -4,6 +4,9 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/taskqueue"
@@ -34,6 +37,9 @@ type Core struct {
 	archiveCreator Archiver
 	prefetcher     *Prefetcher
 	log            *zap.Logger
+
+	mTaskDuration  metric.Float64Histogram
+	mTaskCompleted metric.Int64Counter
 }
 
 // NewCore creates a worker Core.
@@ -43,12 +49,24 @@ func NewCore(
 	prefetcher *Prefetcher,
 	log *zap.Logger,
 ) *Core {
-	return &Core{
+	c := &Core{
 		taskQueue:      taskQueue,
 		archiveCreator: archiveCreator,
 		prefetcher:     prefetcher,
 		log:            log,
 	}
+	c.initMetrics(noop.Meter{})
+	return c
+}
+
+// SetMeter configures OpenTelemetry metrics. Must be called before Run.
+func (c *Core) SetMeter(m metric.Meter) { c.initMetrics(m) }
+
+func (c *Core) initMetrics(m metric.Meter) {
+	c.mTaskDuration, _ = m.Float64Histogram("metalog.worker.task_duration_seconds",
+		metric.WithDescription("Time to execute a single task"), metric.WithUnit("s"))
+	c.mTaskCompleted, _ = m.Int64Counter("metalog.worker.tasks_completed",
+		metric.WithDescription("Tasks completed"), metric.WithUnit("{task}"))
 }
 
 // Run processes tasks from the prefetcher until ctx is canceled.
@@ -57,7 +75,9 @@ func (c *Core) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		start := time.Now()
 		c.executeTask(ctx, task)
+		c.mTaskDuration.Record(ctx, time.Since(start).Seconds())
 	}
 }
 
@@ -151,5 +171,6 @@ func (c *Core) executeTask(ctx context.Context, task *taskqueue.Task) {
 		log.Error("complete task failed", zap.Error(cErr))
 		return
 	}
+	c.mTaskCompleted.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
 	log.Debug("task completed", zap.String("archivePath", cons.ArchivePath), zap.Int64("sizeBytes", sizeBytes))
 }
