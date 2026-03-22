@@ -41,7 +41,8 @@ type Node struct {
 	startCoordinatorFn func(tableName string) error
 	// externalTelemetry is set via WithTelemetryProvider when the caller
 	// creates the provider externally (e.g., to share it with Kafka factory).
-	externalTelemetry *telemetry.Provider
+	externalTelemetry    *telemetry.Provider
+	hasTelemetryProvider bool
 
 	log    *zap.Logger
 	ctx    context.Context
@@ -173,8 +174,9 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	}
 
 	// Resolve telemetry provider: use external (from WithTelemetryProvider)
-	// or create from config.
-	if n.externalTelemetry != nil {
+	// or create from config. WithTelemetryProvider(nil) explicitly suppresses
+	// config-based creation.
+	if n.hasTelemetryProvider {
 		telemetryProvider = n.externalTelemetry
 	} else if cfg.Telemetry.Enabled {
 		var err error
