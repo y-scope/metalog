@@ -7,6 +7,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
@@ -68,7 +69,7 @@ func NewConsumer(
 	log *zap.Logger,
 ) *Consumer {
 	consumerLog := log.With(zap.String("topic", topic), zap.String("table", tableName))
-	return &Consumer{
+	c := &Consumer{
 		bootstrapServers: bootstrapServers,
 		groupID:          groupID,
 		topic:            topic,
@@ -78,9 +79,13 @@ func NewConsumer(
 		log:              consumerLog,
 		dataFL:           logutil.NewFailureLogger(consumerLog, time.Minute),
 	}
+	// Initialize no-op metrics; SetMeter replaces with real instruments.
+	c.SetMeter(noop.Meter{})
+	return c
 }
 
 // SetMeter configures OpenTelemetry metrics for this consumer.
+// Must be called before Run — not safe for concurrent use.
 func (c *Consumer) SetMeter(m metric.Meter) {
 	c.mConsumed, _ = m.Int64Counter("metalog.kafka.messages_consumed",
 		metric.WithDescription("Kafka messages successfully consumed and submitted"),
@@ -167,10 +172,8 @@ func (c *Consumer) Run(ctx context.Context) {
 
 		if processed > 0 {
 			c.log.Debug("poll batch processed", zap.Int("messages", processed))
-			if c.mPollBatchSize != nil {
-				c.mPollBatchSize.Record(ctx, int64(processed),
-					metric.WithAttributes(attribute.String("topic", c.topic)))
-			}
+			c.mPollBatchSize.Record(ctx, int64(processed),
+				metric.WithAttributes(attribute.String("topic", c.topic)))
 		}
 	}
 }
@@ -203,18 +206,14 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	record, err := c.transformer.Transform(msg.Value)
 	if err != nil {
 		c.dataFL.Fail("transform failed", zap.Error(err))
-		if c.mFailed != nil {
-			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
-		}
+		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
 		return
 	}
 
 	rec, err := ingestion.ConvertRecord(record)
 	if err != nil {
 		c.dataFL.Fail("convert failed", zap.Error(err))
-		if c.mFailed != nil {
-			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
-		}
+		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
 		return
 	}
 
@@ -226,15 +225,11 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 			zap.Any("offset", msg.TopicPartition.Offset),
 			zap.Error(err),
 		)
-		if c.mFailed != nil {
-			c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "ingest")))
-		}
+		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "ingest")))
 		return
 	}
 
-	if c.mConsumed != nil {
-		c.mConsumed.Add(ctx, 1, metric.WithAttributes(topicAttr))
-	}
+	c.mConsumed.Add(ctx, 1, metric.WithAttributes(topicAttr))
 
 	c.pendingFlushes = append(c.pendingFlushes, pendingFlush{
 		flushed:   flushed,

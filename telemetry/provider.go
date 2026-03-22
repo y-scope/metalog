@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	prometheusexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
@@ -59,12 +60,17 @@ func NewProvider(cfg Config) (*Provider, error) {
 
 	switch exporter {
 	case "prometheus":
-		promExporter, err := prometheusexporter.New()
+		// Use a dedicated registry to avoid conflicts with the global
+		// Prometheus registry (safe for tests and multiple providers).
+		reg := prometheus.NewRegistry()
+		promExporter, err := prometheusexporter.New(
+			prometheusexporter.WithRegisterer(reg),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("create prometheus exporter: %w", err)
 		}
 		reader = promExporter
-		handler = promhttp.Handler()
+		handler = promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 
 	default:
 		// Check custom exporter registry

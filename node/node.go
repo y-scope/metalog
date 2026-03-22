@@ -138,11 +138,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	var telemetryProvider *telemetry.Provider
 	if cfg.Telemetry.Enabled {
 		var err error
-		telemetryProvider, err = telemetry.NewProvider(telemetry.Config{
-			Enabled:  cfg.Telemetry.Enabled,
-			Exporter: cfg.Telemetry.Exporter,
-			Options:  cfg.Telemetry.Options,
-		})
+		telemetryProvider, err = telemetry.NewProvider(cfg.Telemetry)
 		if err != nil {
 			return nil, fmt.Errorf("create telemetry provider: %w", err)
 		}

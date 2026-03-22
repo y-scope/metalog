@@ -18,11 +18,7 @@ const kafkaGroupPrefix = "clp-coordinator-"
 // NewDefaultAdapterFactory returns a KafkaAdapterFactory that creates
 // confluent-kafka consumers (the default upstream transport).
 // If meter is non-nil, consumer metrics are registered.
-func NewDefaultAdapterFactory(meter ...metric.Meter) node.KafkaAdapterFactory {
-	var m metric.Meter
-	if len(meter) > 0 {
-		m = meter[0]
-	}
+func NewDefaultAdapterFactory(meter metric.Meter) node.KafkaAdapterFactory {
 	return func(
 		tableName, tableID string,
 		tableCfg metastore.TableConfig,
@@ -43,8 +39,8 @@ func NewDefaultAdapterFactory(meter ...metric.Meter) node.KafkaAdapterFactory {
 			ingestSvc,
 			log,
 		)
-		if m != nil {
-			consumer.SetMeter(m)
+		if meter != nil {
+			consumer.SetMeter(meter)
 		}
 		return &confluentAdapter{consumer: consumer}, nil
 	}

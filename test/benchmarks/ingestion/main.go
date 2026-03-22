@@ -190,7 +190,7 @@ func main() {
 
 	// Start node.
 	logger.Info("starting coordinator node")
-	n, err := node.NewNode(cfg, logger, node.WithKafkaAdapterFactory(metalogkafka.NewDefaultAdapterFactory()))
+	n, err := node.NewNode(cfg, logger, node.WithKafkaAdapterFactory(metalogkafka.NewDefaultAdapterFactory(nil)))
 	if err != nil {
 		logger.Fatal("create node", zap.Error(err))
 	}

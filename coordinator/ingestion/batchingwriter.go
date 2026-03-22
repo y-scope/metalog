@@ -14,6 +14,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/encoding"
@@ -35,12 +36,13 @@ type BatchFlusher interface {
 // tableWriter is a goroutine that batches and flushes records for a single table.
 type tableWriter struct {
 	tableName     string
+	tableAttr     attribute.KeyValue // pre-computed for metric recording
 	ch            chan *metastore.FileRecord
 	flusher       BatchFlusher
 	batchSize     int
 	flushInterval time.Duration
 	flushFL       *logutil.FailureLogger
-	parent        *BatchingWriter // for metrics access
+	parent        *BatchingWriter
 	log           *zap.Logger
 }
 
@@ -90,23 +92,25 @@ func WithFlushInterval(d time.Duration) BatchingWriterOption {
 
 // WithMeter sets the OpenTelemetry meter for ingestion metrics.
 func WithMeter(m metric.Meter) BatchingWriterOption {
-	return func(bw *BatchingWriter) {
-		bw.mRecordsSubmitted, _ = m.Int64Counter("metalog.ingestion.records_submitted",
-			metric.WithDescription("Records submitted to the BatchingWriter channel"),
-			metric.WithUnit("{record}"))
-		bw.mSubmitRejected, _ = m.Int64Counter("metalog.ingestion.submit_rejected",
-			metric.WithDescription("Records rejected due to full channel or context cancellation"),
-			metric.WithUnit("{record}"))
-		bw.mRecordsFlushed, _ = m.Int64Counter("metalog.ingestion.records_flushed",
-			metric.WithDescription("Records flushed to the database"),
-			metric.WithUnit("{record}"))
-		bw.mFlushDuration, _ = m.Float64Histogram("metalog.ingestion.flush_duration",
-			metric.WithDescription("Time taken to flush a batch to the database"),
-			metric.WithUnit("ms"))
-		bw.mFlushBatchSize, _ = m.Int64Histogram("metalog.ingestion.flush_batch_size",
-			metric.WithDescription("Number of records per flush batch"),
-			metric.WithUnit("{record}"))
-	}
+	return func(bw *BatchingWriter) { bw.initMetrics(m) }
+}
+
+func (bw *BatchingWriter) initMetrics(m metric.Meter) {
+	bw.mRecordsSubmitted, _ = m.Int64Counter("metalog.ingestion.records_submitted",
+		metric.WithDescription("Records submitted to the BatchingWriter channel"),
+		metric.WithUnit("{record}"))
+	bw.mSubmitRejected, _ = m.Int64Counter("metalog.ingestion.submit_rejected",
+		metric.WithDescription("Records rejected due to full channel or context cancellation"),
+		metric.WithUnit("{record}"))
+	bw.mRecordsFlushed, _ = m.Int64Counter("metalog.ingestion.records_flushed",
+		metric.WithDescription("Records flushed to the database"),
+		metric.WithUnit("{record}"))
+	bw.mFlushDuration, _ = m.Float64Histogram("metalog.ingestion.flush_duration_seconds",
+		metric.WithDescription("Time taken to flush a batch to the database"),
+		metric.WithUnit("s"))
+	bw.mFlushBatchSize, _ = m.Int64Histogram("metalog.ingestion.flush_batch_size",
+		metric.WithDescription("Number of records per flush batch"),
+		metric.WithUnit("{record}"))
 }
 
 // NewBatchingWriter creates a BatchingWriter.
@@ -123,6 +127,8 @@ func NewBatchingWriter(ctx context.Context, db *sql.DB, isMariaDB bool, log *zap
 		batchSize:     config.DefaultBatchSize,
 		flushInterval: config.DefaultBatchFlushInterval,
 	}
+	// Initialize no-op metrics; WithMeter replaces with real instruments.
+	bw.initMetrics(noop.Meter{})
 	for _, opt := range opts {
 		opt(bw)
 	}
@@ -187,18 +193,13 @@ func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *met
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	tableAttr := attribute.String("table", tableName)
 	tw := bw.getOrCreateWriter(tableName)
 	select {
 	case tw.ch <- rec:
-		if bw.mRecordsSubmitted != nil {
-			bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tableAttr))
-		}
+		bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tw.tableAttr))
 		return nil
 	default:
-		if bw.mSubmitRejected != nil {
-			bw.mSubmitRejected.Add(ctx, 1, metric.WithAttributes(tableAttr, attribute.String("reason", "channel_full")))
-		}
+		bw.mSubmitRejected.Add(ctx, 1, metric.WithAttributes(tw.tableAttr, attribute.String("reason", "channel_full")))
 		return ErrChannelFull
 	}
 }
@@ -207,18 +208,13 @@ func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *met
 // until the channel has space or the context is cancelled. Used by the
 // Kafka consumer to propagate backpressure without dropping messages.
 func (bw *BatchingWriter) SubmitWait(ctx context.Context, tableName string, rec *metastore.FileRecord) error {
-	tableAttr := attribute.String("table", tableName)
 	tw := bw.getOrCreateWriter(tableName)
 	select {
 	case tw.ch <- rec:
-		if bw.mRecordsSubmitted != nil {
-			bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tableAttr))
-		}
+		bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tw.tableAttr))
 		return nil
 	case <-ctx.Done():
-		if bw.mSubmitRejected != nil {
-			bw.mSubmitRejected.Add(ctx, 1, metric.WithAttributes(tableAttr, attribute.String("reason", "ctx_cancelled")))
-		}
+		bw.mSubmitRejected.Add(ctx, 1, metric.WithAttributes(tw.tableAttr, attribute.String("reason", "ctx_cancelled")))
 		return ctx.Err()
 	}
 }
@@ -253,6 +249,7 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 	tableLog := bw.log.With(zap.String("table", tableName))
 	tw = &tableWriter{
 		tableName:     tableName,
+		tableAttr:     attribute.String("table", tableName),
 		ch:            make(chan *metastore.FileRecord, bw.batchSize),
 		flusher:       flusher,
 		batchSize:     bw.batchSize,
@@ -278,7 +275,6 @@ func (tw *tableWriter) run(ctx context.Context) {
 
 	batch := make([]*metastore.FileRecord, 0, tw.batchSize)
 
-	tableAttr := attribute.String("table", tw.tableName)
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -291,23 +287,15 @@ func (tw *tableWriter) run(ctx context.Context) {
 				zap.Error(err),
 			)
 			tw.notifyBatch(batch, err)
-			if tw.parent.mRecordsFlushed != nil {
-				tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tableAttr, attribute.String("status", "error")))
-			}
+			tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tw.tableAttr, attribute.String("status", "error")))
 		} else {
 			tw.flushFL.OK()
 			tw.log.Debug("flushed batch", zap.Int("records", len(batch)))
 			tw.notifyBatch(batch, nil)
-			if tw.parent.mRecordsFlushed != nil {
-				tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tableAttr, attribute.String("status", "success")))
-			}
+			tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tw.tableAttr, attribute.String("status", "success")))
 		}
-		if tw.parent.mFlushDuration != nil {
-			tw.parent.mFlushDuration.Record(ctx, float64(time.Since(start).Milliseconds()), metric.WithAttributes(tableAttr))
-		}
-		if tw.parent.mFlushBatchSize != nil {
-			tw.parent.mFlushBatchSize.Record(ctx, batchLen, metric.WithAttributes(tableAttr))
-		}
+		tw.parent.mFlushDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(tw.tableAttr))
+		tw.parent.mFlushBatchSize.Record(ctx, batchLen, metric.WithAttributes(tw.tableAttr))
 		batch = batch[:0]
 	}
 

@@ -66,7 +66,9 @@ func (s *Resources) GetColumnRegistry(tableName string) *schema.ColumnRegistry {
 // Close releases all shared resources.
 func (s *Resources) Close() {
 	if s.Telemetry != nil {
-		if err := s.Telemetry.Shutdown(context.Background()); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Telemetry.Shutdown(shutdownCtx); err != nil {
 			s.Log.Warn("failed to shutdown telemetry", zap.Error(err))
 		}
 	}
