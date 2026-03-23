@@ -1,16 +1,17 @@
-package kafka
+package confluent
 
 import (
 	"context"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	ckafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/logutil"
 )
 
@@ -20,27 +21,12 @@ const pollTimeoutMs = 100
 // maxPollBatch is the maximum number of messages to drain per poll cycle.
 const maxPollBatch = 1000
 
-// MessageSource consumes messages from a Kafka topic and submits them
-// to the ingestion pipeline. Implementations handle offset management.
-type MessageSource interface {
-	Run(ctx context.Context)
-}
-
-// DeadLetterHandler receives messages that failed transform or convert.
-// Implementations can write to a dead-letter Kafka topic, a database table,
-// or an object storage bucket. The default (nil) silently drops the message
-// after logging via FailureLogger.
-type DeadLetterHandler interface {
-	// Handle processes a failed message. reason is "transform" or "convert".
-	Handle(ctx context.Context, topic string, partition int32, offset int64, payload []byte, reason string, err error)
-}
-
 // pendingFlush tracks a submitted record awaiting DB flush confirmation.
 type pendingFlush struct {
 	flushed   chan error
 	topic     *string
 	partition int32
-	offset    kafka.Offset
+	offset    ckafka.Offset
 }
 
 // Consumer reads metadata records from a Kafka topic and submits them
@@ -49,18 +35,18 @@ type Consumer struct {
 	bootstrapServers string
 	groupID          string
 	topic            string
-	transformer      MessageTransformer
+	transformer      kafka.MessageTransformer
 	service          *ingestion.Service
 	tableName        string
 	log              *zap.Logger
 	dataFL           *logutil.FailureLogger // throttles transform/convert failures
-	dlq              DeadLetterHandler      // nil = drop after logging
+	dlq              kafka.DeadLetterHandler // nil = drop after logging
 
 	// pendingFlushes tracks records submitted to the BatchingWriter but not
 	// yet confirmed as flushed. Drained each poll cycle — no goroutines needed.
 	pendingFlushes []pendingFlush
 
-	pendingCommit []kafka.TopicPartition
+	pendingCommit []ckafka.TopicPartition
 
 	// Metrics (nil when telemetry is disabled).
 	mConsumed      metric.Int64Counter
@@ -69,12 +55,12 @@ type Consumer struct {
 }
 
 // Compile-time check that Consumer implements MessageSource.
-var _ MessageSource = (*Consumer)(nil)
+var _ kafka.MessageSource = (*Consumer)(nil)
 
 // NewConsumer creates a Kafka metadata consumer.
 func NewConsumer(
 	bootstrapServers, groupID, topic, tableName string,
-	transformer MessageTransformer,
+	transformer kafka.MessageTransformer,
 	service *ingestion.Service,
 	log *zap.Logger,
 ) *Consumer {
@@ -96,7 +82,7 @@ func NewConsumer(
 
 // SetDeadLetterHandler sets a handler for messages that fail transform or
 // convert. Must be called before Run — not safe for concurrent use.
-func (c *Consumer) SetDeadLetterHandler(h DeadLetterHandler) {
+func (c *Consumer) SetDeadLetterHandler(h kafka.DeadLetterHandler) {
 	c.dlq = h
 }
 
@@ -118,7 +104,7 @@ func (c *Consumer) SetMeter(m metric.Meter) {
 // It batch-polls messages: waits up to pollTimeoutMs for the first message,
 // then drains all buffered messages (up to maxPollBatch) with non-blocking polls.
 func (c *Consumer) Run(ctx context.Context) {
-	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+	consumer, err := ckafka.NewConsumer(&ckafka.ConfigMap{
 		"bootstrap.servers":  c.bootstrapServers,
 		"group.id":           c.groupID,
 		"auto.offset.reset":  "earliest",
@@ -196,12 +182,12 @@ func (c *Consumer) Run(ctx context.Context) {
 
 // handleEvent processes a single Kafka event. Returns true if a fatal error
 // occurred and the consumer should stop.
-func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *int) bool {
+func (c *Consumer) handleEvent(ctx context.Context, ev ckafka.Event, processed *int) bool {
 	switch e := ev.(type) {
-	case *kafka.Message:
+	case *ckafka.Message:
 		c.handleMessage(ctx, e)
 		*processed++
-	case kafka.Error:
+	case ckafka.Error:
 		if e.IsFatal() {
 			c.log.Error("fatal kafka error, stopping consumer", zap.Error(e))
 			c.drainFlushes()
@@ -216,7 +202,7 @@ func (c *Consumer) handleEvent(ctx context.Context, ev kafka.Event, processed *i
 // The flush channel is tracked in pendingFlushes and drained each poll cycle.
 // Uses the blocking SubmitWait path so no messages are dropped on channel full —
 // the poll loop blocks until space opens, propagating backpressure to Kafka.
-func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
+func (c *Consumer) handleMessage(ctx context.Context, msg *ckafka.Message) {
 	topicAttr := attribute.String("topic", c.topic)
 
 	record, err := c.transformer.Transform(msg.Value)
@@ -282,7 +268,7 @@ func (c *Consumer) drainFlushesBlocking() {
 				)
 				continue
 			}
-			c.pendingCommit = append(c.pendingCommit, kafka.TopicPartition{
+			c.pendingCommit = append(c.pendingCommit, ckafka.TopicPartition{
 				Topic:     pf.topic,
 				Partition: pf.partition,
 				Offset:    pf.offset + 1,
@@ -313,7 +299,7 @@ func (c *Consumer) drainFlushes() {
 				)
 				continue
 			}
-			c.pendingCommit = append(c.pendingCommit, kafka.TopicPartition{
+			c.pendingCommit = append(c.pendingCommit, ckafka.TopicPartition{
 				Topic:     pf.topic,
 				Partition: pf.partition,
 				Offset:    pf.offset + 1,
@@ -327,13 +313,13 @@ func (c *Consumer) drainFlushes() {
 }
 
 // commitPending commits any pending offsets to Kafka.
-func (c *Consumer) commitPending(consumer *kafka.Consumer) {
+func (c *Consumer) commitPending(consumer *ckafka.Consumer) {
 	if len(c.pendingCommit) == 0 {
 		return
 	}
 
 	// Deduplicate: keep highest offset per partition.
-	best := make(map[int32]kafka.TopicPartition)
+	best := make(map[int32]ckafka.TopicPartition)
 	for _, tp := range c.pendingCommit {
 		if existing, ok := best[tp.Partition]; !ok || tp.Offset > existing.Offset {
 			best[tp.Partition] = tp
@@ -341,7 +327,7 @@ func (c *Consumer) commitPending(consumer *kafka.Consumer) {
 	}
 	c.pendingCommit = c.pendingCommit[:0]
 
-	deduped := make([]kafka.TopicPartition, 0, len(best))
+	deduped := make([]ckafka.TopicPartition, 0, len(best))
 	for _, tp := range best {
 		deduped = append(deduped, tp)
 	}
@@ -350,4 +336,3 @@ func (c *Consumer) commitPending(consumer *kafka.Consumer) {
 		c.log.Warn("offset commit failed", zap.Error(err))
 	}
 }
-

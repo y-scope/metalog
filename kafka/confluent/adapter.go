@@ -1,4 +1,4 @@
-package kafka
+package confluent
 
 import (
 	"context"
@@ -7,13 +7,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
 )
-
-// kafkaGroupPrefix is the prefix for Kafka consumer group IDs.
-// Matches the Java implementation (clp-coordinator-{table_name}-{table_id}).
-const kafkaGroupPrefix = "clp-coordinator-"
 
 // NewDefaultAdapterFactory returns a KafkaAdapterFactory that creates
 // confluent-kafka consumers (the default upstream transport).
@@ -28,11 +25,11 @@ func NewDefaultAdapterFactory(meter metric.Meter) node.KafkaAdapterFactory {
 		if !tableCfg.Kafka.Enabled || tableCfg.Kafka.Topic == "" || tableCfg.Kafka.BootstrapServers == "" {
 			return nil, node.ErrKafkaNotConfigured
 		}
-		transformer, err := NewTransformer(tableCfg.Kafka.RecordTransformer)
+		transformer, err := kafka.NewTransformer(tableCfg.Kafka.RecordTransformer)
 		if err != nil {
 			return nil, err
 		}
-		groupID := kafkaGroupPrefix + tableName + "-" + tableID
+		groupID := kafka.KafkaGroupPrefix + tableName + "-" + tableID
 		consumer := NewConsumer(
 			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
 			transformer,
@@ -42,14 +39,14 @@ func NewDefaultAdapterFactory(meter metric.Meter) node.KafkaAdapterFactory {
 		if meter != nil {
 			consumer.SetMeter(meter)
 		}
-		return &confluentAdapter{consumer: consumer}, nil
+		return &adapter{consumer: consumer}, nil
 	}
 }
 
-// confluentAdapter wraps kafka.Consumer as a node.KafkaAdapter.
-type confluentAdapter struct {
-	consumer MessageSource
+// adapter wraps a Consumer as a node.KafkaAdapter.
+type adapter struct {
+	consumer kafka.MessageSource
 }
 
-func (a *confluentAdapter) Start(ctx context.Context) { a.consumer.Run(ctx) }
-func (a *confluentAdapter) Stop()                     {}
+func (a *adapter) Start(ctx context.Context) { a.consumer.Run(ctx) }
+func (a *adapter) Stop()                     {}
