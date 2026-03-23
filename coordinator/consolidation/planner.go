@@ -238,7 +238,7 @@ func (p *Planner) planOnce(ctx context.Context) error {
 
 	// 3. Backpressure check — skip creating new tasks if queue is deep.
 	if p.activeTaskCount >= maxBackpressureDepth {
-		p.log.Debug("backpressure: skipping task creation",
+		p.log.Info("backpressure: skipping task creation",
 			zap.Int("activeTaskCount", p.activeTaskCount),
 		)
 		return nil
@@ -312,7 +312,7 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	p.activeTaskCount += int(n)
 	p.mTasksCreated.Add(ctx, n, metric.WithAttributes(attribute.String("table", p.tableName)))
 
-	p.log.Debug("created consolidation tasks",
+	p.log.Info("created consolidation tasks",
 		zap.Int64("count", n),
 		zap.Int("groups", len(inputs)),
 	)
@@ -500,7 +500,7 @@ func (p *Planner) processTerminalTasks(ctx context.Context) error {
 	if n, err := p.tasks.CleanupOldTasks(ctx, p.tableName, config.DefaultTaskCleanupAge); err != nil {
 		p.log.Warn("cleanup old tasks failed", zap.Error(err))
 	} else if n > 0 {
-		p.log.Debug("cleaned up old tasks", zap.Int64("deleted", n))
+		p.log.Info("cleaned up old tasks", zap.Int64("deleted", n))
 	}
 
 	return nil

@@ -555,7 +555,7 @@ func (n *Node) reconcile() error {
 
 		for _, t := range unassigned {
 			if myTables >= fairShare {
-				n.log.Debug("fair-share reached, deferring remaining tables",
+				n.log.Info("fair-share reached, deferring remaining tables",
 					zap.Int("myTables", myTables), zap.Int("fairShare", fairShare))
 				break
 			}
@@ -571,7 +571,7 @@ func (n *Node) reconcile() error {
 			}
 			ok, err := reg.ClaimTable(ctx, t, leaseTTL)
 			if err != nil {
-				n.log.Debug("claim unassigned table failed", zap.String("table", t), zap.Error(err))
+				n.log.Warn("claim unassigned table failed", zap.String("table", t), zap.Error(err))
 				continue
 			}
 			if ok {

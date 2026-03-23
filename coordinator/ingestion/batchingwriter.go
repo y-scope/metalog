@@ -290,7 +290,7 @@ func (tw *tableWriter) run(ctx context.Context) {
 			tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tw.tableAttr, attribute.String("status", "error")))
 		} else {
 			tw.flushFL.OK()
-			tw.log.Debug("flushed batch", zap.Int("records", len(batch)))
+			tw.log.Info("flushed batch", zap.Int("records", len(batch)))
 			tw.notifyBatch(batch, nil)
 			tw.parent.mRecordsFlushed.Add(ctx, batchLen, metric.WithAttributes(tw.tableAttr, attribute.String("status", "success")))
 		}
@@ -569,7 +569,7 @@ func (tw *tableWriter) notifyBatch(batch []*metastore.FileRecord, err error) {
 			select {
 			case rec.Flushed <- err:
 			default:
-				tw.log.Debug("flush notification dropped, consumer already returned")
+				tw.log.Warn("flush notification dropped, consumer already returned")
 			}
 		}
 	}

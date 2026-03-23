@@ -193,7 +193,7 @@ func (u *CoordinatorUnit) Restart() error {
 
 // Start begins the coordinator goroutines.
 func (u *CoordinatorUnit) Start() {
-	u.log.Info("starting coordinator unit")
+	u.log.Debug("starting coordinator unit")
 
 	// Snapshot ctx under the mutex so goroutine closures capture a stable value.
 	// Without this, Restart() writing u.ctx races with goroutines reading it.
@@ -256,7 +256,7 @@ func (u *CoordinatorUnit) Start() {
 		}()
 	}
 
-	u.log.Debug("coordinator unit started")
+	u.log.Info("coordinator unit started")
 }
 
 // Stop signals all goroutines to stop and waits for completion.
@@ -272,7 +272,7 @@ func (u *CoordinatorUnit) Stop() {
 	u.ctxMu.Unlock()
 	cancel()
 	u.wg.Wait()
-	u.log.Debug("coordinator unit stopped")
+	u.log.Info("coordinator unit stopped")
 }
 
 func (u *CoordinatorUnit) runAliasRefresh(ctx context.Context) {
