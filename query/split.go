@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/y-scope/metalog/metastore"
@@ -56,25 +57,25 @@ func ResolveSplit(row *SplitRow, registry *schema.ColumnRegistry) *ResolvedSplit
 		case metastore.ColClpArchivePath:
 			rs.ClpArchivePath = DBValToString(val)
 		case metastore.ColMinTimestamp:
-			if v, ok := val.(int64); ok {
+			if v, ok := DBValToInt64(val); ok {
 				rs.MinTimestamp = v
 			}
 		case metastore.ColMaxTimestamp:
-			if v, ok := val.(int64); ok {
+			if v, ok := DBValToInt64(val); ok {
 				rs.MaxTimestamp = v
 			}
 		case metastore.ColState:
 			rs.State = DBValToString(val)
 		case metastore.ColRecordCount:
-			if v, ok := val.(int64); ok {
+			if v, ok := DBValToInt64(val); ok {
 				rs.RecordCount = v
 			}
 		case metastore.ColClpIRSizeBytes:
-			if v, ok := val.(int64); ok {
+			if v, ok := DBValToInt64(val); ok {
 				rs.IRSizeBytes = v
 			}
 		case metastore.ColClpArchiveSizeBytes:
-			if v, ok := val.(int64); ok {
+			if v, ok := DBValToInt64(val); ok {
 				rs.ArchiveSizeBytes = v
 			}
 		case metastore.ColClpIRStorageBackend:
@@ -148,8 +149,22 @@ func DBValToInt64(val any) (int64, bool) {
 		return v, true
 	case int32:
 		return int64(v), true
+	case uint32:
+		return int64(v), true
 	case float64:
 		return int64(v), true
+	case []byte:
+		n, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
 	default:
 		return 0, false
 	}
@@ -164,6 +179,18 @@ func DBValToFloat64(val any) (float64, bool) {
 		return float64(v), true
 	case int32:
 		return float64(v), true
+	case []byte:
+		f, err := strconv.ParseFloat(string(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
 	default:
 		return 0, false
 	}

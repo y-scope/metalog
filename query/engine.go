@@ -472,7 +472,7 @@ func (e *SplitQueryEngine) executePage(
 		for i, col := range columns {
 			row.Values[col] = values[i]
 			if col == metastore.ColID {
-				if id, ok := values[i].(int64); ok {
+				if id, ok := DBValToInt64(values[i]); ok {
 					row.ID = id
 				}
 			}
