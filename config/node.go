@@ -19,6 +19,10 @@ type NodeConfig struct {
 	Logging     LoggingConfig      `yaml:"logging"`
 	Coordinator CoordinatorConfig  `yaml:"coordinator"`
 	Worker      WorkerConfig       `yaml:"worker"`
+
+	// KafkaDriver selects the Kafka consumer driver by name.
+	// Drivers are registered via kafka.RegisterDriver. Default: "franzgo".
+	KafkaDriver string `yaml:"kafkaDriver"`
 }
 
 // LoggingConfig holds logging tuning parameters.
