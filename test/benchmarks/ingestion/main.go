@@ -492,7 +492,7 @@ func produceToKafka(bootstrapServers, topic string, table string, records, apps,
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(bootstrapServers),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
-		kgo.ProducerBatchMaxBytes(int32(batchSize)*1024),
+		kgo.MaxBufferedRecords(batchSize),
 		kgo.ProducerLinger(5*time.Millisecond),
 	)
 	if err != nil {

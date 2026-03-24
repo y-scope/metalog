@@ -305,7 +305,13 @@ func (tw *tableWriter) run(ctx context.Context) {
 			batch = append(batch, rec)
 			if len(batch) >= tw.batchSize {
 				flush()
-				ticker.Reset(tw.flushInterval) // avoid spurious timer flush after a full batch
+				// Drain any buffered tick before resetting to avoid a
+				// spurious empty flush on the next select iteration.
+				select {
+				case <-ticker.C:
+				default:
+				}
+				ticker.Reset(tw.flushInterval)
 			}
 		case <-ticker.C:
 			flush()

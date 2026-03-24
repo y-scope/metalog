@@ -127,7 +127,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			c.drainFlushesBlocking()
-			c.commitPending(ctx, client)
+			c.commitPendingSync(client)
 			c.log.Info("kafka consumer stopped")
 			return
 		default:
@@ -206,7 +206,9 @@ func (c *Consumer) handleRecord(ctx context.Context, rec *kgo.Record) {
 }
 
 // drainFlushesBlocking waits for all pending flushes to complete (with a timeout)
-// before shutdown.
+// before shutdown. Failed flushes are skipped (offset not committed), which means
+// the next consumer startup will re-deliver those records. This is safe because
+// the DB uses idempotent UPSERTs — re-processing a record is a no-op.
 func (c *Consumer) drainFlushesBlocking() {
 	if len(c.pendingFlushes) == 0 {
 		return
@@ -291,4 +293,44 @@ func (c *Consumer) commitPending(ctx context.Context, client *kgo.Client) {
 			c.log.Warn("offset commit failed", zap.Error(err))
 		}
 	})
+}
+
+// commitPendingSync commits pending offsets synchronously. Used during
+// shutdown to ensure offsets reach the broker before client.Close().
+func (c *Consumer) commitPendingSync(client *kgo.Client) {
+	if len(c.pendingCommit) == 0 {
+		return
+	}
+
+	offsets := make(map[string]map[int32]kgo.EpochOffset)
+	for tp, offset := range c.pendingCommit {
+		if offsets[tp.topic] == nil {
+			offsets[tp.topic] = make(map[int32]kgo.EpochOffset)
+		}
+		offsets[tp.topic][tp.partition] = kgo.EpochOffset{
+			Epoch:  -1,
+			Offset: offset,
+		}
+	}
+	for k := range c.pendingCommit {
+		delete(c.pendingCommit, k)
+	}
+
+	// Use a fresh context with timeout since the parent ctx is already cancelled.
+	commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	client.CommitOffsets(commitCtx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+		if err != nil {
+			c.log.Warn("shutdown offset commit failed", zap.Error(err))
+		}
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-commitCtx.Done():
+		c.log.Warn("shutdown offset commit timed out")
+	}
 }
