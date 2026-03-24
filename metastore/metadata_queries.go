@@ -9,7 +9,7 @@ import (
 )
 
 // MetadataReader provides read-only queries against the column registry tables.
-// It is transport-agnostic — gRPC/YARPC handlers map these domain types to proto.
+// It is transport-agnostic — RPC handlers map these domain types to proto.
 type MetadataReader struct {
 	db  *sql.DB
 	log *zap.Logger

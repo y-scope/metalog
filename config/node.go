@@ -75,10 +75,8 @@ type CoordinatorConfig struct {
 	LeaseRenewalIntervalSeconds int        `yaml:"leaseRenewalIntervalSeconds"`
 
 	// KafkaMode selects the Kafka consumer implementation:
-	//   ""/"kcp"    — (default) KCP push delivery via YARPC
-	//   "franzgo"   — franz-go direct consumer (pure Go, no CGO)
-	//   "confluent" — confluent-kafka-go direct consumer (requires CGO)
-	KafkaMode string `yaml:"kafkaMode"`
+	//   "franzgo" — franz-go direct consumer (pure Go, no CGO, default)
+	KafkaDriver string `yaml:"kafkaDriver"`
 }
 
 // HealthConfig controls the HTTP health endpoint.

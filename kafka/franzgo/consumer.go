@@ -108,7 +108,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		kgo.ConsumeTopics(c.topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
-		kgo.FetchMaxBytes(1<<20), // 1MB, matching confluent max.partition.fetch.bytes
+		kgo.FetchMaxBytes(1<<20), // 1MB per fetch
 	)
 	if err != nil {
 		c.log.Error("failed to create kafka client",

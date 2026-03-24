@@ -11,7 +11,7 @@ coordinator runs in-process. No manual setup needed.
 ## Prerequisites
 
 - Docker (for testcontainers)
-- Go 1.25+ with CGO enabled (required by confluent-kafka-go)
+- Go 1.25+
 
 ## Usage
 

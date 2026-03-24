@@ -24,9 +24,9 @@ The result is a clean separation:
 |-------|--------------|-----------|
 | Business logic | Ingestion batching, schema evolution, query engine, consolidation planning, retention, task queue, HA | — |
 | Data model | `FileRecord`, lifecycle states, column registry | — |
-| Transport | Reference gRPC handlers (`grpcserver/`) | Your RPC handlers (YARPC, Connect, Twirp, etc.) |
+| Transport | Reference gRPC handlers (`grpcserver/`) | Your RPC handlers (Connect, Twirp, etc.) |
 | Storage | S3/filesystem/HTTP | Your internal blob store |
-| Kafka | confluent-kafka-go consumer | Your managed Kafka proxy |
+| Kafka | franz-go consumer | Your managed Kafka proxy |
 | Config & secrets | Plain YAML, plain strings | Your secret manager integration |
 | Auth | None | Your auth middleware |
 
@@ -610,7 +610,7 @@ This keeps the binary identical and simplifies rollouts.
 2. **Typed error contracts.** `IngestionResult.Err` carries sentinel errors
    (`ErrChannelFull`, `context.DeadlineExceeded`) and typed errors
    (`ValidationError`). Your handler maps these to framework-specific status
-   codes (gRPC codes, HTTP status, YARPC errors) with a simple `switch`.
+   codes (gRPC codes, HTTP status, etc.) with a simple `switch`.
 
 3. **`ResolveSplit()` for column resolution.** Raw database rows use physical
    column names (`dim_f01`, `agg_f03`). `ResolveSplit()` resolves these to

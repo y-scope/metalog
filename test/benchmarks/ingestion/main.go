@@ -21,10 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	ck "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -120,25 +121,22 @@ func main() {
 		kafkaBootstrap = brokers[0]
 		logger.Info("Kafka ready", zap.String("bootstrap", kafkaBootstrap))
 
-		// Create topic.
-		admin, err := ck.NewAdminClient(&ck.ConfigMap{"bootstrap.servers": kafkaBootstrap})
+		// Create topic via franz-go admin client.
+		adminClient, err := kgo.NewClient(kgo.SeedBrokers(kafkaBootstrap))
 		if err != nil {
 			logger.Fatal("create admin client", zap.Error(err))
 		}
-		results, err := admin.CreateTopics(ctx, []ck.TopicSpecification{{
-			Topic:             *table,
-			NumPartitions:     *partitions,
-			ReplicationFactor: 1,
-		}})
-		admin.Close()
+		admin := kadm.NewClient(adminClient)
+		createResp, err := admin.CreateTopics(ctx, int32(*partitions), 1, nil, *table)
 		if err != nil {
 			logger.Fatal("create topic", zap.Error(err))
 		}
-		for _, r := range results {
-			if r.Error.Code() != ck.ErrNoError {
-				logger.Fatal("create topic failed", zap.String("topic", r.Topic), zap.Error(r.Error))
+		for _, r := range createResp.Sorted() {
+			if r.Err != nil {
+				logger.Fatal("create topic failed", zap.String("topic", r.Topic), zap.Error(r.Err))
 			}
 		}
+		adminClient.Close()
 		logger.Info("topic created", zap.String("topic", *table), zap.Int("partitions", *partitions))
 	}
 
@@ -491,40 +489,24 @@ func produceToKafka(bootstrapServers, topic string, table string, records, apps,
 		format = "JSON"
 	}
 
-	producer, err := ck.NewProducer(&ck.ConfigMap{
-		"bootstrap.servers": bootstrapServers,
-		"batch.size":        batchSize,
-		"linger.ms":         5,
-		"acks":              "all",
-	})
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(bootstrapServers),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.ProducerBatchMaxBytes(int32(batchSize)*1024),
+		kgo.ProducerLinger(5*time.Millisecond),
+	)
 	if err != nil {
 		logger.Fatal("create Kafka producer", zap.Error(err))
 	}
-	defer producer.Close()
-
-	delivered := make(chan int, 1)
-	failed := make(chan error, 1)
-	go func() {
-		count := 0
-		for e := range producer.Events() {
-			switch ev := e.(type) {
-			case *ck.Message:
-				if ev.TopicPartition.Error != nil {
-					failed <- fmt.Errorf("delivery failed: %v", ev.TopicPartition.Error)
-					return
-				}
-				count++
-				if count == records {
-					delivered <- count
-					return
-				}
-			}
-		}
-	}()
+	defer client.Close()
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	logger.Info("producing records", zap.Int("records", records), zap.String("format", format), zap.String("topic", topic))
 	produceStart := time.Now()
+
+	// Build all records and produce synchronously in batches.
+	var wg sync.WaitGroup
+	var produceErr atomic.Value
 
 	for i := 0; i < records; i++ {
 		appID := fmt.Sprintf("app-%03d", i%apps)
@@ -540,32 +522,22 @@ func produceToKafka(bootstrapServers, topic string, table string, records, apps,
 			logger.Fatal("marshal record", zap.Int("index", i), zap.Error(err))
 		}
 
-		topicStr := topic
-		msg := &ck.Message{
-			TopicPartition: ck.TopicPartition{Topic: &topicStr, Partition: ck.PartitionAny},
-			Key:            []byte(appID),
-			Value:          data,
-		}
-		for {
-			err = producer.Produce(msg, nil)
-			if err == nil {
-				break
+		wg.Add(1)
+		client.Produce(context.Background(), &kgo.Record{
+			Topic: topic,
+			Key:   []byte(appID),
+			Value: data,
+		}, func(_ *kgo.Record, err error) {
+			defer wg.Done()
+			if err != nil {
+				produceErr.Store(err)
 			}
-			if err.(ck.Error).Code() == ck.ErrQueueFull {
-				producer.Flush(500)
-				continue
-			}
-			logger.Fatal("produce record", zap.Int("index", i), zap.Error(err))
-		}
+		})
 	}
 
-	producer.Flush(30 * 1000)
-	select {
-	case <-delivered:
-	case err := <-failed:
-		logger.Fatal("produce error", zap.Error(err))
-	case <-time.After(60 * time.Second):
-		logger.Fatal("Timed out waiting for delivery confirmations")
+	wg.Wait()
+	if e := produceErr.Load(); e != nil {
+		logger.Fatal("produce error", zap.Error(e.(error)))
 	}
 
 	produceDuration := time.Since(produceStart)

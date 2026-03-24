@@ -40,8 +40,8 @@ type KafkaAdapterFactory func(
 type NodeOption func(*Node)
 
 // WithKafkaAdapterFactory sets a custom Kafka adapter factory, replacing the
-// default confluent-kafka consumer. Use this to plug in alternative Kafka
-// transports (e.g. KCP push delivery).
+// default franz-go consumer. Use this to plug in alternative Kafka
+// transports (e.g. push-based delivery proxies).
 func WithKafkaAdapterFactory(f KafkaAdapterFactory) NodeOption {
 	return func(n *Node) {
 		n.kafkaFactory = f

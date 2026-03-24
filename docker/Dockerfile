@@ -3,26 +3,21 @@
 FROM golang:1.25-bookworm AS build
 WORKDIR /build
 
-# Install build-time dependency for confluent-kafka-go (CGO)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends librdkafka-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source and build all binaries
+# Copy source and build all binaries (pure Go — no CGO required)
 COPY . .
-RUN CGO_ENABLED=1 go build -o /out/metalog ./cmd/metalog
+RUN CGO_ENABLED=0 go build -o /out/metalog ./cmd/metalog
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim
 WORKDIR /app
 
-# Install runtime deps for confluent-kafka-go (librdkafka) and TLS
+# Install runtime deps (TLS certificates)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates librdkafka1 \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install CLP core binaries from .deb (must be built first via docker/build-clp.sh)
