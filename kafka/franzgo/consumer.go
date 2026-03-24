@@ -316,21 +316,15 @@ func (c *Consumer) commitPendingSync(client *kgo.Client) {
 		delete(c.pendingCommit, k)
 	}
 
-	// Use a fresh context with timeout since the parent ctx is already cancelled.
+	// CommitOffsetsSync cancels any active async commits, begins a commit
+	// that cannot be canceled, and blocks until complete. Use a fresh
+	// context since the parent ctx is already cancelled.
 	commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
-	client.CommitOffsets(commitCtx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+	client.CommitOffsetsSync(commitCtx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 		if err != nil {
 			c.log.Warn("shutdown offset commit failed", zap.Error(err))
 		}
-		close(done)
 	})
-
-	select {
-	case <-done:
-	case <-commitCtx.Done():
-		c.log.Warn("shutdown offset commit timed out")
-	}
 }

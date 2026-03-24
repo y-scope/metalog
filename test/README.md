@@ -6,7 +6,7 @@
 |-----------|--------------|------------|--------------|
 | `pipeline/` | Consolidation data path (IR → archive) | `go test -tags integration ./test/pipeline/...` | Docker (testcontainers), `clp-s` (auto-built) |
 | `coordination/` | Multi-node HA, fight-for-master, Kafka ingestion | `./test/coordination/test-multi-node.sh` | Docker Compose |
-| `benchmarks/ingestion/` | Ingestion throughput (gRPC, Kafka) | `go run ./test/benchmarks/ingestion` | Docker (testcontainers), CGO |
+| `benchmarks/ingestion/` | Ingestion throughput (gRPC, Kafka) | `go run ./test/benchmarks/ingestion` | Docker (testcontainers) |
 | `benchmarks/task-queue-scalability/` | Task queue scalability matrix | `go run ./test/benchmarks/task-queue-scalability` | Docker (testcontainers) |
 | `stacks/presto/` | Presto-CLP query integration | `./test/stacks/presto/start.sh` | Docker Compose, `clp-core` `.deb` |
 
