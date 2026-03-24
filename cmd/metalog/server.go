@@ -16,7 +16,7 @@ import (
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator"
 	"github.com/y-scope/metalog/grpcserver"
-	kafkaconfluent "github.com/y-scope/metalog/kafka/confluent"
+	metalogkafka "github.com/y-scope/metalog/kafka/franzgo"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/query"
@@ -54,7 +54,7 @@ func runServer() {
 	}
 
 	n, err := node.NewNode(cfg, log,
-		node.WithKafkaAdapterFactory(kafkaconfluent.NewDefaultAdapterFactory(kafkaMeter)),
+		node.WithKafkaAdapterFactory(metalogkafka.NewDefaultAdapterFactory(kafkaMeter)),
 		node.WithTelemetryProvider(telProv),
 	)
 	if err != nil {

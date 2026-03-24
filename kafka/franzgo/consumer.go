@@ -12,13 +12,11 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
+	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator/ingestion"
 	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/logutil"
 )
-
-// maxPollBatch is the maximum number of records to process per poll cycle.
-const maxPollBatch = 1000
 
 // pendingFlush tracks a submitted record awaiting DB flush confirmation.
 type pendingFlush struct {
@@ -138,7 +136,10 @@ func (c *Consumer) Run(ctx context.Context) {
 		c.drainFlushes()
 		c.commitPending(ctx, client)
 
-		fetches := client.PollFetches(ctx)
+		// PollRecords returns at most DefaultBatchSize records per poll,
+		// matching the DB UPSERT batch size. Remaining records stay in
+		// franz-go's internal buffer for the next poll cycle.
+		fetches := client.PollRecords(ctx, config.DefaultBatchSize)
 		if fetches.IsClientClosed() {
 			return
 		}
@@ -156,9 +157,6 @@ func (c *Consumer) Run(ctx context.Context) {
 
 		processed := 0
 		fetches.EachRecord(func(record *kgo.Record) {
-			if processed >= maxPollBatch {
-				return
-			}
 			c.handleRecord(ctx, record)
 			processed++
 		})

@@ -37,7 +37,7 @@ import (
 	coordinatorpb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
-	metalogkafka "github.com/y-scope/metalog/kafka/confluent"
+	metalogkafka "github.com/y-scope/metalog/kafka/franzgo"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/schema"
 )

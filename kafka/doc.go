@@ -2,8 +2,8 @@
 // metadata ingestion.
 //
 // Concrete consumer implementations live in sub-packages:
-//   - kafka/confluent — wraps confluent-kafka-go (requires CGO + librdkafka)
-//   - kafka/franzgo   — wraps franz-go (pure Go, no CGO)
+//   - kafka/franzgo   — wraps franz-go (pure Go, no CGO) — default
+//   - kafka/confluent — wraps confluent-kafka-go (requires CGO + librdkafka) — available but not used by default
 //
 // Both implementations use the [MessageTransformer] interface to convert raw
 // Kafka message payloads into protobuf MetadataRecord values, and integrate
