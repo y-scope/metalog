@@ -11,9 +11,12 @@ import (
 
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator"
+	"github.com/y-scope/metalog/coordinator/consolidation"
 	"github.com/y-scope/metalog/coordinator/ingestion"
+	"github.com/y-scope/metalog/coordinator/retention"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
+	"github.com/y-scope/metalog/taskqueue"
 )
 
 // partitionMaintenanceInterval is how often partition lookahead/cleanup runs.
@@ -29,6 +32,8 @@ type CoordinatorUnit struct {
 	tableCfg      metastore.TableConfig
 	shared        *Resources
 	writer        *ingestion.BatchingWriter
+	planner           *consolidation.Planner
+	retentionStrategy retention.Strategy
 	partition         *schema.PartitionManager
 	registry          *schema.ColumnRegistry
 	progress          *coordinator.ProgressTracker
@@ -64,6 +69,63 @@ func NewCoordinatorUnit(
 	writer.SetRegistry(tableName, reg)
 	shared.SetColumnRegistry(tableName, reg)
 
+	// Consolidation planner (conditional on feature flag).
+	var planner *consolidation.Planner
+	if tableCfg.Consolidation.Enabled {
+		inFlight := consolidation.NewInFlightSet()
+
+		policy, err := consolidation.CreatePolicyChain(tableCfg.Consolidation.Policies)
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: create policy chain: %w", err)
+		}
+
+		taskQueue := taskqueue.NewQueue(shared.DB, log)
+
+		staleThreshold := 60 * time.Minute
+		if tableCfg.Consolidation.StaleBufferingMins > 0 {
+			staleThreshold = time.Duration(tableCfg.Consolidation.StaleBufferingMins) * time.Minute
+		} else if tableCfg.Consolidation.StaleBufferingMins < 0 {
+			staleThreshold = 0 // disabled
+		}
+
+		planner, err = consolidation.NewPlanner(consolidation.PlannerConfig{
+			DB:                 shared.DB,
+			TableName:          tableName,
+			IsMariaDB:          shared.IsMariaDB,
+			Policy:             policy,
+			InFlight:           inFlight,
+			TaskQueue:          taskQueue,
+			Resolver:           reg,
+			StorageRegistry:    shared.StorageRegistry,
+			ArchiveBackend:     shared.ArchiveBackend,
+			ArchiveBucket:      shared.ArchiveBucket,
+			Interval:           config.DefaultPlannerInterval,
+			FailureLogInterval: shared.FailureLogInterval,
+			StaleThreshold:     staleThreshold,
+			Log:                log,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("new coordinator unit: planner: %w", err)
+		}
+	}
+
+	// Retention strategy — always created; conditionally started in Start().
+	retTypeName := tableCfg.Retention.Type
+	if retTypeName == "" {
+		retTypeName = "default"
+	}
+	retStrategy, err := retention.CreateStrategy(retTypeName, retention.Deps{
+		DB:                 shared.DB,
+		TableName:          tableName,
+		IsMariaDB:          shared.IsMariaDB,
+		StorageRegistry:    shared.StorageRegistry,
+		FailureLogInterval: shared.FailureLogInterval,
+		Log:                log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("new coordinator unit: retention strategy: %w", err)
+	}
+
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
 	// Create Kafka adapter if configured — routes through IngestionService
@@ -89,6 +151,8 @@ func NewCoordinatorUnit(
 		tableCfg:         tableCfg,
 		shared:           shared,
 		writer:           writer,
+		planner:           planner,
+		retentionStrategy: retStrategy,
 		partition:        partMgr,
 		registry:         reg,
 		progress:         progress,
@@ -137,6 +201,14 @@ func (u *CoordinatorUnit) Start() {
 	ctx := u.ctx
 	u.ctxMu.Unlock()
 
+	// Planner goroutine (nil when consolidation_enabled=false)
+	if u.planner != nil {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.planner.Run(ctx)
+		}()
+	}
 
 	// Partition maintenance goroutine
 	u.wg.Add(1)
@@ -152,6 +224,14 @@ func (u *CoordinatorUnit) Start() {
 		u.runAliasRefresh(ctx)
 	}()
 
+	// Retention cleanup goroutine (conditional on retention.enabled)
+	if u.tableCfg.Retention.Enabled {
+		u.wg.Add(1)
+		go func() {
+			defer u.wg.Done()
+			u.retentionStrategy.Run(ctx)
+		}()
+	}
 
 	// Column recycler goroutine
 	u.wg.Add(1)

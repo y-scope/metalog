@@ -33,6 +33,7 @@ type Node struct {
 
 	coordMu      sync.Mutex
 	coordinators map[string]*CoordinatorUnit
+	workerUnit   *WorkerUnit
 	healthSrv    *health.Server
 
 	// reconcileReg overrides the registry for reconciliation (testing only).
@@ -301,6 +302,11 @@ func (n *Node) Start() error {
 		}()
 	}
 
+	// Workers require primary DB
+	if n.cfg.Worker.Concurrency > 0 {
+		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
+		n.workerUnit.Start()
+	}
 
 	// Health server
 	if n.healthSrv != nil {
@@ -316,6 +322,7 @@ func (n *Node) Start() error {
 
 	n.log.Info("node started",
 		zap.Int("coordinators", len(n.coordinators)),
+		zap.Int("workers", n.cfg.Worker.Concurrency),
 	)
 	return nil
 }
@@ -356,6 +363,10 @@ func (n *Node) Stop() {
 		n.writer.Stop()
 	}
 
+	// Stop workers
+	if n.workerUnit != nil {
+		n.workerUnit.Stop()
+	}
 
 	// Stop health server
 	if n.healthSrv != nil {
