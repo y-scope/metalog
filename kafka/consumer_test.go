@@ -32,23 +32,23 @@ func TestAutoDetectTransformer_ValidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Transform() error = %v", err)
 	}
-	if result.File.MinTimestamp != 1000 {
-		t.Errorf("MinTimestamp = %d, want 1000", result.File.MinTimestamp)
+	if result.MinTimestamp != 1000 {
+		t.Errorf("MinTimestamp = %d, want 1000", result.MinTimestamp)
 	}
-	if result.File.MaxTimestamp != 2000 {
-		t.Errorf("MaxTimestamp = %d, want 2000", result.File.MaxTimestamp)
+	if result.MaxTimestamp != 2000 {
+		t.Errorf("MaxTimestamp = %d, want 2000", result.MaxTimestamp)
 	}
-	if result.File.RecordCount != 42 {
-		t.Errorf("RecordCount = %d, want 42", result.File.RecordCount)
+	if result.RecordCount != 42 {
+		t.Errorf("RecordCount = %d, want 42", result.RecordCount)
 	}
-	if result.File.Ir == nil || result.File.Ir.ClpIrBucket != "test-bucket" {
+	if !result.ClpIRBucket.Valid || result.ClpIRBucket.String != "test-bucket" {
 		t.Errorf("IR bucket not parsed correctly")
 	}
-	if len(result.Dim) != 1 || result.Dim[0].Key != "service" {
-		t.Errorf("Dims not parsed correctly")
+	if _, ok := result.Dims["service"]; !ok {
+		t.Errorf("Dims missing 'service' key")
 	}
-	if len(result.Agg) != 1 || result.Agg[0].Field != "level" {
-		t.Errorf("Aggs not parsed correctly")
+	if len(result.Aggs) != 1 {
+		t.Errorf("expected 1 agg entry, got %d", len(result.Aggs))
 	}
 }
 
@@ -68,13 +68,11 @@ func TestAutoDetectTransformer_SelfDescribingSketch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Transform() error = %v", err)
 	}
-	if len(result.Sketch) != 1 {
-		t.Fatalf("expected 1 sketch entry, got %d", len(result.Sketch))
+	sketchData, ok := result.Sketches["uuid"]
+	if !ok {
+		t.Fatal("expected sketch entry for 'uuid'")
 	}
-	if result.Sketch[0].SketchKey != "uuid" {
-		t.Errorf("SketchKey = %q, want uuid", result.Sketch[0].SketchKey)
-	}
-	if len(result.Sketch[0].Data) == 0 {
+	if len(sketchData) == 0 {
 		t.Error("sketch data should not be empty")
 	}
 
@@ -83,7 +81,7 @@ func TestAutoDetectTransformer_SelfDescribingSketch(t *testing.T) {
 		Type string `msgpack:"type"`
 		Data []byte `msgpack:"data"`
 	}
-	if err := msgpack.Unmarshal(result.Sketch[0].Data, &snap); err != nil {
+	if err := msgpack.Unmarshal(sketchData, &snap); err != nil {
 		t.Fatalf("unmarshal sketch data: %v", err)
 	}
 	if snap.Type != "parquet_sbbf_xxhash64" {
@@ -109,27 +107,27 @@ func TestAutoDetectTransformer_SelfDescribingDimAndAgg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Transform() error = %v", err)
 	}
-	if len(result.Dim) != 2 {
-		t.Fatalf("expected 2 dim entries, got %d", len(result.Dim))
+	if len(result.Dims) != 2 {
+		t.Fatalf("expected 2 dim entries, got %d", len(result.Dims))
 	}
-	if result.Dim[0].Key != "service_name" {
-		t.Errorf("Dim[0].Key = %q, want service_name", result.Dim[0].Key)
+	if _, ok := result.Dims["service_name"]; !ok {
+		t.Error("missing dim 'service_name'")
 	}
-	if result.Dim[1].Key != "error_code" {
-		t.Errorf("Dim[1].Key = %q, want error_code", result.Dim[1].Key)
+	if _, ok := result.Dims["error_code"]; !ok {
+		t.Error("missing dim 'error_code'")
 	}
-	if len(result.Agg) != 2 {
-		t.Fatalf("expected 2 agg entries, got %d", len(result.Agg))
+	if len(result.Aggs) != 2 {
+		t.Fatalf("expected 2 agg entries, got %d", len(result.Aggs))
 	}
-	if result.Agg[0].Field != "level" || result.Agg[0].Qualifier != "warn" {
-		t.Errorf("Agg[0] = %v/%v, want level/warn", result.Agg[0].Field, result.Agg[0].Qualifier)
-	}
-	if result.Agg[1].Field != "latency" {
-		t.Errorf("Agg[1].Field = %q, want latency", result.Agg[1].Field)
+	if len(result.AggMeta) != 2 {
+		t.Fatalf("expected 2 agg meta entries, got %d", len(result.AggMeta))
 	}
 }
 
 func TestAutoDetectTransformer_UnknownPrefixPassesThrough(t *testing.T) {
+	// Unknown self-describing prefixes are kept in the proto SelfDescribingKv
+	// but after ConvertRecord they are not in FileRecord (no mapping).
+	// Just verify no error on transform.
 	jsonPayload := []byte(`{
 		"state": "IR_CLOSED",
 		"min_timestamp": 1000,
@@ -140,15 +138,9 @@ func TestAutoDetectTransformer_UnknownPrefixPassesThrough(t *testing.T) {
 	}`)
 
 	tr := &AutoDetectTransformer{}
-	result, err := tr.Transform(jsonPayload)
+	_, err := tr.Transform(jsonPayload)
 	if err != nil {
 		t.Fatalf("Transform() error = %v", err)
-	}
-	if len(result.SelfDescribingKv) != 1 {
-		t.Fatalf("expected 1 self-describing entry, got %d", len(result.SelfDescribingKv))
-	}
-	if result.SelfDescribingKv[0].Key != "custom/my_field" {
-		t.Errorf("Key = %q, want custom/my_field", result.SelfDescribingKv[0].Key)
 	}
 }
 
@@ -160,4 +152,3 @@ func TestAutoDetectTransformer_InvalidPayload(t *testing.T) {
 		t.Fatal("Transform() should fail on invalid payload")
 	}
 }
-

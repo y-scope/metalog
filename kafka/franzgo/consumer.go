@@ -175,22 +175,12 @@ func (c *Consumer) Run(ctx context.Context) {
 func (c *Consumer) handleRecord(ctx context.Context, rec *kgo.Record) {
 	topicAttr := attribute.String("topic", c.topic)
 
-	record, err := c.transformer.Transform(rec.Value)
+	converted, err := c.transformer.Transform(rec.Value)
 	if err != nil {
 		c.dataFL.Fail("transform failed", zap.Error(err))
 		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
 		if c.dlq != nil {
 			c.dlq.Handle(ctx, c.topic, rec.Partition, rec.Offset, rec.Value, "transform", err)
-		}
-		return
-	}
-
-	converted, err := ingestion.ConvertRecord(record)
-	if err != nil {
-		c.dataFL.Fail("convert failed", zap.Error(err))
-		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
-		if c.dlq != nil {
-			c.dlq.Handle(ctx, c.topic, rec.Partition, rec.Offset, rec.Value, "convert", err)
 		}
 		return
 	}

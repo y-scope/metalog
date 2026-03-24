@@ -205,22 +205,12 @@ func (c *Consumer) handleEvent(ctx context.Context, ev ckafka.Event, processed *
 func (c *Consumer) handleMessage(ctx context.Context, msg *ckafka.Message) {
 	topicAttr := attribute.String("topic", c.topic)
 
-	record, err := c.transformer.Transform(msg.Value)
+	rec, err := c.transformer.Transform(msg.Value)
 	if err != nil {
 		c.dataFL.Fail("transform failed", zap.Error(err))
 		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "transform")))
 		if c.dlq != nil {
 			c.dlq.Handle(ctx, c.topic, msg.TopicPartition.Partition, int64(msg.TopicPartition.Offset), msg.Value, "transform", err)
-		}
-		return
-	}
-
-	rec, err := ingestion.ConvertRecord(record)
-	if err != nil {
-		c.dataFL.Fail("convert failed", zap.Error(err))
-		c.mFailed.Add(ctx, 1, metric.WithAttributes(topicAttr, attribute.String("reason", "convert")))
-		if c.dlq != nil {
-			c.dlq.Handle(ctx, c.topic, msg.TopicPartition.Partition, int64(msg.TopicPartition.Offset), msg.Value, "convert", err)
 		}
 		return
 	}

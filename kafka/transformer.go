@@ -6,7 +6,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/y-scope/metalog/coordinator/ingestion"
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
+	"github.com/y-scope/metalog/metastore"
 )
 
 var (
@@ -38,33 +40,40 @@ func init() {
 	RegisterTransformer("proto", func() MessageTransformer { return &ProtoTransformer{} })
 }
 
-// MessageTransformer transforms raw Kafka message bytes into a MetadataRecord.
+// MessageTransformer transforms raw Kafka message bytes into a FileRecord
+// ready for ingestion. Implementations handle deserialization (proto, JSON,
+// platform-specific formats) and validation internally.
 type MessageTransformer interface {
-	Transform(payload []byte) (*pb.MetadataRecord, error)
+	Transform(payload []byte) (*metastore.FileRecord, error)
 }
 
 // ProtoTransformer deserializes protobuf MetadataRecord payloads.
 type ProtoTransformer struct{}
 
-func (t *ProtoTransformer) Transform(payload []byte) (*pb.MetadataRecord, error) {
+func (t *ProtoTransformer) Transform(payload []byte) (*metastore.FileRecord, error) {
 	var record pb.MetadataRecord
 	if err := proto.Unmarshal(payload, &record); err != nil {
 		return nil, fmt.Errorf("protobuf unmarshal: %w", err)
 	}
-	return &record, nil
+	return ingestion.ConvertRecord(&record)
 }
 
 // AutoDetectTransformer auto-detects JSON vs protobuf payloads.
 // JSON payloads start with '{'; everything else is treated as protobuf.
 type AutoDetectTransformer struct{}
 
-func (t *AutoDetectTransformer) Transform(payload []byte) (*pb.MetadataRecord, error) {
+func (t *AutoDetectTransformer) Transform(payload []byte) (*metastore.FileRecord, error) {
+	var record *pb.MetadataRecord
+	var err error
 	if len(payload) > 0 && payload[0] == '{' {
-		return unmarshalJSONToProto(payload)
+		record, err = unmarshalJSONToProto(payload)
+	} else {
+		var r pb.MetadataRecord
+		err = proto.Unmarshal(payload, &r)
+		record = &r
 	}
-	var record pb.MetadataRecord
-	if err := proto.Unmarshal(payload, &record); err != nil {
-		return nil, fmt.Errorf("protobuf unmarshal: %w", err)
+	if err != nil {
+		return nil, err
 	}
-	return &record, nil
+	return ingestion.ConvertRecord(record)
 }
