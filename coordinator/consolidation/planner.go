@@ -346,9 +346,6 @@ func (p *Planner) buildPayload(group FileGroup, irPaths []string) *taskqueue.Tas
 	if len(group.Records) > 0 && group.Records[0].ClpIRStorageBackend.Valid {
 		cons.IRBackend = group.Records[0].ClpIRStorageBackend.String
 	}
-	if len(group.Records) == 0 || !group.Records[0].ClpIRBucket.Valid {
-		return nil // skip groups without valid IR bucket info
-	}
 	cons.IRBuckets = make([]string, len(group.Records))
 	for i, rec := range group.Records {
 		if rec.ClpIRBucket.Valid {
