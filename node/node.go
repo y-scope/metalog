@@ -44,6 +44,13 @@ type Node struct {
 	externalTelemetry    *telemetry.Provider
 	hasTelemetryProvider bool
 
+	// externalDB/externalReadDB are set via WithDB/WithReadDB when the caller
+	// provides pre-created database pools (e.g., from mysqlfx).
+	externalDB        *sql.DB
+	hasExternalDB     bool
+	externalReadDB    *sql.DB
+	hasExternalReadDB bool
+
 	log    *zap.Logger
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -58,36 +65,59 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	}
 	log = log.With(zap.String("nodeId", nodeID))
 
-	// Create primary pool (nil if not configured, e.g. replica-only API server)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create the node early so options can be applied before pool creation.
+	n := &Node{
+		cfg:          cfg,
+		nodeID:       nodeID,
+		coordinators: make(map[string]*CoordinatorUnit),
+		log:          log,
+		ctx:          ctx,
+		cancel:       cancel,
+	}
+	for _, opt := range opts {
+		opt(n)
+	}
+
+	// Create primary pool: use external (from WithDB) or create from config.
 	var pool *sql.DB
-	if cfg.Database.Primary.Host != "" {
+	var poolOwned bool
+	if n.hasExternalDB {
+		pool = n.externalDB
+	} else if cfg.Database.Primary.Host != "" {
 		var err error
 		pool, err = db.NewPool(cfg.Database.Primary)
 		if err != nil {
 			return nil, fmt.Errorf("create primary pool: %w", err)
 		}
+		poolOwned = true
 	}
 	success := false
 	defer func() {
-		if !success && pool != nil {
+		if !success && poolOwned && pool != nil {
 			pool.Close()
 		}
 	}()
 
-	// Create replica pool if configured
+	// Create replica pool: use external (from WithReadDB) or create from config.
 	var readPool *sql.DB
-	if cfg.Database.Replica != nil && cfg.Database.Replica.Host != "" {
+	var readPoolOwned bool
+	if n.hasExternalReadDB {
+		readPool = n.externalReadDB
+	} else if cfg.Database.Replica != nil && cfg.Database.Replica.Host != "" {
 		var err error
 		readPool, err = db.NewPool(*cfg.Database.Replica)
 		if err != nil {
 			return nil, fmt.Errorf("create replica pool: %w", err)
 		}
+		readPoolOwned = true
 		log.Info("replica database pool created",
 			zap.String("host", cfg.Database.Replica.Host),
 			zap.Int("poolSize", cfg.Database.Replica.PoolSize))
 	}
 	defer func() {
-		if !success && readPool != nil {
+		if !success && readPoolOwned && readPool != nil {
 			readPool.Close()
 		}
 	}()
@@ -152,26 +182,14 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		FailureLogInterval: cfg.Logging.FailureLogInterval(),
 		Telemetry:          telemetryProvider,
 		Log:                log,
+		dbOwned:            poolOwned,
+		readDBOwned:        readPoolOwned,
 	}
 
 	cr := registry.New(pool, nodeID, isMariaDB, log)
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	n := &Node{
-		cfg:          cfg,
-		nodeID:       nodeID,
-		shared:       shared,
-		registry:     cr,
-		coordinators: make(map[string]*CoordinatorUnit),
-		log:          log,
-		ctx:          ctx,
-		cancel:       cancel,
-	}
-
-	for _, opt := range opts {
-		opt(n)
-	}
+	n.shared = shared
+	n.registry = cr
 
 	// Resolve telemetry provider: use external (from WithTelemetryProvider)
 	// or create from config. WithTelemetryProvider(nil) explicitly suppresses

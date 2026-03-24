@@ -33,6 +33,12 @@ type Resources struct {
 	// Nil when telemetry is disabled (subsystems use no-op meters).
 	Telemetry *telemetry.Provider
 
+	// dbOwned/readDBOwned track whether Node created the pools (and should
+	// close them on Stop). When pools are injected via WithDB/WithReadDB,
+	// the caller retains ownership and these are false.
+	dbOwned     bool
+	readDBOwned bool
+
 	regMu      sync.RWMutex
 	registries map[string]*schema.ColumnRegistry
 }
@@ -63,7 +69,8 @@ func (s *Resources) GetColumnRegistry(tableName string) *schema.ColumnRegistry {
 }
 
 
-// Close releases all shared resources.
+// Close releases all shared resources. Database pools are only closed
+// when they were created by the Node (not injected via WithDB/WithReadDB).
 func (s *Resources) Close() {
 	if s.Telemetry != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -72,12 +79,12 @@ func (s *Resources) Close() {
 			s.Log.Warn("failed to shutdown telemetry", zap.Error(err))
 		}
 	}
-	if s.ReadDB != nil {
+	if s.ReadDB != nil && s.readDBOwned {
 		if err := s.ReadDB.Close(); err != nil {
 			s.Log.Warn("failed to close read DB", zap.Error(err))
 		}
 	}
-	if s.DB != nil {
+	if s.DB != nil && s.dbOwned {
 		if err := s.DB.Close(); err != nil {
 			s.Log.Warn("failed to close DB", zap.Error(err))
 		}
