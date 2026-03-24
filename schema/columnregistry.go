@@ -336,20 +336,6 @@ func (cr *ColumnRegistry) expandDimWidth(ctx context.Context, entry *DimRegistry
 		return entry.ColumnName, nil
 	}
 
-	// Prevent crossing the 255→256 boundary: InnoDB changes the VARCHAR
-	// length prefix from 1 byte to 2 bytes, forcing a full table rebuild.
-	if entry.Width <= defaultVarcharWidth && newWidth > defaultVarcharWidth {
-		cr.log.Warn("capping dim width at 255 to avoid full table rebuild",
-			zap.String("column", entry.ColumnName),
-			zap.String("dimKey", entry.DimKey),
-			zap.Int("requestedWidth", newWidth),
-		)
-		newWidth = defaultVarcharWidth
-		if newWidth <= entry.Width {
-			return entry.ColumnName, nil
-		}
-	}
-
 	sqlType := dimSQLType(entry.BaseType, newWidth)
 
 	_, err := cr.db.ExecContext(ctx,
@@ -1796,8 +1782,13 @@ func AggCacheKey(aggKey, aggValue, aggType string) string {
 }
 
 // defaultVarcharWidth is the default VARCHAR width when not specified.
-// 255 is the largest width that fits in a single-byte InnoDB length prefix.
-const defaultVarcharWidth = 255
+const defaultVarcharWidth = 256
+
+// minVarcharWidth is the minimum VARCHAR width for new dim columns.
+// 256 avoids ever needing to widen columns (which requires ALTER TABLE).
+// MySQL 8.0+ temptable engine uses variable-length storage, so the
+// overhead of a wider declared width is negligible.
+const minVarcharWidth = 256
 
 func dimSQLType(baseType string, width int) string {
 	if width <= 0 {
@@ -1805,8 +1796,14 @@ func dimSQLType(baseType string, width int) string {
 	}
 	switch baseType {
 	case "str":
+		if width < minVarcharWidth {
+			width = minVarcharWidth
+		}
 		return fmt.Sprintf("VARCHAR(%d) CHARACTER SET ascii COLLATE ascii_bin", width)
 	case "str_utf8":
+		if width < minVarcharWidth {
+			width = minVarcharWidth
+		}
 		return fmt.Sprintf("VARCHAR(%d)", width)
 	case "int":
 		return "BIGINT"
@@ -1815,6 +1812,9 @@ func dimSQLType(baseType string, width int) string {
 	case "float":
 		return "DOUBLE"
 	default:
+		if width < minVarcharWidth {
+			width = minVarcharWidth
+		}
 		return fmt.Sprintf("VARCHAR(%d)", width)
 	}
 }
