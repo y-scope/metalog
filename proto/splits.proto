@@ -59,20 +59,37 @@ message StreamSplitsResponse {
 }
 
 message Split {
-    int64 id = 1;
-    string clp_ir_path = 2;
-    string clp_archive_path = 3;
-    int64 min_timestamp = 4;
-    int64 max_timestamp = 5;
-    string state = 6;
-    map<string, string> dimensions = 7;
-    repeated AggEntry aggs = 8;
-    int64 record_count = 9;
-    int64 size_bytes = 10;
-    string clp_ir_storage_backend = 11;
-    string clp_ir_bucket = 12;
-    string clp_archive_storage_backend = 13;
-    string clp_archive_bucket = 14;
+    FileInfo            file       = 1;   // __FILE.* fields
+    map<string, string> dimensions = 2;   // __DIM.* fields
+    repeated AggEntry   aggs       = 3;   // __AGG.* fields
+}
+
+message FileInfo {
+    // Time bounds
+    int64  min_timestamp               = 1;
+    int64  max_timestamp               = 2;
+
+    // Lifecycle
+    string state                       = 3;
+    int64  record_count                = 4;
+    int64  raw_size_bytes              = 5;
+
+    // IR location
+    string clp_ir_path                 = 6;
+    string clp_ir_storage_backend      = 7;
+    string clp_ir_bucket               = 8;
+    int64  clp_ir_size_bytes           = 9;
+
+    // Archive location (empty/zero if not yet consolidated)
+    string clp_archive_path            = 10;
+    string clp_archive_storage_backend = 11;
+    string clp_archive_bucket          = 12;
+    int64  clp_archive_size_bytes      = 13;
+    int64  clp_archive_created_at      = 14;
+
+    // Retention
+    int32  retention_days              = 15;
+    int64  expires_at                  = 16;
 }
 
 message KeysetCursor {

@@ -28,21 +28,19 @@ func TestRowToProtoSplit_BasicFields(t *testing.T) {
 	}
 
 	split := rowToProtoSplit(row, nil, zap.NewNop())
+	f := split.GetFile()
 
-	if split.Id != 42 {
-		t.Errorf("Id = %d, want 42", split.Id)
+	if f.GetMinTimestamp() != 1000 {
+		t.Errorf("MinTimestamp = %d, want 1000", f.GetMinTimestamp())
 	}
-	if split.MinTimestamp != 1000 {
-		t.Errorf("MinTimestamp = %d, want 1000", split.MinTimestamp)
+	if f.GetMaxTimestamp() != 2000 {
+		t.Errorf("MaxTimestamp = %d, want 2000", f.GetMaxTimestamp())
 	}
-	if split.MaxTimestamp != 2000 {
-		t.Errorf("MaxTimestamp = %d, want 2000", split.MaxTimestamp)
+	if f.GetState() != "IR_CLOSED" {
+		t.Errorf("State = %q, want IR_CLOSED", f.GetState())
 	}
-	if split.State != "IR_CLOSED" {
-		t.Errorf("State = %q, want IR_CLOSED", split.State)
-	}
-	if split.RecordCount != 500 {
-		t.Errorf("RecordCount = %d, want 500", split.RecordCount)
+	if f.GetRecordCount() != 500 {
+		t.Errorf("RecordCount = %d, want 500", f.GetRecordCount())
 	}
 }
 
@@ -58,22 +56,23 @@ func TestRowToProtoSplit_IRFields(t *testing.T) {
 	}
 
 	split := rowToProtoSplit(row, nil, zap.NewNop())
+	f := split.GetFile()
 
-	if split.ClpIrPath != "/logs/test.clp.zst" {
-		t.Errorf("ClpIrPath = %q", split.ClpIrPath)
+	if f.GetClpIrPath() != "/logs/test.clp.zst" {
+		t.Errorf("ClpIrPath = %q", f.GetClpIrPath())
 	}
-	if split.ClpIrStorageBackend != "s3" {
-		t.Errorf("ClpIrStorageBackend = %q", split.ClpIrStorageBackend)
+	if f.GetClpIrStorageBackend() != "s3" {
+		t.Errorf("ClpIrStorageBackend = %q", f.GetClpIrStorageBackend())
 	}
-	if split.ClpIrBucket != "my-bucket" {
-		t.Errorf("ClpIrBucket = %q", split.ClpIrBucket)
+	if f.GetClpIrBucket() != "my-bucket" {
+		t.Errorf("ClpIrBucket = %q", f.GetClpIrBucket())
 	}
-	if split.SizeBytes != 4096 {
-		t.Errorf("SizeBytes = %d, want 4096", split.SizeBytes)
+	if f.GetClpIrSizeBytes() != 4096 {
+		t.Errorf("ClpIrSizeBytes = %d, want 4096", f.GetClpIrSizeBytes())
 	}
 }
 
-func TestRowToProtoSplit_ArchiveSizeOverridesIRSize(t *testing.T) {
+func TestRowToProtoSplit_BothSizesExposed(t *testing.T) {
 	row := &query.SplitRow{
 		ID: 1,
 		Values: map[string]any{
@@ -83,26 +82,13 @@ func TestRowToProtoSplit_ArchiveSizeOverridesIRSize(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row, nil, zap.NewNop())
+	f := rowToProtoSplit(row, nil, zap.NewNop()).GetFile()
 
-	if split.SizeBytes != 5000 {
-		t.Errorf("SizeBytes = %d, want 5000 (archive should override IR)", split.SizeBytes)
+	if f.GetClpIrSizeBytes() != 1000 {
+		t.Errorf("ClpIrSizeBytes = %d, want 1000", f.GetClpIrSizeBytes())
 	}
-}
-
-func TestRowToProtoSplit_NoArchivePathKeepsIRSize(t *testing.T) {
-	row := &query.SplitRow{
-		ID: 1,
-		Values: map[string]any{
-			"clp_ir_size_bytes":      int64(1000),
-			"clp_archive_size_bytes": int64(5000),
-		},
-	}
-
-	split := rowToProtoSplit(row, nil, zap.NewNop())
-
-	if split.SizeBytes != 1000 {
-		t.Errorf("SizeBytes = %d, want 1000 (no archive path should use IR size)", split.SizeBytes)
+	if f.GetClpArchiveSizeBytes() != 5000 {
+		t.Errorf("ClpArchiveSizeBytes = %d, want 5000", f.GetClpArchiveSizeBytes())
 	}
 }
 
@@ -155,10 +141,10 @@ func TestRowToProtoSplit_WrongTypeForTimestamp(t *testing.T) {
 		},
 	}
 
-	split := rowToProtoSplit(row, nil, zap.NewNop())
+	f := rowToProtoSplit(row, nil, zap.NewNop()).GetFile()
 
-	if split.MinTimestamp != 0 {
-		t.Errorf("MinTimestamp = %d, want 0 for wrong type", split.MinTimestamp)
+	if f.GetMinTimestamp() != 0 {
+		t.Errorf("MinTimestamp = %d, want 0 for wrong type", f.GetMinTimestamp())
 	}
 }
 
@@ -170,15 +156,15 @@ func TestRowToProtoSplit_EmptyRow(t *testing.T) {
 
 	split := rowToProtoSplit(row, nil, zap.NewNop())
 
-	if split.Id != 0 {
-		t.Errorf("Id = %d, want 0", split.Id)
+	if split.GetFile() == nil {
+		t.Fatal("File should not be nil")
 	}
 	if len(split.Dimensions) != 0 {
 		t.Errorf("Dimensions should be empty, got %d", len(split.Dimensions))
 	}
 }
 
-func TestRowToProtoSplit_FileColumnsNotInDimensions(t *testing.T) {
+func TestRowToProtoSplit_FileColumnsInFileInfo(t *testing.T) {
 	row := &query.SplitRow{
 		ID: 1,
 		Values: map[string]any{
@@ -194,9 +180,25 @@ func TestRowToProtoSplit_FileColumnsNotInDimensions(t *testing.T) {
 	}
 
 	split := rowToProtoSplit(row, nil, zap.NewNop())
+	f := split.GetFile()
 
+	// File columns populate FileInfo, not dimensions
+	if f.GetRawSizeBytes() != 9999 {
+		t.Errorf("RawSizeBytes = %d, want 9999", f.GetRawSizeBytes())
+	}
+	if f.GetClpArchiveCreatedAt() != 12345 {
+		t.Errorf("ClpArchiveCreatedAt = %d, want 12345", f.GetClpArchiveCreatedAt())
+	}
+	if f.GetRetentionDays() != 30 {
+		t.Errorf("RetentionDays = %d, want 30", f.GetRetentionDays())
+	}
+	if f.GetExpiresAt() != 99999 {
+		t.Errorf("ExpiresAt = %d, want 99999", f.GetExpiresAt())
+	}
+
+	// Internal columns (id, path hashes) and dimensions
 	if len(split.Dimensions) != 1 {
-		t.Errorf("Dimensions count = %d, want 1 (file columns should be skipped)", len(split.Dimensions))
+		t.Errorf("Dimensions count = %d, want 1 (internal columns should be skipped)", len(split.Dimensions))
 	}
 	if split.Dimensions["dim_f01"] != "should-appear" {
 		t.Errorf("dim_f01 = %q, want should-appear", split.Dimensions["dim_f01"])

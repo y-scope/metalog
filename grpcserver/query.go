@@ -222,20 +222,27 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 
 func rowToProtoSplit(row *query.SplitRow, registry *schema.ColumnRegistry, log *zap.Logger) *pb.Split {
 	rs := query.ResolveSplit(row, registry)
+	f := &rs.File
 	split := &pb.Split{
-		Id:                       rs.ID,
-		MinTimestamp:             rs.MinTimestamp,
-		MaxTimestamp:             rs.MaxTimestamp,
-		RecordCount:              rs.RecordCount,
-		SizeBytes:                rs.SizeBytes,
-		ClpIrPath:                rs.ClpIRPath,
-		ClpArchivePath:           rs.ClpArchivePath,
-		State:                    rs.State,
-		ClpIrStorageBackend:      rs.ClpIRStorageBackend,
-		ClpIrBucket:              rs.ClpIRBucket,
-		ClpArchiveStorageBackend: rs.ClpArchiveStorageBackend,
-		ClpArchiveBucket:         rs.ClpArchiveBucket,
-		Dimensions:               rs.Dimensions,
+		File: &pb.FileInfo{
+			MinTimestamp:             f.MinTimestamp,
+			MaxTimestamp:             f.MaxTimestamp,
+			State:                    f.State,
+			RecordCount:              f.RecordCount,
+			RawSizeBytes:             f.RawSizeBytes,
+			ClpIrPath:                f.ClpIRPath,
+			ClpIrStorageBackend:      f.ClpIRStorageBackend,
+			ClpIrBucket:              f.ClpIRBucket,
+			ClpIrSizeBytes:           f.ClpIRSizeBytes,
+			ClpArchivePath:           f.ClpArchivePath,
+			ClpArchiveStorageBackend: f.ClpArchiveStorageBackend,
+			ClpArchiveBucket:         f.ClpArchiveBucket,
+			ClpArchiveSizeBytes:      f.ClpArchiveSizeBytes,
+			ClpArchiveCreatedAt:      f.ClpArchiveCreatedAt,
+			RetentionDays:            f.RetentionDays,
+			ExpiresAt:                f.ExpiresAt,
+		},
+		Dimensions: rs.Dimensions,
 	}
 	for _, ra := range rs.Aggs {
 		aggTypeName := "AGGREGATION_TYPE_" + ra.AggregationType

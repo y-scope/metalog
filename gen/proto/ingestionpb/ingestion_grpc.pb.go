@@ -3,7 +3,7 @@
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
 // source: ingestion.proto
-//
+
 package ingestionpb
 
 import (

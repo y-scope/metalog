@@ -625,10 +625,10 @@ const file_metadata_proto_rawDesc = "" +
 	"\x0fListAggsRequest\x12\x14\n" +
 	"\x05table\x18\x01 \x01(\tR\x05table\"X\n" +
 	"\x10ListAggsResponse\x12D\n" +
-	"\x04aggs\x18\x01 \x03(\v20.com.yscope.metalog.query.api.proto.grpc.AggInfoR\x04aggs\"\x91\x02\n" +
+	"\x04aggs\x18\x01 \x03(\v20.com.yscope.metalog.query.api.proto.grpc.AggInfoR\x04aggs\"\x99\x02\n" +
 	"\aAggInfo\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\x12c\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tqualifier\x18\x02 \x01(\tR\tqualifier\x12c\n" +
 	"\x10aggregation_type\x18\x03 \x01(\x0e28.com.yscope.metalog.query.api.proto.grpc.AggregationTypeR\x0faggregationType\x12T\n" +
 	"\n" +
 	"value_type\x18\x04 \x01(\x0e25.com.yscope.metalog.query.api.proto.grpc.AggValueTypeR\tvalueType\x12!\n" +

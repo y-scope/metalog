@@ -24,73 +24,95 @@ type ResolvedAgg struct {
 // ResolvedSplit is a transport-agnostic representation of a split row with all
 // physical column names (dim_fNN, agg_fNN) resolved back to logical names.
 type ResolvedSplit struct {
-	ID                       int64
+	File       ResolvedFileInfo
+	Dimensions map[string]string
+	Aggs       []ResolvedAgg
+}
+
+// ResolvedFileInfo holds the __FILE.* fields from a split row.
+type ResolvedFileInfo struct {
 	MinTimestamp             int64
 	MaxTimestamp             int64
-	RecordCount              int64
-	IRSizeBytes              int64
-	ArchiveSizeBytes         int64
-	SizeBytes                int64 // archive size if archive exists, else IR size
-	ClpIRPath                string
-	ClpArchivePath           string
 	State                    string
+	RecordCount              int64
+	RawSizeBytes             int64
+	ClpIRPath                string
 	ClpIRStorageBackend      string
 	ClpIRBucket              string
+	ClpIRSizeBytes           int64
+	ClpArchivePath           string
 	ClpArchiveStorageBackend string
 	ClpArchiveBucket         string
-	Dimensions               map[string]string
-	Aggs                     []ResolvedAgg
+	ClpArchiveSizeBytes      int64
+	ClpArchiveCreatedAt      int64
+	RetentionDays            int32
+	ExpiresAt                int64
 }
 
 // ResolveSplit converts a raw database SplitRow into a ResolvedSplit, mapping
 // physical column names back to logical names using the ColumnRegistry.
 func ResolveSplit(row *SplitRow, registry *schema.ColumnRegistry) *ResolvedSplit {
 	rs := &ResolvedSplit{
-		ID:         row.ID,
 		Dimensions: make(map[string]string),
 	}
+	f := &rs.File
 
 	for col, val := range row.Values {
 		switch col {
-		case metastore.ColClpIRPath:
-			rs.ClpIRPath = DBValToString(val)
-		case metastore.ColClpArchivePath:
-			rs.ClpArchivePath = DBValToString(val)
 		case metastore.ColMinTimestamp:
 			if v, ok := DBValToInt64(val); ok {
-				rs.MinTimestamp = v
+				f.MinTimestamp = v
 			}
 		case metastore.ColMaxTimestamp:
 			if v, ok := DBValToInt64(val); ok {
-				rs.MaxTimestamp = v
+				f.MaxTimestamp = v
 			}
 		case metastore.ColState:
-			rs.State = DBValToString(val)
+			f.State = DBValToString(val)
 		case metastore.ColRecordCount:
 			if v, ok := DBValToInt64(val); ok {
-				rs.RecordCount = v
+				f.RecordCount = v
 			}
+		case metastore.ColRawSizeBytes:
+			if v, ok := DBValToInt64(val); ok {
+				f.RawSizeBytes = v
+			}
+		case metastore.ColClpIRPath:
+			f.ClpIRPath = DBValToString(val)
+		case metastore.ColClpIRStorageBackend:
+			f.ClpIRStorageBackend = DBValToString(val)
+		case metastore.ColClpIRBucket:
+			f.ClpIRBucket = DBValToString(val)
 		case metastore.ColClpIRSizeBytes:
 			if v, ok := DBValToInt64(val); ok {
-				rs.IRSizeBytes = v
+				f.ClpIRSizeBytes = v
 			}
+		case metastore.ColClpArchivePath:
+			f.ClpArchivePath = DBValToString(val)
+		case metastore.ColClpArchiveStorageBackend:
+			f.ClpArchiveStorageBackend = DBValToString(val)
+		case metastore.ColClpArchiveBucket:
+			f.ClpArchiveBucket = DBValToString(val)
 		case metastore.ColClpArchiveSizeBytes:
 			if v, ok := DBValToInt64(val); ok {
-				rs.ArchiveSizeBytes = v
+				f.ClpArchiveSizeBytes = v
 			}
-		case metastore.ColClpIRStorageBackend:
-			rs.ClpIRStorageBackend = DBValToString(val)
-		case metastore.ColClpIRBucket:
-			rs.ClpIRBucket = DBValToString(val)
-		case metastore.ColClpArchiveStorageBackend:
-			rs.ClpArchiveStorageBackend = DBValToString(val)
-		case metastore.ColClpArchiveBucket:
-			rs.ClpArchiveBucket = DBValToString(val)
+		case metastore.ColClpArchiveCreatedAt:
+			if v, ok := DBValToInt64(val); ok {
+				f.ClpArchiveCreatedAt = v
+			}
+		case metastore.ColRetentionDays:
+			if v, ok := DBValToInt64(val); ok {
+				f.RetentionDays = int32(v)
+			}
+		case metastore.ColExpiresAt:
+			if v, ok := DBValToInt64(val); ok {
+				f.ExpiresAt = v
+			}
 
 		// Internal-only columns — not exposed, skip.
-		case metastore.ColID, metastore.ColRawSizeBytes, metastore.ColClpArchiveCreatedAt,
-			metastore.ColRetentionDays, metastore.ColExpiresAt,
-			metastore.ColClpIRPathHash, metastore.ColClpArchivePathHash:
+		case metastore.ColID, metastore.ColClpIRPathHash, metastore.ColClpArchivePathHash,
+			metastore.ColSketches, metastore.ColExt:
 			continue
 
 		default:
@@ -130,13 +152,6 @@ func ResolveSplit(row *SplitRow, registry *schema.ColumnRegistry) *ResolvedSplit
 			}
 			rs.Dimensions[dimKey] = DBValToString(val)
 		}
-	}
-
-	// Prefer archive size when available; fall back to IR size.
-	if rs.ClpArchivePath != "" {
-		rs.SizeBytes = rs.ArchiveSizeBytes
-	} else {
-		rs.SizeBytes = rs.IRSizeBytes
 	}
 
 	return rs

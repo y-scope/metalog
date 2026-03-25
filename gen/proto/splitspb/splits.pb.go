@@ -485,23 +485,12 @@ func (x *StreamSplitsResponse) GetCursor() *KeysetCursor {
 }
 
 type Split struct {
-	state                    protoimpl.MessageState `protogen:"open.v1"`
-	Id                       int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	ClpIrPath                string                 `protobuf:"bytes,2,opt,name=clp_ir_path,json=clpIrPath,proto3" json:"clp_ir_path,omitempty"`
-	ClpArchivePath           string                 `protobuf:"bytes,3,opt,name=clp_archive_path,json=clpArchivePath,proto3" json:"clp_archive_path,omitempty"`
-	MinTimestamp             int64                  `protobuf:"varint,4,opt,name=min_timestamp,json=minTimestamp,proto3" json:"min_timestamp,omitempty"`
-	MaxTimestamp             int64                  `protobuf:"varint,5,opt,name=max_timestamp,json=maxTimestamp,proto3" json:"max_timestamp,omitempty"`
-	State                    string                 `protobuf:"bytes,6,opt,name=state,proto3" json:"state,omitempty"`
-	Dimensions               map[string]string      `protobuf:"bytes,7,rep,name=dimensions,proto3" json:"dimensions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Aggs                     []*AggEntry            `protobuf:"bytes,8,rep,name=aggs,proto3" json:"aggs,omitempty"`
-	RecordCount              int64                  `protobuf:"varint,9,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`
-	SizeBytes                int64                  `protobuf:"varint,10,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	ClpIrStorageBackend      string                 `protobuf:"bytes,11,opt,name=clp_ir_storage_backend,json=clpIrStorageBackend,proto3" json:"clp_ir_storage_backend,omitempty"`
-	ClpIrBucket              string                 `protobuf:"bytes,12,opt,name=clp_ir_bucket,json=clpIrBucket,proto3" json:"clp_ir_bucket,omitempty"`
-	ClpArchiveStorageBackend string                 `protobuf:"bytes,13,opt,name=clp_archive_storage_backend,json=clpArchiveStorageBackend,proto3" json:"clp_archive_storage_backend,omitempty"`
-	ClpArchiveBucket         string                 `protobuf:"bytes,14,opt,name=clp_archive_bucket,json=clpArchiveBucket,proto3" json:"clp_archive_bucket,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	File          *FileInfo              `protobuf:"bytes,1,opt,name=file,proto3" json:"file,omitempty"`                                                                                       // __FILE.* fields
+	Dimensions    map[string]string      `protobuf:"bytes,2,rep,name=dimensions,proto3" json:"dimensions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // __DIM.* fields
+	Aggs          []*AggEntry            `protobuf:"bytes,3,rep,name=aggs,proto3" json:"aggs,omitempty"`                                                                                       // __AGG.* fields
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Split) Reset() {
@@ -534,46 +523,11 @@ func (*Split) Descriptor() ([]byte, []int) {
 	return file_splits_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *Split) GetId() int64 {
+func (x *Split) GetFile() *FileInfo {
 	if x != nil {
-		return x.Id
+		return x.File
 	}
-	return 0
-}
-
-func (x *Split) GetClpIrPath() string {
-	if x != nil {
-		return x.ClpIrPath
-	}
-	return ""
-}
-
-func (x *Split) GetClpArchivePath() string {
-	if x != nil {
-		return x.ClpArchivePath
-	}
-	return ""
-}
-
-func (x *Split) GetMinTimestamp() int64 {
-	if x != nil {
-		return x.MinTimestamp
-	}
-	return 0
-}
-
-func (x *Split) GetMaxTimestamp() int64 {
-	if x != nil {
-		return x.MaxTimestamp
-	}
-	return 0
-}
-
-func (x *Split) GetState() string {
-	if x != nil {
-		return x.State
-	}
-	return ""
+	return nil
 }
 
 func (x *Split) GetDimensions() map[string]string {
@@ -590,46 +544,173 @@ func (x *Split) GetAggs() []*AggEntry {
 	return nil
 }
 
-func (x *Split) GetRecordCount() int64 {
+type FileInfo struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Time bounds
+	MinTimestamp int64 `protobuf:"varint,1,opt,name=min_timestamp,json=minTimestamp,proto3" json:"min_timestamp,omitempty"`
+	MaxTimestamp int64 `protobuf:"varint,2,opt,name=max_timestamp,json=maxTimestamp,proto3" json:"max_timestamp,omitempty"`
+	// Lifecycle
+	State        string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	RecordCount  int64  `protobuf:"varint,4,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`
+	RawSizeBytes int64  `protobuf:"varint,5,opt,name=raw_size_bytes,json=rawSizeBytes,proto3" json:"raw_size_bytes,omitempty"`
+	// IR location
+	ClpIrPath           string `protobuf:"bytes,6,opt,name=clp_ir_path,json=clpIrPath,proto3" json:"clp_ir_path,omitempty"`
+	ClpIrStorageBackend string `protobuf:"bytes,7,opt,name=clp_ir_storage_backend,json=clpIrStorageBackend,proto3" json:"clp_ir_storage_backend,omitempty"`
+	ClpIrBucket         string `protobuf:"bytes,8,opt,name=clp_ir_bucket,json=clpIrBucket,proto3" json:"clp_ir_bucket,omitempty"`
+	ClpIrSizeBytes      int64  `protobuf:"varint,9,opt,name=clp_ir_size_bytes,json=clpIrSizeBytes,proto3" json:"clp_ir_size_bytes,omitempty"`
+	// Archive location (empty/zero if not yet consolidated)
+	ClpArchivePath           string `protobuf:"bytes,10,opt,name=clp_archive_path,json=clpArchivePath,proto3" json:"clp_archive_path,omitempty"`
+	ClpArchiveStorageBackend string `protobuf:"bytes,11,opt,name=clp_archive_storage_backend,json=clpArchiveStorageBackend,proto3" json:"clp_archive_storage_backend,omitempty"`
+	ClpArchiveBucket         string `protobuf:"bytes,12,opt,name=clp_archive_bucket,json=clpArchiveBucket,proto3" json:"clp_archive_bucket,omitempty"`
+	ClpArchiveSizeBytes      int64  `protobuf:"varint,13,opt,name=clp_archive_size_bytes,json=clpArchiveSizeBytes,proto3" json:"clp_archive_size_bytes,omitempty"`
+	ClpArchiveCreatedAt      int64  `protobuf:"varint,14,opt,name=clp_archive_created_at,json=clpArchiveCreatedAt,proto3" json:"clp_archive_created_at,omitempty"`
+	// Retention
+	RetentionDays int32 `protobuf:"varint,15,opt,name=retention_days,json=retentionDays,proto3" json:"retention_days,omitempty"`
+	ExpiresAt     int64 `protobuf:"varint,16,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileInfo) Reset() {
+	*x = FileInfo{}
+	mi := &file_splits_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileInfo) ProtoMessage() {}
+
+func (x *FileInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_splits_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileInfo.ProtoReflect.Descriptor instead.
+func (*FileInfo) Descriptor() ([]byte, []int) {
+	return file_splits_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FileInfo) GetMinTimestamp() int64 {
+	if x != nil {
+		return x.MinTimestamp
+	}
+	return 0
+}
+
+func (x *FileInfo) GetMaxTimestamp() int64 {
+	if x != nil {
+		return x.MaxTimestamp
+	}
+	return 0
+}
+
+func (x *FileInfo) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *FileInfo) GetRecordCount() int64 {
 	if x != nil {
 		return x.RecordCount
 	}
 	return 0
 }
 
-func (x *Split) GetSizeBytes() int64 {
+func (x *FileInfo) GetRawSizeBytes() int64 {
 	if x != nil {
-		return x.SizeBytes
+		return x.RawSizeBytes
 	}
 	return 0
 }
 
-func (x *Split) GetClpIrStorageBackend() string {
+func (x *FileInfo) GetClpIrPath() string {
+	if x != nil {
+		return x.ClpIrPath
+	}
+	return ""
+}
+
+func (x *FileInfo) GetClpIrStorageBackend() string {
 	if x != nil {
 		return x.ClpIrStorageBackend
 	}
 	return ""
 }
 
-func (x *Split) GetClpIrBucket() string {
+func (x *FileInfo) GetClpIrBucket() string {
 	if x != nil {
 		return x.ClpIrBucket
 	}
 	return ""
 }
 
-func (x *Split) GetClpArchiveStorageBackend() string {
+func (x *FileInfo) GetClpIrSizeBytes() int64 {
+	if x != nil {
+		return x.ClpIrSizeBytes
+	}
+	return 0
+}
+
+func (x *FileInfo) GetClpArchivePath() string {
+	if x != nil {
+		return x.ClpArchivePath
+	}
+	return ""
+}
+
+func (x *FileInfo) GetClpArchiveStorageBackend() string {
 	if x != nil {
 		return x.ClpArchiveStorageBackend
 	}
 	return ""
 }
 
-func (x *Split) GetClpArchiveBucket() string {
+func (x *FileInfo) GetClpArchiveBucket() string {
 	if x != nil {
 		return x.ClpArchiveBucket
 	}
 	return ""
+}
+
+func (x *FileInfo) GetClpArchiveSizeBytes() int64 {
+	if x != nil {
+		return x.ClpArchiveSizeBytes
+	}
+	return 0
+}
+
+func (x *FileInfo) GetClpArchiveCreatedAt() int64 {
+	if x != nil {
+		return x.ClpArchiveCreatedAt
+	}
+	return 0
+}
+
+func (x *FileInfo) GetRetentionDays() int32 {
+	if x != nil {
+		return x.RetentionDays
+	}
+	return 0
+}
+
+func (x *FileInfo) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
 }
 
 type KeysetCursor struct {
@@ -642,7 +723,7 @@ type KeysetCursor struct {
 
 func (x *KeysetCursor) Reset() {
 	*x = KeysetCursor{}
-	mi := &file_splits_proto_msgTypes[5]
+	mi := &file_splits_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +735,7 @@ func (x *KeysetCursor) String() string {
 func (*KeysetCursor) ProtoMessage() {}
 
 func (x *KeysetCursor) ProtoReflect() protoreflect.Message {
-	mi := &file_splits_proto_msgTypes[5]
+	mi := &file_splits_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +748,7 @@ func (x *KeysetCursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeysetCursor.ProtoReflect.Descriptor instead.
 func (*KeysetCursor) Descriptor() ([]byte, []int) {
-	return file_splits_proto_rawDescGZIP(), []int{5}
+	return file_splits_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *KeysetCursor) GetValues() []*CursorValue {
@@ -700,7 +781,7 @@ type AggEntry struct {
 
 func (x *AggEntry) Reset() {
 	*x = AggEntry{}
-	mi := &file_splits_proto_msgTypes[6]
+	mi := &file_splits_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -712,7 +793,7 @@ func (x *AggEntry) String() string {
 func (*AggEntry) ProtoMessage() {}
 
 func (x *AggEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_splits_proto_msgTypes[6]
+	mi := &file_splits_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -725,7 +806,7 @@ func (x *AggEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AggEntry.ProtoReflect.Descriptor instead.
 func (*AggEntry) Descriptor() ([]byte, []int) {
-	return file_splits_proto_rawDescGZIP(), []int{6}
+	return file_splits_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AggEntry) GetKey() string {
@@ -800,7 +881,7 @@ type QueryStats struct {
 
 func (x *QueryStats) Reset() {
 	*x = QueryStats{}
-	mi := &file_splits_proto_msgTypes[7]
+	mi := &file_splits_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +893,7 @@ func (x *QueryStats) String() string {
 func (*QueryStats) ProtoMessage() {}
 
 func (x *QueryStats) ProtoReflect() protoreflect.Message {
-	mi := &file_splits_proto_msgTypes[7]
+	mi := &file_splits_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +906,7 @@ func (x *QueryStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryStats.ProtoReflect.Descriptor instead.
 func (*QueryStats) Descriptor() ([]byte, []int) {
-	return file_splits_proto_rawDescGZIP(), []int{7}
+	return file_splits_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *QueryStats) GetSplitsScanned() int64 {
@@ -873,29 +954,35 @@ const file_splits_proto_rawDesc = "" +
 	"\bsequence\x18\x02 \x01(\x05R\bsequence\x12I\n" +
 	"\x05stats\x18\x03 \x01(\v23.com.yscope.metalog.query.api.proto.grpc.QueryStatsR\x05stats\x12\x12\n" +
 	"\x04done\x18\x04 \x01(\bR\x04done\x12M\n" +
-	"\x06cursor\x18\x05 \x01(\v25.com.yscope.metalog.query.api.proto.grpc.KeysetCursorR\x06cursor\"\xaf\x05\n" +
-	"\x05Split\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1e\n" +
-	"\vclp_ir_path\x18\x02 \x01(\tR\tclpIrPath\x12(\n" +
-	"\x10clp_archive_path\x18\x03 \x01(\tR\x0eclpArchivePath\x12#\n" +
-	"\rmin_timestamp\x18\x04 \x01(\x03R\fminTimestamp\x12#\n" +
-	"\rmax_timestamp\x18\x05 \x01(\x03R\fmaxTimestamp\x12\x14\n" +
-	"\x05state\x18\x06 \x01(\tR\x05state\x12^\n" +
+	"\x06cursor\x18\x05 \x01(\v25.com.yscope.metalog.query.api.proto.grpc.KeysetCursorR\x06cursor\"\xb4\x02\n" +
+	"\x05Split\x12E\n" +
+	"\x04file\x18\x01 \x01(\v21.com.yscope.metalog.query.api.proto.grpc.FileInfoR\x04file\x12^\n" +
 	"\n" +
-	"dimensions\x18\a \x03(\v2>.com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntryR\n" +
+	"dimensions\x18\x02 \x03(\v2>.com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntryR\n" +
 	"dimensions\x12E\n" +
-	"\x04aggs\x18\b \x03(\v21.com.yscope.metalog.query.api.proto.grpc.AggEntryR\x04aggs\x12!\n" +
-	"\frecord_count\x18\t \x01(\x03R\vrecordCount\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\n" +
-	" \x01(\x03R\tsizeBytes\x123\n" +
-	"\x16clp_ir_storage_backend\x18\v \x01(\tR\x13clpIrStorageBackend\x12\"\n" +
-	"\rclp_ir_bucket\x18\f \x01(\tR\vclpIrBucket\x12=\n" +
-	"\x1bclp_archive_storage_backend\x18\r \x01(\tR\x18clpArchiveStorageBackend\x12,\n" +
-	"\x12clp_archive_bucket\x18\x0e \x01(\tR\x10clpArchiveBucket\x1a=\n" +
+	"\x04aggs\x18\x03 \x03(\v21.com.yscope.metalog.query.api.proto.grpc.AggEntryR\x04aggs\x1a=\n" +
 	"\x0fDimensionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"l\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9e\x05\n" +
+	"\bFileInfo\x12#\n" +
+	"\rmin_timestamp\x18\x01 \x01(\x03R\fminTimestamp\x12#\n" +
+	"\rmax_timestamp\x18\x02 \x01(\x03R\fmaxTimestamp\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12!\n" +
+	"\frecord_count\x18\x04 \x01(\x03R\vrecordCount\x12$\n" +
+	"\x0eraw_size_bytes\x18\x05 \x01(\x03R\frawSizeBytes\x12\x1e\n" +
+	"\vclp_ir_path\x18\x06 \x01(\tR\tclpIrPath\x123\n" +
+	"\x16clp_ir_storage_backend\x18\a \x01(\tR\x13clpIrStorageBackend\x12\"\n" +
+	"\rclp_ir_bucket\x18\b \x01(\tR\vclpIrBucket\x12)\n" +
+	"\x11clp_ir_size_bytes\x18\t \x01(\x03R\x0eclpIrSizeBytes\x12(\n" +
+	"\x10clp_archive_path\x18\n" +
+	" \x01(\tR\x0eclpArchivePath\x12=\n" +
+	"\x1bclp_archive_storage_backend\x18\v \x01(\tR\x18clpArchiveStorageBackend\x12,\n" +
+	"\x12clp_archive_bucket\x18\f \x01(\tR\x10clpArchiveBucket\x123\n" +
+	"\x16clp_archive_size_bytes\x18\r \x01(\x03R\x13clpArchiveSizeBytes\x123\n" +
+	"\x16clp_archive_created_at\x18\x0e \x01(\x03R\x13clpArchiveCreatedAt\x12%\n" +
+	"\x0eretention_days\x18\x0f \x01(\x05R\rretentionDays\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x10 \x01(\x03R\texpiresAt\"l\n" +
 	"\fKeysetCursor\x12L\n" +
 	"\x06values\x18\x01 \x03(\v24.com.yscope.metalog.query.api.proto.grpc.CursorValueR\x06values\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\x03R\x02id\"\xe3\x01\n" +
@@ -944,7 +1031,7 @@ func file_splits_proto_rawDescGZIP() []byte {
 }
 
 var file_splits_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_splits_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_splits_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_splits_proto_goTypes = []any{
 	(Order)(0),                   // 0: com.yscope.metalog.query.api.proto.grpc.Order
 	(AggregationType)(0),         // 1: com.yscope.metalog.query.api.proto.grpc.AggregationType
@@ -953,29 +1040,31 @@ var file_splits_proto_goTypes = []any{
 	(*StreamSplitsRequest)(nil),  // 4: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest
 	(*StreamSplitsResponse)(nil), // 5: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse
 	(*Split)(nil),                // 6: com.yscope.metalog.query.api.proto.grpc.Split
-	(*KeysetCursor)(nil),         // 7: com.yscope.metalog.query.api.proto.grpc.KeysetCursor
-	(*AggEntry)(nil),             // 8: com.yscope.metalog.query.api.proto.grpc.AggEntry
-	(*QueryStats)(nil),           // 9: com.yscope.metalog.query.api.proto.grpc.QueryStats
-	nil,                          // 10: com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntry
+	(*FileInfo)(nil),             // 7: com.yscope.metalog.query.api.proto.grpc.FileInfo
+	(*KeysetCursor)(nil),         // 8: com.yscope.metalog.query.api.proto.grpc.KeysetCursor
+	(*AggEntry)(nil),             // 9: com.yscope.metalog.query.api.proto.grpc.AggEntry
+	(*QueryStats)(nil),           // 10: com.yscope.metalog.query.api.proto.grpc.QueryStats
+	nil,                          // 11: com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntry
 }
 var file_splits_proto_depIdxs = []int32{
 	0,  // 0: com.yscope.metalog.query.api.proto.grpc.OrderBy.order:type_name -> com.yscope.metalog.query.api.proto.grpc.Order
 	2,  // 1: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.order_by:type_name -> com.yscope.metalog.query.api.proto.grpc.OrderBy
-	7,  // 2: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
+	8,  // 2: com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
 	6,  // 3: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.split:type_name -> com.yscope.metalog.query.api.proto.grpc.Split
-	9,  // 4: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.stats:type_name -> com.yscope.metalog.query.api.proto.grpc.QueryStats
-	7,  // 5: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
-	10, // 6: com.yscope.metalog.query.api.proto.grpc.Split.dimensions:type_name -> com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntry
-	8,  // 7: com.yscope.metalog.query.api.proto.grpc.Split.aggs:type_name -> com.yscope.metalog.query.api.proto.grpc.AggEntry
-	3,  // 8: com.yscope.metalog.query.api.proto.grpc.KeysetCursor.values:type_name -> com.yscope.metalog.query.api.proto.grpc.CursorValue
-	1,  // 9: com.yscope.metalog.query.api.proto.grpc.AggEntry.aggregation_type:type_name -> com.yscope.metalog.query.api.proto.grpc.AggregationType
-	4,  // 10: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:input_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest
-	5,  // 11: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:output_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse
-	11, // [11:12] is the sub-list for method output_type
-	10, // [10:11] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	10, // 4: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.stats:type_name -> com.yscope.metalog.query.api.proto.grpc.QueryStats
+	8,  // 5: com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse.cursor:type_name -> com.yscope.metalog.query.api.proto.grpc.KeysetCursor
+	7,  // 6: com.yscope.metalog.query.api.proto.grpc.Split.file:type_name -> com.yscope.metalog.query.api.proto.grpc.FileInfo
+	11, // 7: com.yscope.metalog.query.api.proto.grpc.Split.dimensions:type_name -> com.yscope.metalog.query.api.proto.grpc.Split.DimensionsEntry
+	9,  // 8: com.yscope.metalog.query.api.proto.grpc.Split.aggs:type_name -> com.yscope.metalog.query.api.proto.grpc.AggEntry
+	3,  // 9: com.yscope.metalog.query.api.proto.grpc.KeysetCursor.values:type_name -> com.yscope.metalog.query.api.proto.grpc.CursorValue
+	1,  // 10: com.yscope.metalog.query.api.proto.grpc.AggEntry.aggregation_type:type_name -> com.yscope.metalog.query.api.proto.grpc.AggregationType
+	4,  // 11: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:input_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsRequest
+	5,  // 12: com.yscope.metalog.query.api.proto.grpc.SplitQueryService.StreamSplits:output_type -> com.yscope.metalog.query.api.proto.grpc.StreamSplitsResponse
+	12, // [12:13] is the sub-list for method output_type
+	11, // [11:12] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_splits_proto_init() }
@@ -988,7 +1077,7 @@ func file_splits_proto_init() {
 		(*CursorValue_FloatVal)(nil),
 		(*CursorValue_StrVal)(nil),
 	}
-	file_splits_proto_msgTypes[6].OneofWrappers = []any{
+	file_splits_proto_msgTypes[7].OneofWrappers = []any{
 		(*AggEntry_IntValue)(nil),
 		(*AggEntry_FloatValue)(nil),
 	}
@@ -998,7 +1087,7 @@ func file_splits_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_splits_proto_rawDesc), len(file_splits_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
