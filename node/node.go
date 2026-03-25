@@ -82,7 +82,9 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	}
 
 	// Resolve kafka driver from config if not set via WithKafkaAdapterFactory.
-	if n.kafkaFactory == nil {
+	// Only required when the coordinator is enabled (Kafka consumers are
+	// created per-table inside CoordinatorUnit).
+	if n.kafkaFactory == nil && cfg.Coordinator.Enabled {
 		driverName := cfg.KafkaDriver
 		if driverName == "" {
 			driverName = "franzgo"
