@@ -123,4 +123,5 @@ message AggEntry {
 message QueryStats {
     int64 splits_scanned = 1;
     int64 splits_matched = 2;
+    bool  truncated      = 3;
 }

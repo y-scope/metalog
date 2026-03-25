@@ -875,6 +875,7 @@ type QueryStats struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SplitsScanned int64                  `protobuf:"varint,1,opt,name=splits_scanned,json=splitsScanned,proto3" json:"splits_scanned,omitempty"`
 	SplitsMatched int64                  `protobuf:"varint,2,opt,name=splits_matched,json=splitsMatched,proto3" json:"splits_matched,omitempty"`
+	Truncated     bool                   `protobuf:"varint,3,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -921,6 +922,13 @@ func (x *QueryStats) GetSplitsMatched() int64 {
 		return x.SplitsMatched
 	}
 	return 0
+}
+
+func (x *QueryStats) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
 }
 
 var File_splits_proto protoreflect.FileDescriptor
@@ -993,11 +1001,12 @@ const file_splits_proto_rawDesc = "" +
 	"\tint_value\x18\x04 \x01(\x03H\x00R\bintValue\x12!\n" +
 	"\vfloat_value\x18\x05 \x01(\x01H\x00R\n" +
 	"floatValueB\b\n" +
-	"\x06result\"Z\n" +
+	"\x06result\"x\n" +
 	"\n" +
 	"QueryStats\x12%\n" +
 	"\x0esplits_scanned\x18\x01 \x01(\x03R\rsplitsScanned\x12%\n" +
-	"\x0esplits_matched\x18\x02 \x01(\x03R\rsplitsMatched*=\n" +
+	"\x0esplits_matched\x18\x02 \x01(\x03R\rsplitsMatched\x12\x1c\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated*=\n" +
 	"\x05Order\x12\x15\n" +
 	"\x11ORDER_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tORDER_ASC\x10\x01\x12\x0e\n" +

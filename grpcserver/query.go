@@ -215,6 +215,7 @@ func (h *QueryHandler) StreamSplits(req *pb.StreamSplitsRequest, stream gogrpc.S
 		Stats: &pb.QueryStats{
 			SplitsScanned: result.SplitsScanned,
 			SplitsMatched: result.SplitsMatched,
+			Truncated:     result.Truncated,
 		},
 		Sequence: seq,
 	})

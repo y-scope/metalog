@@ -78,6 +78,7 @@ type SplitWithCursor struct {
 type StreamingResult struct {
 	SplitsScanned int64
 	SplitsMatched int64
+	Truncated     bool // true when more results exist beyond the requested limit
 }
 
 // SplitConsumer is called for each split during streaming.
@@ -163,6 +164,7 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 	// splitsScanned is tracked by the producer (DB rows fetched). When sketch
 	// filtering is added, scanned will exceed matched for pruned rows.
 	var splitsScanned atomic.Int64
+	var truncated atomic.Bool
 
 	// Background producer: fetches pages and pushes to channel.
 	go func() {
@@ -171,10 +173,17 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 		cid := cursorID
 		totalSent := 0
 
+		// When a limit is set, fetch one extra row to detect truncation.
+		// The extra row is never sent to the consumer.
+		internalLimit := totalLimit
+		if internalLimit > 0 {
+			internalLimit++
+		}
+
 		for {
 			effectivePageSize := pageSize
-			if totalLimit > 0 {
-				remaining := totalLimit - totalSent
+			if internalLimit > 0 {
+				remaining := internalLimit - totalSent
 				if remaining <= 0 {
 					return
 				}
@@ -203,6 +212,13 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 					continue
 				}
 
+				// If we've already sent totalLimit rows, the extra row
+				// proves more results exist — set truncated and stop.
+				if totalLimit > 0 && totalSent >= totalLimit {
+					truncated.Store(true)
+					return
+				}
+
 				select {
 				case ch <- swc:
 					totalSent++
@@ -221,8 +237,8 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 			cv = last.CursorValues
 			cid = last.CursorID
 
-			// Check limit.
-			if totalLimit > 0 && totalSent >= totalLimit {
+			// Check internal limit (totalLimit + 1).
+			if internalLimit > 0 && totalSent >= internalLimit {
 				return
 			}
 		}
@@ -265,6 +281,7 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 	return &StreamingResult{
 		SplitsScanned: splitsScanned.Load(),
 		SplitsMatched: splitsMatched,
+		Truncated:     truncated.Load(),
 	}, nil
 }
 
