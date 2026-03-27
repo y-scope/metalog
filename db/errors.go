@@ -14,6 +14,7 @@ const (
 	errLockWaitTimeout = 1205
 	errTableExists     = 1050
 	errSameNamePart    = 1517
+	errCantDropKey     = 1091
 )
 
 // IsDeadlock returns true if the error is a MySQL deadlock (ER_LOCK_DEADLOCK).
@@ -45,6 +46,12 @@ func IsTableExists(err error) bool {
 // name (ER_SAME_NAME_PARTITION, error 1517).
 func IsDuplicatePartition(err error) bool {
 	return isMySQLError(err, errSameNamePart)
+}
+
+// IsCantDropKey returns true if the error is "Can't DROP; check that it exists"
+// (ER_CANT_DROP_FIELD_OR_KEY, error 1091).
+func IsCantDropKey(err error) bool {
+	return isMySQLError(err, errCantDropKey)
 }
 
 func isMySQLError(err error, code uint16) bool {

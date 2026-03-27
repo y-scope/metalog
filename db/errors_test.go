@@ -24,6 +24,7 @@ func TestIsMySQLError(t *testing.T) {
 		{name: "dup column match", err: &mysql.MySQLError{Number: 1060}, checker: IsDuplicateColumn, want: true},
 		{name: "dup partition match", err: &mysql.MySQLError{Number: 1517}, checker: IsDuplicatePartition, want: true},
 		{name: "dup partition wrong", err: &mysql.MySQLError{Number: 1050}, checker: IsDuplicatePartition, want: false},
+		{name: "cant drop key match", err: &mysql.MySQLError{Number: 1091}, checker: IsCantDropKey, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
