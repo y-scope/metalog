@@ -13,11 +13,14 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/y-scope/metalog/telemetry"
 )
 
 // NodeConfig is the top-level configuration loaded from node.yaml.
 type NodeConfig struct {
 	Database    DatabaseSection     `yaml:"database"`
+	Telemetry   telemetry.Config    `yaml:"telemetry"`
 	Storage     ObjectStorageConfig `yaml:"storage"`
 	GRPC        GRPCConfig          `yaml:"grpc"`
 	Worker      WorkerConfig        `yaml:"worker"`
