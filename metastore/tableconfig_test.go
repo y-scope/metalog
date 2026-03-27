@@ -10,9 +10,6 @@ func TestTableConfig_DefaultOnNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeTableConfig(nil): %v", err)
 	}
-	if !cfg.Kafka.Enabled {
-		t.Error("Kafka.Enabled: got false, want true")
-	}
 	if !cfg.Consolidation.Enabled {
 		t.Error("Consolidation.Enabled: got false, want true")
 	}
@@ -29,11 +26,6 @@ func TestTableConfig_DefaultOnNil(t *testing.T) {
 
 func TestTableConfig_RoundTrip(t *testing.T) {
 	original := TableConfig{
-		Kafka: KafkaConfig{
-			Enabled:          false,
-			Topic:            "spark-ir",
-			BootstrapServers: "kafka:29092",
-		},
 		Consolidation: ConsolidationConfig{
 			Enabled: true,
 			Policies: []ConsolidationPolicyConfig{
@@ -63,12 +55,6 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 		t.Fatalf("DecodeTableConfig: %v", err)
 	}
 
-	if decoded.Kafka.Enabled != original.Kafka.Enabled {
-		t.Errorf("Kafka.Enabled: got %v, want %v", decoded.Kafka.Enabled, original.Kafka.Enabled)
-	}
-	if decoded.Kafka.Topic != original.Kafka.Topic {
-		t.Errorf("Kafka.Topic: got %q, want %q", decoded.Kafka.Topic, original.Kafka.Topic)
-	}
 	if decoded.Consolidation.Enabled != original.Consolidation.Enabled {
 		t.Errorf("Consolidation.Enabled: got %v, want %v", decoded.Consolidation.Enabled, original.Consolidation.Enabled)
 	}
@@ -92,7 +78,6 @@ func TestTableConfig_RoundTrip(t *testing.T) {
 }
 
 func TestTableConfig_EncodeInvalidData(t *testing.T) {
-	// A valid struct should always encode successfully.
 	cfg := DefaultTableConfig()
 	data, err := EncodeTableConfig(cfg)
 	if err != nil {

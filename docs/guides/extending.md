@@ -212,10 +212,13 @@ func (t *sparkTransformer) Transform(payload []byte) (*pb.MetadataRecord, error)
 }
 ```
 
-**Activate** per-table via `_table_config`:
+**Activate** per-source via the `_kafka_source` table (registered with
+`AdminService.RegisterKafkaSource`):
 
-```json
-{ "kafka": { "record_transformer": "spark_event" } }
+```sql
+-- The record_transformer field on _kafka_source selects which transformer to use
+INSERT INTO _kafka_source (table_name, source_name, topic, bootstrap_servers, record_transformer)
+VALUES ('my_table', 'spark-src', 'spark-ir', 'kafka:29092', 'spark_event');
 ```
 
 #### Self-describing key-value format
@@ -251,7 +254,7 @@ See [Write Transformers](write-transformers.md) for a full walkthrough.
 Replaces the entire Kafka transport layer. Unlike the other extension points
 which use a global registry, Kafka adapters are wired programmatically via a
 `NodeOption` — because swapping the transport is a deployment-level decision,
-not a per-table one.
+not a per-source one.
 
 ```go
 type KafkaAdapter interface {
@@ -260,12 +263,16 @@ type KafkaAdapter interface {
 }
 
 type KafkaAdapterFactory func(
-    tableName, tableID string,
-    tableCfg metastore.TableConfig,
+    source *metastore.KafkaSource,
     ingestSvc *ingestion.Service,
     log *zap.Logger,
 ) (KafkaAdapter, error)
 ```
+
+The factory receives a `*metastore.KafkaSource` containing the source's
+`table_name`, `source_name`, `topic`, `bootstrap_servers`, `record_transformer`,
+`consumer_group_id`, and `required_env` fields — all registered via the
+`AdminService.RegisterKafkaSource` RPC and stored in the `_kafka_source` table.
 
 #### Why this is a NodeOption, not a registry
 
@@ -273,7 +280,7 @@ Storage backends and transformers are per-table concerns — different tables ca
 use different backends or wire formats. But the Kafka transport is typically a
 deployment-wide choice dictated by infrastructure (your managed Kafka service,
 your consumer proxy, your operational tooling). Making it a `NodeOption` keeps
-the decision in `main.go` where it belongs, rather than in per-table config
+the decision in `main.go` where it belongs, rather than in per-source config
 where it would be confusing.
 
 #### Example: push-based Kafka proxy adapter
@@ -298,7 +305,7 @@ func (a *proxyAdapter) Start(ctx context.Context) {
     // Register this table's handler with the shared proxy server.
     // The server routes incoming messages to handlers by topic.
     a.server.Register(a.topic, a.handler)
-    <-ctx.Done() // block until the node shuts down this table
+    <-ctx.Done() // block until the node shuts down this source
 }
 
 func (a *proxyAdapter) Stop() {
@@ -308,26 +315,24 @@ func (a *proxyAdapter) Stop() {
 }
 ```
 
-The factory checks whether Kafka is configured for the table and returns the
-sentinel error if not:
+The factory reads Kafka settings from the `KafkaSource` struct:
 
 ```go
 func NewProxyAdapterFactory(server *ProxyServer) node.KafkaAdapterFactory {
     return func(
-        tableName, tableID string,
-        tableCfg metastore.TableConfig,
+        source *metastore.KafkaSource,
         ingestSvc *ingestion.Service,
         log *zap.Logger,
     ) (node.KafkaAdapter, error) {
-        if !tableCfg.Kafka.Enabled || tableCfg.Kafka.Topic == "" {
-            return nil, node.ErrKafkaNotConfigured
+        if source.Topic == "" {
+            return nil, kafka.ErrNotConfigured
         }
-        transformer := NewTransformer(tableCfg.Kafka.RecordTransformer)
-        handler := NewTableHandler(tableName, transformer, ingestSvc)
+        transformer := NewTransformer(source.RecordTransformer)
+        handler := NewTableHandler(source.TableName, transformer, ingestSvc)
         return &proxyAdapter{
             server:  server,
             handler: handler,
-            topic:   tableCfg.Kafka.Topic,
+            topic:   source.Topic,
         }, nil
     }
 }
@@ -336,9 +341,9 @@ func NewProxyAdapterFactory(server *ProxyServer) node.KafkaAdapterFactory {
 Key design details from real-world implementation:
 
 - **Dynamic registration.** The proxy server is long-lived (started once at
-  service boot), but tables come and go as coordinator units claim and release
-  them. The `Register`/`Deregister` pattern lets the adapter lifecycle track
-  the coordinator lifecycle without restarting the server.
+  service boot), but sources come and go as the `KafkaIngestionUnit` starts
+  and stops adapters. The `Register`/`Deregister` pattern lets the adapter
+  lifecycle track the source lifecycle without restarting the server.
 
 - **Flush-before-commit.** The `TableHandler` blocks on the ingestion
   pipeline's flush callback before returning success to the proxy. This
@@ -593,7 +598,7 @@ production deployments use two pools from the same binary:
 
 | Pool | Role |
 |------|------|
-| **Coordinator pool** | Ingestion, schema evolution, task scheduling, retention scanning, Kafka consumption |
+| **Coordinator pool** | Ingestion, schema evolution, task scheduling, retention scanning, Kafka consumption (via KafkaIngestionUnit) |
 | **Worker pool** | CLP compression and consolidation tasks |
 
 The pool is selected at runtime via a config file or environment variable.
@@ -618,7 +623,7 @@ This keeps the binary identical and simplifies rollouts.
    metalog's reference gRPC handler and your custom handler call this — ~20
    lines each instead of ~100 duplicated lines of column mapping.
 
-4. **`ErrKafkaNotConfigured` sentinel.** Your adapter factory returns this
+4. **`kafka.ErrNotConfigured` sentinel.** Your adapter factory returns this
    when a table doesn't use Kafka. The caller detects it and silently skips
    Kafka setup. No error logs, no special handling needed.
 
@@ -626,10 +631,11 @@ This keeps the binary identical and simplifies rollouts.
    bucket-scoped addressing (like S3) or flat keys (like an HTTP blob store).
    Archive paths are constructed accordingly without backend-specific logic.
 
-6. **Per-table config via `_table_config` JSON.** Transformer names, policy
-   configs, and Kafka settings are per-table, not global. Tables with
-   different producers or different consolidation needs coexist in the same
-   metastore without code changes.
+6. **Per-table config via `_table_config` JSON and `_kafka_source` rows.**
+   Policy configs are per-table via `_table_config`; Kafka source settings
+   (topic, bootstrap servers, transformer) are per-source via `_kafka_source`.
+   Tables with different producers or different consolidation needs coexist
+   in the same metastore without code changes.
 
 ---
 
@@ -638,7 +644,7 @@ This keeps the binary identical and simplifies rollouts.
 | Extension Point | Interface | Registration | Config |
 |----------------|-----------|--------------|--------|
 | Storage Backends | `storage.Backend` | `storage.RegisterType()` | `node.yaml` `storage.backends` |
-| Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_table_config` `kafka.record_transformer` |
+| Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_kafka_source` `record_transformer` |
 | Kafka Adapters | `node.KafkaAdapter` | `node.WithKafkaAdapterFactory()` | Programmatic (`NodeOption`) |
 | Consolidation Policies | `consolidation.Policy` | `consolidation.RegisterPolicyType()` | `_table_config` `consolidation.policies` |
 | Telemetry Exporters | `telemetry.ExporterFactory` | `telemetry.RegisterExporter()` | `node.yaml` `telemetry.exporter` |

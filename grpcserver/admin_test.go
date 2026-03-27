@@ -12,6 +12,7 @@ import (
 
 	pb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
 	"github.com/y-scope/metalog/coordinator"
+	"github.com/y-scope/metalog/metastore"
 )
 
 func newTestAdminHandler(t *testing.T) (*AdminHandler, sqlmock.Sqlmock) {
@@ -22,7 +23,8 @@ func newTestAdminHandler(t *testing.T) (*AdminHandler, sqlmock.Sqlmock) {
 	}
 	t.Cleanup(func() { db.Close() })
 	reg := coordinator.NewTableRegistration(db, true, "", zap.NewNop())
-	return NewAdminHandler(reg, zap.NewNop()), mock
+	kafkaSources := metastore.NewKafkaSourceStore(db, zap.NewNop())
+	return NewAdminHandler(reg, kafkaSources, zap.NewNop()), mock
 }
 
 // --- RegisterTable validation tests ---

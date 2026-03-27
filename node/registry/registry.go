@@ -107,6 +107,8 @@ func (r *Registry) ValidateSchemaReady(ctx context.Context) error {
 		metastore.AggRegistryTable,
 		metastore.SketchRegistryTable,
 		metastore.NodeRegistryTable,
+		metastore.KafkaSourceTable,
+		metastore.KafkaAssignmentTable,
 	}
 	for _, tbl := range requiredTables {
 		var count int
@@ -433,6 +435,190 @@ func (r *Registry) scanTableNames(ctx context.Context, query string, args ...any
 		names = append(names, name)
 	}
 	return names, rows.Err()
+}
+
+// --- Kafka source assignment ---
+
+// KafkaSourceAssignment represents a claimed Kafka source.
+type KafkaSourceAssignment struct {
+	TableName string
+	SourceName  string
+}
+
+// GetUnclaimedKafkaSources returns Kafka sources available for claiming:
+// either node_id IS NULL (never claimed) or lease_expiry has passed
+// (previous owner died without releasing).
+func (r *Registry) GetUnclaimedKafkaSources(ctx context.Context) ([]*metastore.KafkaSource, error) {
+	now := time.Now().UnixNano()
+	query, args, _ := sq.Select(
+		"ks.table_name", "ks.source_name", "ks.topic", "ks.bootstrap_servers",
+		"ks.record_transformer", "ks.consumer_group_id", "ks.required_env",
+	).
+		From(metastore.KafkaSourceTable+" ks").
+		LeftJoin(metastore.KafkaAssignmentTable+" ka USING (table_name, source_name)").
+		Where(sq.Or{
+			sq.Expr("ka.node_id IS NULL"),
+			sq.Lt{"ka.lease_expiry": now},
+		}).
+		ToSql()
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get unclaimed kafka sources: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []*metastore.KafkaSource
+	for rows.Next() {
+		src := &metastore.KafkaSource{}
+		var cgID, requiredEnv, transformer sql.NullString
+		if err := rows.Scan(&src.TableName, &src.SourceName, &src.Topic, &src.BootstrapServers,
+			&transformer, &cgID, &requiredEnv); err != nil {
+			return nil, err
+		}
+		src.RecordTransformer = transformer.String
+		src.ConsumerGroupID = cgID.String
+		src.RequiredEnv = requiredEnv.String
+		sources = append(sources, src)
+	}
+	return sources, rows.Err()
+}
+
+// ClaimOrphanKafkaSourcesHeartbeat reclaims Kafka sources owned by nodes
+// whose heartbeat is stale or whose _node_registry row no longer exists
+// (dead nodes in heartbeat mode). Excludes this node's own sources to
+// prevent self-reclaim during a brief heartbeat delay.
+func (r *Registry) ClaimOrphanKafkaSourcesHeartbeat(ctx context.Context, deadThreshold time.Duration) error {
+	now := time.Now().UnixNano()
+	cutoff := now - deadThreshold.Nanoseconds()
+
+	// LEFT JOIN: also catches sources whose owning node was deregistered
+	// (graceful shutdown completed DeregisterNode but failed to release sources).
+	query := fmt.Sprintf(
+		"UPDATE %s ka LEFT JOIN %s nr ON ka.node_id = nr.node_id "+
+			"SET ka.node_id = NULL, ka.claimed_at = NULL, ka.lease_expiry = NULL "+
+			"WHERE ka.node_id IS NOT NULL AND ka.node_id != ? "+
+			"AND (nr.last_heartbeat_at < ? OR nr.node_id IS NULL)",
+		metastore.KafkaAssignmentTable, metastore.NodeRegistryTable)
+	res, err := r.db.ExecContext(ctx, query, r.nodeID, cutoff)
+	if err != nil {
+		return fmt.Errorf("claim orphan kafka sources heartbeat: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected > 0 {
+		r.log.Info("reclaimed orphan kafka sources from dead nodes",
+			zap.Int64("count", affected))
+	}
+	return nil
+}
+
+// ClaimKafkaSource attempts to claim a Kafka source for this node.
+// Returns true if the claim succeeded (CAS: node_id IS NULL or lease expired → this node).
+func (r *Registry) ClaimKafkaSource(ctx context.Context, tableName, sourceName string, leaseTTL time.Duration) (bool, error) {
+	now := time.Now().UnixNano()
+	update := sq.Update(metastore.KafkaAssignmentTable).
+		Set("node_id", r.nodeID).
+		Set("claimed_at", now)
+	if leaseTTL > 0 {
+		update = update.Set("lease_expiry", now+leaseTTL.Nanoseconds())
+	}
+	query, args, err := update.
+		Where(sq.Eq{"table_name": tableName, "source_name": sourceName}).
+		Where(sq.Or{
+			sq.Expr("node_id IS NULL"),
+			sq.Lt{"lease_expiry": now},
+		}).
+		ToSql()
+	if err != nil {
+		return false, fmt.Errorf("build kafka claim query: %w", err)
+	}
+
+	res, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("claim kafka source: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	return affected > 0, nil
+}
+
+// ReleaseKafkaSource releases a claimed Kafka source.
+func (r *Registry) ReleaseKafkaSource(ctx context.Context, tableName, sourceName string) error {
+	query, args, _ := sq.Update(metastore.KafkaAssignmentTable).
+		Set("node_id", nil).
+		Set("claimed_at", nil).
+		Set("lease_expiry", nil).
+		Where(sq.Eq{"table_name": tableName, "source_name": sourceName, "node_id": r.nodeID}).
+		ToSql()
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+// GetMyKafkaSources returns all Kafka sources assigned to this node.
+func (r *Registry) GetMyKafkaSources(ctx context.Context) ([]KafkaSourceAssignment, error) {
+	query, args, _ := sq.Select("table_name", "source_name").
+		From(metastore.KafkaAssignmentTable).
+		Where(sq.Eq{"node_id": r.nodeID}).
+		ToSql()
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get my kafka sources: %w", err)
+	}
+	defer rows.Close()
+
+	var assignments []KafkaSourceAssignment
+	for rows.Next() {
+		var a KafkaSourceAssignment
+		if err := rows.Scan(&a.TableName, &a.SourceName); err != nil {
+			return nil, err
+		}
+		assignments = append(assignments, a)
+	}
+	return assignments, rows.Err()
+}
+
+// GetMyKafkaSourceConfigs returns the full KafkaSource config for a specific source
+// assigned to this node. Used to restart units after crash recovery.
+func (r *Registry) GetMyKafkaSourceConfigs(ctx context.Context, tableName, sourceName string) ([]*metastore.KafkaSource, error) {
+	query, args, _ := sq.Select(
+		"ks.table_name", "ks.source_name", "ks.topic", "ks.bootstrap_servers",
+		"ks.record_transformer", "ks.consumer_group_id", "ks.required_env",
+	).
+		From(metastore.KafkaSourceTable+" ks").
+		Join(metastore.KafkaAssignmentTable+" ka USING (table_name, source_name)").
+		Where(sq.Eq{"ka.node_id": r.nodeID, "ks.table_name": tableName, "ks.source_name": sourceName}).
+		ToSql()
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get kafka source config: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []*metastore.KafkaSource
+	for rows.Next() {
+		src := &metastore.KafkaSource{}
+		var cgID, requiredEnv, transformer sql.NullString
+		if err := rows.Scan(&src.TableName, &src.SourceName, &src.Topic, &src.BootstrapServers,
+			&transformer, &cgID, &requiredEnv); err != nil {
+			return nil, err
+		}
+		src.RecordTransformer = transformer.String
+		src.ConsumerGroupID = cgID.String
+		src.RequiredEnv = requiredEnv.String
+		sources = append(sources, src)
+	}
+	return sources, rows.Err()
+}
+
+// RenewKafkaSourceLeases extends lease_expiry for all Kafka sources owned by this node.
+func (r *Registry) RenewKafkaSourceLeases(ctx context.Context, ttl time.Duration) error {
+	now := time.Now().UnixNano()
+	query, args, _ := sq.Update(metastore.KafkaAssignmentTable).
+		Set("lease_expiry", now+ttl.Nanoseconds()).
+		Where(sq.Eq{"node_id": r.nodeID}).
+		ToSql()
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
 }
 
 // isIdempotentDDLError returns true for MySQL/MariaDB errors that indicate

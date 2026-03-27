@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,9 +13,10 @@ import (
 	"github.com/y-scope/metalog/config"
 	"github.com/y-scope/metalog/coordinator/ingestion"
 	"github.com/y-scope/metalog/db"
-	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/health"
+	"github.com/y-scope/metalog/kafka"
 	"github.com/y-scope/metalog/logutil"
+	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/schema"
 	"github.com/y-scope/metalog/storage"
@@ -35,6 +37,9 @@ type Node struct {
 	coordinators map[string]*CoordinatorUnit
 	workerUnit   *WorkerUnit
 	healthSrv    *health.Server
+
+	kafkaMu      sync.Mutex
+	kafkaUnits   map[string]*KafkaIngestionUnit // key: "tableName/sourceName"
 
 	// reconcileReg overrides the registry for reconciliation (testing only).
 	reconcileReg reconcileRegistry
@@ -73,6 +78,7 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 		cfg:          cfg,
 		nodeID:       nodeID,
 		coordinators: make(map[string]*CoordinatorUnit),
+		kafkaUnits:   make(map[string]*KafkaIngestionUnit),
 		log:          log,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -82,9 +88,9 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	}
 
 	// Resolve kafka driver from config if not set via WithKafkaAdapterFactory.
-	// Only required when the coordinator is enabled (Kafka consumers are
-	// created per-table inside CoordinatorUnit).
-	if n.kafkaFactory == nil && cfg.Coordinator.Enabled {
+	// Needed for both coordinator nodes (BatchingWriter) and dedicated Kafka
+	// consumer nodes (KafkaIngestionUnit via source reconciliation).
+	if n.kafkaFactory == nil {
 		driverName := cfg.KafkaDriver
 		if driverName == "" {
 			driverName = "franzgo"
@@ -304,6 +310,16 @@ func (n *Node) Start() error {
 		}()
 	}
 
+	// Kafka source reconciliation — runs independently of coordinator ownership
+	// but requires writer + ingestSvc (which are created when coordinator is enabled).
+	if n.kafkaFactory != nil && n.writer != nil && n.ingestSvc != nil {
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.runKafkaSourceReconciliation()
+		}()
+	}
+
 	// Workers require primary DB
 	if n.cfg.Worker.Concurrency > 0 {
 		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
@@ -357,6 +373,21 @@ func (n *Node) Stop() {
 		cu.Stop()
 		if err := n.registry.ReleaseTable(context.Background(), name); err != nil {
 			n.log.Warn("failed to release table", zap.String("table", name), zap.Error(err))
+		}
+	}
+
+	// Stop Kafka ingestion units
+	n.kafkaMu.Lock()
+	kafkaUnits := make(map[string]*KafkaIngestionUnit, len(n.kafkaUnits))
+	for k, v := range n.kafkaUnits {
+		kafkaUnits[k] = v
+	}
+	n.kafkaMu.Unlock()
+	for key, ku := range kafkaUnits {
+		ku.Stop()
+		tbl, src := splitKafkaKey(key)
+		if err := n.registry.ReleaseKafkaSource(context.Background(), tbl, src); err != nil {
+			n.log.Warn("failed to release kafka source", zap.String("key", key), zap.Error(err))
 		}
 	}
 
@@ -423,11 +454,6 @@ func (n *Node) startCoordinator(tableName string) error {
 		return fmt.Errorf("start coordinator %s: %w", tableName, err)
 	}
 
-	if tableCfg.Kafka.Enabled && tableCfg.Kafka.Topic == "" {
-		n.log.Warn("kafka enabled but no topic configured — coordinator will run without Kafka consumer",
-			zap.String("table", tableName))
-	}
-
 	tableID, err := n.registry.GetTableID(n.ctx, tableName)
 	if err != nil {
 		return err
@@ -435,13 +461,12 @@ func (n *Node) startCoordinator(tableName string) error {
 
 	n.log.Info("starting coordinator",
 		zap.String("table", tableName),
-		zap.Bool("kafka", tableCfg.Kafka.Enabled),
 		zap.Bool("consolidation", tableCfg.Consolidation.Enabled),
 		zap.Bool("retention", tableCfg.Retention.Enabled),
 		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.kafkaFactory, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
 	if err != nil {
 		return err
 	}
@@ -712,5 +737,206 @@ func (n *Node) reconcile() error {
 				zap.String("table", t), zap.Error(err))
 		}
 	}
+	return nil
+}
+
+// --- Kafka source reconciliation ---
+
+// kafkaKeySep is the separator for kafka unit map keys. Using NUL byte
+// avoids collisions with any valid table_name or source_name value.
+const kafkaKeySep = "\x00"
+
+func kafkaKey(tableName, sourceName string) string {
+	return tableName + kafkaKeySep + sourceName
+}
+
+func splitKafkaKey(key string) (tableName, sourceName string) {
+	idx := strings.Index(key, kafkaKeySep)
+	if idx < 0 {
+		return key, ""
+	}
+	return key[:idx], key[idx+len(kafkaKeySep):]
+}
+
+func (n *Node) runKafkaSourceReconciliation() {
+	interval := time.Duration(n.cfg.Coordinator.ReconciliationIntervalSeconds) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	fl := logutil.NewFailureLogger(n.log, n.shared.FailureLogInterval)
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := n.reconcileKafkaSources(); err != nil {
+				fl.Fail("kafka source reconciliation failed", zap.Error(err))
+			} else {
+				fl.OK()
+			}
+		}
+	}
+}
+
+func (n *Node) reconcileKafkaSources() error {
+	ctx := n.ctx
+
+	// Reclaim orphan sources from dead nodes (heartbeat mode).
+	// In lease mode, expired leases are handled by GetUnclaimedKafkaSources.
+	if n.cfg.Coordinator.HAStrategy == config.HAStrategyHeartbeat {
+		deadThreshold := time.Duration(n.cfg.Coordinator.DeadNodeThresholdSeconds) * time.Second
+		if err := n.registry.ClaimOrphanKafkaSourcesHeartbeat(ctx, deadThreshold); err != nil {
+			n.log.Warn("claim orphan kafka sources failed", zap.Error(err))
+		}
+	}
+
+	// Discover unclaimed sources and claim those matching our env.
+	unclaimed, err := n.registry.GetUnclaimedKafkaSources(ctx)
+	if err != nil {
+		return fmt.Errorf("get unclaimed kafka sources: %w", err)
+	}
+
+	var leaseTTL time.Duration
+	if n.cfg.Coordinator.HAStrategy == config.HAStrategyLease {
+		leaseTTL = time.Duration(n.cfg.Coordinator.LeaseTTLSeconds) * time.Second
+	}
+
+	for _, src := range unclaimed {
+		if !metastore.MatchesEnv(src.RequiredEnv) {
+			continue
+		}
+		ok, err := n.registry.ClaimKafkaSource(ctx, src.TableName, src.SourceName, leaseTTL)
+		if err != nil {
+			n.log.Warn("claim kafka source failed",
+				zap.String("table", src.TableName), zap.String("source", src.SourceName), zap.Error(err))
+			continue
+		}
+		if ok {
+			if err := n.startKafkaUnit(src); err != nil {
+				n.log.Error("failed to start kafka unit",
+					zap.String("table", src.TableName), zap.String("source", src.SourceName), zap.Error(err))
+				if relErr := n.registry.ReleaseKafkaSource(ctx, src.TableName, src.SourceName); relErr != nil {
+					n.log.Warn("release kafka source after start failure",
+						zap.String("table", src.TableName), zap.String("source", src.SourceName), zap.Error(relErr))
+				}
+			}
+		}
+	}
+
+	// Ownership verification: stop units for sources no longer assigned to us,
+	// and start units for sources assigned but not yet running (crash recovery).
+	myAssignments, err := n.registry.GetMyKafkaSources(ctx)
+	if err != nil {
+		return fmt.Errorf("get my kafka sources: %w", err)
+	}
+	assignedSet := make(map[string]bool, len(myAssignments))
+	for _, a := range myAssignments {
+		assignedSet[kafkaKey(a.TableName, a.SourceName)] = true
+	}
+
+	// Stop units that lost their assignment.
+	n.kafkaMu.Lock()
+	var toStop []string
+	for key := range n.kafkaUnits {
+		if !assignedSet[key] {
+			toStop = append(toStop, key)
+		}
+	}
+	n.kafkaMu.Unlock()
+
+	for _, key := range toStop {
+		n.kafkaMu.Lock()
+		ku, ok := n.kafkaUnits[key]
+		if ok {
+			delete(n.kafkaUnits, key)
+		}
+		n.kafkaMu.Unlock()
+		if ok {
+			n.log.Warn("kafka source assignment lost, stopping", zap.String("key", key))
+			ku.Stop()
+		}
+	}
+
+	// Start units for assignments not yet running (e.g., after crash recovery
+	// where kafkaUnits map is empty but DB assignments persist).
+	for _, a := range myAssignments {
+		key := kafkaKey(a.TableName, a.SourceName)
+		n.kafkaMu.Lock()
+		_, running := n.kafkaUnits[key]
+		n.kafkaMu.Unlock()
+		if !running {
+			// Need to fetch the full source config to create the adapter.
+			sources, err := n.registry.GetMyKafkaSourceConfigs(ctx, a.TableName, a.SourceName)
+			if err != nil {
+				n.log.Warn("cannot restart kafka unit: failed to fetch source config",
+					zap.String("table", a.TableName), zap.String("source", a.SourceName), zap.Error(err))
+				continue
+			}
+			if len(sources) == 0 {
+				n.log.Warn("cannot restart kafka unit: source config not found in DB",
+					zap.String("table", a.TableName), zap.String("source", a.SourceName))
+				continue
+			}
+			if err := n.startKafkaUnit(sources[0]); err != nil {
+				n.log.Error("failed to restart kafka unit",
+					zap.String("table", a.TableName), zap.String("source", a.SourceName), zap.Error(err))
+			}
+		}
+	}
+
+	// Renew leases for owned sources (after ownership verification).
+	if leaseTTL > 0 {
+		if err := n.registry.RenewKafkaSourceLeases(ctx, leaseTTL); err != nil {
+			n.log.Warn("renew kafka source leases failed", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+func (n *Node) startKafkaUnit(src *metastore.KafkaSource) error {
+	key := kafkaKey(src.TableName, src.SourceName)
+
+	n.kafkaMu.Lock()
+	if _, exists := n.kafkaUnits[key]; exists {
+		n.kafkaMu.Unlock()
+		return nil
+	}
+	n.kafkaMu.Unlock()
+
+	// Ensure writer and ingestion service exist.
+	if n.writer == nil || n.ingestSvc == nil {
+		return fmt.Errorf("kafka source %s: writer/ingestSvc not initialized (coordinator not enabled?)", key)
+	}
+
+	tableID, err := n.registry.GetTableID(n.ctx, src.TableName)
+	if err != nil {
+		return fmt.Errorf("kafka source %s: get table ID: %w", key, err)
+	}
+
+	ku, err := NewKafkaIngestionUnit(n.ctx, src.TableName, tableID, src, n.kafkaFactory, n.ingestSvc, n.log)
+	if err != nil {
+		return fmt.Errorf("kafka source %s: create unit: %w", key, err)
+	}
+
+	n.kafkaMu.Lock()
+	if _, exists := n.kafkaUnits[key]; exists {
+		n.kafkaMu.Unlock()
+		// Another goroutine started this unit concurrently. Cancel the
+		// context but don't call Stop() — the adapter was never started.
+		ku.cancel()
+		n.log.Debug("kafka unit already running, discarding duplicate", zap.String("key", key))
+		return nil
+	}
+	n.kafkaUnits[key] = ku
+	n.kafkaMu.Unlock()
+
+	ku.Start()
+
+	n.log.Info("kafka ingestion unit started",
+		zap.String("table", src.TableName),
+		zap.String("source", src.SourceName),
+		zap.String("topic", src.Topic),
+	)
 	return nil
 }

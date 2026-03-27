@@ -39,6 +39,7 @@ import (
 	pb "github.com/y-scope/metalog/gen/proto/ingestionpb"
 	"github.com/y-scope/metalog/grpcserver"
 	metalogkafka "github.com/y-scope/metalog/kafka/franzgo"
+	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node"
 	"github.com/y-scope/metalog/schema"
 )
@@ -204,7 +205,8 @@ func main() {
 		pb.RegisterMetadataIngestionServiceServer(grpcSrv.GRPCServer(), ingestionHandler)
 	}
 	regSvc := coordinator.NewTableRegistration(n.Shared().DB, n.Shared().IsMariaDB, cfg.Coordinator.TableCompression, logger)
-	adminHandler := grpcserver.NewAdminHandler(regSvc, logger)
+	kafkaSources := metastore.NewKafkaSourceStore(n.Shared().DB, logger)
+	adminHandler := grpcserver.NewAdminHandler(regSvc, kafkaSources, logger)
 	coordinatorpb.RegisterAdminServiceServer(grpcSrv.GRPCServer(), adminHandler)
 	go grpcSrv.Start()
 	defer grpcSrv.Stop()
@@ -220,6 +222,12 @@ func main() {
 	// Wait for coordinator to claim table.
 	waitForTableClaimed(db, *table, 30*time.Second)
 	logger.Info("table claimed", zap.String("table", *table))
+
+	// Wait for Kafka source to be claimed (if Kafka mode).
+	if isKafka {
+		waitForKafkaSourceClaimed(db, *table, "benchmark", 60*time.Second)
+		logger.Info("kafka source claimed", zap.String("table", *table))
+	}
 
 	// Run the appropriate benchmark.
 	switch *mode {
@@ -262,18 +270,11 @@ func registerTable(grpcPort int, table string, mode, kafkaBootstrap string) {
 	defer conn.Close()
 
 	client := coordinatorpb.NewAdminServiceClient(conn)
+
+	// Register table with consolidation/retention disabled for benchmarks.
 	cfgMap := map[string]any{
 		"consolidation": map[string]any{"enabled": false},
 		"retention":     map[string]any{"enabled": false},
-	}
-	if mode == "kafka-proto" || mode == "kafka-json" {
-		cfgMap["kafka"] = map[string]any{
-			"enabled":           true,
-			"topic":             table,
-			"bootstrap_servers": kafkaBootstrap,
-		}
-	} else {
-		cfgMap["kafka"] = map[string]any{"enabled": false}
 	}
 	cfgJSON, err := json.Marshal(cfgMap)
 	if err != nil {
@@ -287,6 +288,25 @@ func registerTable(grpcPort int, table string, mode, kafkaBootstrap string) {
 	})
 	if err != nil {
 		logger.Fatal("register table", zap.Error(err))
+	}
+
+	// Register Kafka source separately (if Kafka mode).
+	if mode == "kafka-proto" || mode == "kafka-json" {
+		transformer := "proto"
+		if mode == "kafka-json" {
+			transformer = "auto"
+		}
+		_, err = client.RegisterKafkaSource(context.Background(), &coordinatorpb.RegisterKafkaSourceRequest{
+			TableName:         table,
+			SourceName:          "benchmark",
+			Topic:             table,
+			BootstrapServers:  kafkaBootstrap,
+			RecordTransformer: transformer,
+			ConsumerGroupId:   "clp-benchmark-" + table,
+		})
+		if err != nil {
+			logger.Fatal("register kafka source", zap.Error(err))
+		}
 	}
 }
 
@@ -315,6 +335,19 @@ func waitForTableClaimed(db *sql.DB, table string, timeout time.Duration) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	logger.Fatal("table not claimed", zap.String("table", table), zap.Duration("timeout", timeout))
+}
+
+func waitForKafkaSourceClaimed(db *sql.DB, table, sourceName string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var nodeID sql.NullString
+		err := db.QueryRow("SELECT node_id FROM _kafka_assignment WHERE table_name = ? AND source_name = ?", table, sourceName).Scan(&nodeID)
+		if err == nil && nodeID.Valid && nodeID.String != "" {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	logger.Fatal("kafka source not claimed", zap.String("table", table), zap.String("source", sourceName), zap.Duration("timeout", timeout))
 }
 
 func waitForDBCount(db *sql.DB, table string, target int, timeout time.Duration) bool {

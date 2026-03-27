@@ -2,6 +2,7 @@ package franzgo
 
 import (
 	"context"
+	"fmt"
 
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
@@ -21,23 +22,22 @@ func init() {
 func NewDefaultAdapterFactory(meter metric.Meter) kafka.AdapterFactory {
 	return func(
 		tableName, tableID string,
-		tableCfg metastore.TableConfig,
+		src *metastore.KafkaSource,
 		ingestSvc *ingestion.Service,
 		log *zap.Logger,
 	) (kafka.Adapter, error) {
-		if !tableCfg.Kafka.Enabled || tableCfg.Kafka.Topic == "" || tableCfg.Kafka.BootstrapServers == "" {
+		if src.Topic == "" || src.BootstrapServers == "" {
 			return nil, kafka.ErrNotConfigured
 		}
-		transformer, err := kafka.NewTransformer(tableCfg.Kafka.RecordTransformer)
+		if src.ConsumerGroupID == "" {
+			return nil, fmt.Errorf("kafka source %s/%s: consumer_group_id is required", tableName, src.SourceName)
+		}
+		transformer, err := kafka.NewTransformer(src.RecordTransformer)
 		if err != nil {
 			return nil, err
 		}
-		groupID := tableCfg.Kafka.GroupID
-		if groupID == "" {
-			groupID = kafka.KafkaGroupPrefix + tableName + "-" + tableID
-		}
 		consumer := NewConsumer(
-			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
+			src.BootstrapServers, src.ConsumerGroupID, src.Topic, tableName,
 			transformer,
 			ingestSvc,
 			log,

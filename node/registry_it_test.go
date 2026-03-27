@@ -25,10 +25,10 @@ func setupRegistryIT(t *testing.T) (*testutil.MariaDBContainer, *registry.Regist
 	return mc, cr
 }
 
-// registerTestTable inserts a table into the registry, assignment, and optionally
+// registerTestTable inserts a table into the registry, assignment, and
 // Kafka config tables. This replaces UpsertTables for test setup — tables are
 // now registered via admin API in production.
-func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafkaTopic, kafkaBootstrapServers string) {
+func registerTestTable(t *testing.T, db *sql.DB, name, displayName string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -46,21 +46,9 @@ func registerTestTable(t *testing.T, db *sql.DB, name, displayName string, kafka
 		t.Fatalf("insert _table_assignment %s: %v", name, err)
 	}
 
-	// Write config blob with Kafka settings if provided.
-	var configBlob []byte
-	if kafkaTopic != "" {
-		cfg := metastore.DefaultTableConfig()
-		cfg.Kafka.Topic = kafkaTopic
-		cfg.Kafka.BootstrapServers = kafkaBootstrapServers
-		configBlob, err = metastore.EncodeTableConfig(cfg)
-		if err != nil {
-			t.Fatalf("encode config for %s: %v", name, err)
-		}
-	}
-
 	_, err = db.ExecContext(ctx,
 		"INSERT IGNORE INTO _table_config (table_name, config) VALUES (?, ?)",
-		name, configBlob)
+		name, nil)
 	if err != nil {
 		t.Fatalf("insert _table_config %s: %v", name, err)
 	}
@@ -83,8 +71,8 @@ func TestRegistry_RegisterAndList(t *testing.T) {
 	mc, cr := setupRegistryIT(t)
 	defer mc.Teardown(t)
 
-	registerTestTable(t, mc.DB, "logs_app", "Application Logs", "app-ir", "kafka:9092")
-	registerTestTable(t, mc.DB, "logs_infra", "Infrastructure Logs", "infra-ir", "kafka:9092")
+	registerTestTable(t, mc.DB, "logs_app", "Application Logs")
+	registerTestTable(t, mc.DB, "logs_infra", "Infrastructure Logs")
 
 	// Verify tables registered
 	allTables, err := cr.GetAllRegisteredTables(context.Background())
@@ -96,7 +84,7 @@ func TestRegistry_RegisterAndList(t *testing.T) {
 	}
 
 	// Idempotent: insert again
-	registerTestTable(t, mc.DB, "logs_app", "Application Logs", "app-ir", "kafka:9092")
+	registerTestTable(t, mc.DB, "logs_app", "Application Logs")
 	allTables, err = cr.GetAllRegisteredTables(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +99,7 @@ func TestRegistry_ClaimAndRelease(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	registerTestTable(t, mc.DB, "claim_test", "Claim Test", "", "")
+	registerTestTable(t, mc.DB, "claim_test", "Claim Test")
 
 	// Claim
 	claimed, err := cr.ClaimTable(ctx, "claim_test", 0)
@@ -158,9 +146,9 @@ func TestRegistry_GetAssignedTables(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	registerTestTable(t, mc.DB, "assigned_a", "A", "", "")
-	registerTestTable(t, mc.DB, "assigned_b", "B", "", "")
-	registerTestTable(t, mc.DB, "unassigned_c", "C", "", "")
+	registerTestTable(t, mc.DB, "assigned_a", "A")
+	registerTestTable(t, mc.DB, "assigned_b", "B")
+	registerTestTable(t, mc.DB, "unassigned_c", "C")
 
 	cr.ClaimTable(ctx, "assigned_a", 0)
 	cr.ClaimTable(ctx, "assigned_b", 0)
@@ -208,8 +196,8 @@ func TestRegistry_ReleaseAllTables(t *testing.T) {
 	defer mc.Teardown(t)
 	ctx := context.Background()
 
-	registerTestTable(t, mc.DB, "release_all_a", "A", "", "")
-	registerTestTable(t, mc.DB, "release_all_b", "B", "", "")
+	registerTestTable(t, mc.DB, "release_all_a", "A")
+	registerTestTable(t, mc.DB, "release_all_b", "B")
 	cr.ClaimTable(ctx, "release_all_a", 0)
 	cr.ClaimTable(ctx, "release_all_b", 0)
 
@@ -234,7 +222,7 @@ func TestRegistry_ClaimByDifferentNodes(t *testing.T) {
 	node1 := registry.New(mc.DB, "node-1", true, log)
 	node2 := registry.New(mc.DB, "node-2", true, log)
 
-	registerTestTable(t, mc.DB, "contested", "Contested", "", "")
+	registerTestTable(t, mc.DB, "contested", "Contested")
 
 	// Node 1 claims
 	claimed1, err := node1.ClaimTable(ctx, "contested", 0)
@@ -267,25 +255,7 @@ func TestRegistry_ClaimByDifferentNodes(t *testing.T) {
 	}
 }
 
-func TestRegistry_GetTableConfig_Kafka(t *testing.T) {
-	mc, cr := setupRegistryIT(t)
-	defer mc.Teardown(t)
-	ctx := context.Background()
-
-	// Register table with Kafka config embedded in config blob
-	registerTestTable(t, mc.DB, "kafka_test", "Kafka Test", "test-topic", "kafka:9092")
-
-	cfg, err := cr.GetTableConfig(ctx, "kafka_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Kafka.Topic != "test-topic" {
-		t.Errorf("Kafka.Topic = %q, want test-topic", cfg.Kafka.Topic)
-	}
-	if cfg.Kafka.BootstrapServers != "kafka:9092" {
-		t.Errorf("Kafka.BootstrapServers = %q, want kafka:9092", cfg.Kafka.BootstrapServers)
-	}
-}
+// Kafka config is no longer in TableConfig — see _kafka_source table instead.
 
 func TestRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	mc := testutil.SetupMariaDB(t)
@@ -298,7 +268,7 @@ func TestRegistry_ClaimOrphansFromDeadNodes(t *testing.T) {
 	node2 := registry.New(mc.DB, "alive-node", true, log)
 
 	// Dead node registers and claims a table
-	registerTestTable(t, mc.DB, "orphan_table", "Orphan", "", "")
+	registerTestTable(t, mc.DB, "orphan_table", "Orphan")
 	node1.SendHeartbeat(ctx)
 	node1.ClaimTable(ctx, "orphan_table", 0)
 

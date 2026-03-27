@@ -94,7 +94,7 @@ graph TD
 
 ### Coordinator
 
-Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally Kafka consumer and planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
+Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Kafka consumption is handled separately by the `KafkaIngestionUnit`, which manages per-source consumer goroutines independently of the CoordinatorUnit. Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
 
 - **[Coordinator HA](../design/coordinator-ha.md)** — database-backed liveness, orphan detection, failover, edge cases
 - **[Ingestion Paths](ingestion.md)** — gRPC and Kafka protocols, BatchingWriter, choosing a path
@@ -125,13 +125,13 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 ## Goroutine Model
 
-Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); three are conditional on `_table_config` settings (retention, Kafka consumer, planner).
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` settings (retention, planner). Kafka consumption is handled by the `KafkaIngestionUnit`, which runs per-source goroutines independently of the CoordinatorUnit.
 
 Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
 
-### Per-Coordinator Goroutines (up to 6 per table)
+### Per-Coordinator Goroutines (up to 5 per table)
 
-Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; three are conditional on feature flags.
+Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; two are conditional on feature flags.
 
 | Goroutine | Name | Always On | Reads From | Writes To | Purpose |
 |-----------|------|:---------:|------------|-----------|---------|
@@ -139,8 +139,15 @@ Each CoordinatorUnit owns these goroutines. They are created when a coordinator 
 | 2 | **Partition Maintenance** | Yes | Database | Database (DDL) | Lookahead partition creation, old partition merge/drop |
 | 3 | **Alias Refresh** | Yes | Database | In-memory ColumnRegistry | Periodic re-read of alias_column values from `_dim_registry`/`_agg_registry` |
 | 4 | **Column Recycler** | Yes | Database | Database | Hourly scan to reclaim INVALIDATED column slots |
-| 5 | **Kafka Consumer** | No | Kafka | BatchingWriter channel | Continuous metadata ingestion (requires `kafka.enabled`) |
-| 6 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
+| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
+
+### Per-Source Goroutines (KafkaIngestionUnit)
+
+Kafka consumption is decoupled from the CoordinatorUnit. The `KafkaIngestionUnit` manages one consumer goroutine per Kafka source (registered in `_kafka_source`). Sources are assigned to nodes via `_kafka_assignment` and can be filtered by `required_env` for multi-region deployments.
+
+| Goroutine | Name | Reads From | Writes To | Purpose |
+|-----------|------|------------|-----------|---------|
+| 1 per source | **Kafka Consumer** | Kafka | BatchingWriter channel | Continuous metadata ingestion |
 
 ### Node-Level Data Path Goroutines
 
@@ -243,7 +250,7 @@ In production, coordinators and workers run as separate processes on dedicated m
 1. Initialize schema and components (ColumnRegistry, PartitionManager, Retention Strategy)
 2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
 3. Start always-on goroutines: Partition Maintenance, Alias Refresh, Column Recycler
-4. Start conditional goroutines: Retention Strategy, Planner, Kafka Consumer (based on `_table_config`)
+4. Start conditional goroutines: Retention Strategy, Planner (based on `_table_config`)
 5. Ready to process
 
 ### Shutdown Sequence
@@ -261,12 +268,11 @@ In production, coordinators and workers run as separate processes on dedicated m
 **Per-coordinator:**
 
 1. Cancel coordinator context (propagates to all owned goroutines)
-2. Stop Kafka Consumer
-3. Stop Planner
-4. Stop Retention Strategy
-5. Stop Partition Maintenance
-6. Stop Alias Refresh
-7. Close unit resources (Kafka consumer client)
+2. Stop Planner
+3. Stop Retention Strategy
+4. Stop Partition Maintenance
+5. Stop Alias Refresh
+6. Close unit resources
 
 ---
 

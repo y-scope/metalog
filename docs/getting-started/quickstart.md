@@ -74,17 +74,35 @@ Tables are registered via the admin gRPC API. Register a table from the command 
 ./metalog admin register-table \
   --addr localhost:9090 \
   --table clp_spark \
-  --display-name "Spark Logs" \
-  --config-json '{"kafka":{"enabled":true,"topic":"spark-ir","bootstrap_servers":"localhost:9092"}}'
+  --display-name "Spark Logs"
 ```
 
-This calls the coordinator's AdminService gRPC endpoint to UPSERT the table. The `--config-json` flag accepts a JSON blob that is merged into the existing config (read-modify-write). Only the fields you specify are updated; omitted fields keep their defaults.
+This calls the coordinator's AdminService gRPC endpoint to UPSERT the table.
 
 Expected output:
 
 ```
 table "clp_spark" created
 ```
+
+### 6. Register a Kafka Source (Optional)
+
+If the table should consume metadata from Kafka, register a source separately:
+
+```bash
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "source_name": "spark-main",
+  "topic": "spark-ir",
+  "bootstrap_servers": "localhost:9092",
+  "consumer_group_id": "clp-spark-main"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
+```
+
+The coordinator picks up the new source on its next reconciliation cycle and starts consuming.
+See [gRPC API — RegisterKafkaSource](../reference/grpc-api.md#registerkafkasource) for all fields
+including `record_transformer`, `consumer_group_id`, and `required_env` for multi-region setups.
 
 ---
 
@@ -134,7 +152,7 @@ The config file path is specified via the `--config` flag (default: `/etc/clp/no
 
 ### Node Configuration (YAML)
 
-Settings are organized by role: `database` (primary + optional replica), `storage`, `grpc`, `health`, `coordinator`, and `worker`. Per-table configuration (Kafka routing, feature flags) is managed via the admin gRPC API and stored in the database:
+Settings are organized by role: `database` (primary + optional replica), `storage`, `grpc`, `health`, `coordinator`, and `worker`. Per-table configuration (feature flags, consolidation policies) and Kafka sources are managed via the admin gRPC API and stored in the database:
 
 ```yaml
 database:

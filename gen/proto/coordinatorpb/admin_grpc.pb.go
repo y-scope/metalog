@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AdminService_RegisterTable_FullMethodName    = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
-	AdminService_SetColumnAlias_FullMethodName   = "/com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias"
-	AdminService_InvalidateColumn_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/InvalidateColumn"
+	AdminService_RegisterTable_FullMethodName       = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable"
+	AdminService_RegisterKafkaSource_FullMethodName = "/com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource"
+	AdminService_DeleteKafkaSource_FullMethodName   = "/com.yscope.metalog.coordinator.grpc.AdminService/DeleteKafkaSource"
+	AdminService_SetColumnAlias_FullMethodName      = "/com.yscope.metalog.coordinator.grpc.AdminService/SetColumnAlias"
+	AdminService_InvalidateColumn_FullMethodName    = "/com.yscope.metalog.coordinator.grpc.AdminService/InvalidateColumn"
 )
 
 // AdminServiceClient is the client API for AdminService service.
@@ -34,6 +36,8 @@ const (
 // editing node.yaml or restarting the node. All RPCs are idempotent.
 type AdminServiceClient interface {
 	RegisterTable(ctx context.Context, in *RegisterTableRequest, opts ...grpc.CallOption) (*RegisterTableResponse, error)
+	RegisterKafkaSource(ctx context.Context, in *RegisterKafkaSourceRequest, opts ...grpc.CallOption) (*RegisterKafkaSourceResponse, error)
+	DeleteKafkaSource(ctx context.Context, in *DeleteKafkaSourceRequest, opts ...grpc.CallOption) (*DeleteKafkaSourceResponse, error)
 	SetColumnAlias(ctx context.Context, in *SetColumnAliasRequest, opts ...grpc.CallOption) (*SetColumnAliasResponse, error)
 	InvalidateColumn(ctx context.Context, in *InvalidateColumnRequest, opts ...grpc.CallOption) (*InvalidateColumnResponse, error)
 }
@@ -50,6 +54,26 @@ func (c *adminServiceClient) RegisterTable(ctx context.Context, in *RegisterTabl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterTableResponse)
 	err := c.cc.Invoke(ctx, AdminService_RegisterTable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) RegisterKafkaSource(ctx context.Context, in *RegisterKafkaSourceRequest, opts ...grpc.CallOption) (*RegisterKafkaSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterKafkaSourceResponse)
+	err := c.cc.Invoke(ctx, AdminService_RegisterKafkaSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) DeleteKafkaSource(ctx context.Context, in *DeleteKafkaSourceRequest, opts ...grpc.CallOption) (*DeleteKafkaSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteKafkaSourceResponse)
+	err := c.cc.Invoke(ctx, AdminService_DeleteKafkaSource_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +110,8 @@ func (c *adminServiceClient) InvalidateColumn(ctx context.Context, in *Invalidat
 // editing node.yaml or restarting the node. All RPCs are idempotent.
 type AdminServiceServer interface {
 	RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error)
+	RegisterKafkaSource(context.Context, *RegisterKafkaSourceRequest) (*RegisterKafkaSourceResponse, error)
+	DeleteKafkaSource(context.Context, *DeleteKafkaSourceRequest) (*DeleteKafkaSourceResponse, error)
 	SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error)
 	InvalidateColumn(context.Context, *InvalidateColumnRequest) (*InvalidateColumnResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
@@ -100,6 +126,12 @@ type UnimplementedAdminServiceServer struct{}
 
 func (UnimplementedAdminServiceServer) RegisterTable(context.Context, *RegisterTableRequest) (*RegisterTableResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterTable not implemented")
+}
+func (UnimplementedAdminServiceServer) RegisterKafkaSource(context.Context, *RegisterKafkaSourceRequest) (*RegisterKafkaSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterKafkaSource not implemented")
+}
+func (UnimplementedAdminServiceServer) DeleteKafkaSource(context.Context, *DeleteKafkaSourceRequest) (*DeleteKafkaSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteKafkaSource not implemented")
 }
 func (UnimplementedAdminServiceServer) SetColumnAlias(context.Context, *SetColumnAliasRequest) (*SetColumnAliasResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetColumnAlias not implemented")
@@ -142,6 +174,42 @@ func _AdminService_RegisterTable_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AdminServiceServer).RegisterTable(ctx, req.(*RegisterTableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_RegisterKafkaSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterKafkaSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).RegisterKafkaSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_RegisterKafkaSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).RegisterKafkaSource(ctx, req.(*RegisterKafkaSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_DeleteKafkaSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteKafkaSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).DeleteKafkaSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_DeleteKafkaSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).DeleteKafkaSource(ctx, req.(*DeleteKafkaSourceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -192,6 +260,14 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterTable",
 			Handler:    _AdminService_RegisterTable_Handler,
+		},
+		{
+			MethodName: "RegisterKafkaSource",
+			Handler:    _AdminService_RegisterKafkaSource_Handler,
+		},
+		{
+			MethodName: "DeleteKafkaSource",
+			Handler:    _AdminService_DeleteKafkaSource_Handler,
 		},
 		{
 			MethodName: "SetColumnAlias",

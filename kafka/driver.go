@@ -26,12 +26,10 @@ type Adapter interface {
 	Stop()
 }
 
-// AdapterFactory creates an Adapter for a table.
-// Return [ErrNotConfigured] if Kafka is not configured for this table —
-// the caller will skip Kafka setup rather than treating it as a failure.
+// AdapterFactory creates an Adapter for a Kafka source.
 type AdapterFactory func(
 	tableName, tableID string,
-	tableCfg metastore.TableConfig,
+	src *metastore.KafkaSource,
 	ingestSvc *ingestion.Service,
 	log *zap.Logger,
 ) (Adapter, error)

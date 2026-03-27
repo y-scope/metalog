@@ -659,3 +659,47 @@ CREATE TABLE IF NOT EXISTS _sketch_registry (
     PRIMARY KEY (table_name, sketch_name),
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+
+-- ============================================================================
+-- KAFKA SOURCE TABLES
+-- ============================================================================
+--
+-- Kafka sources are first-class entities, decoupled from table config.
+-- Each source defines a Kafka topic + bootstrap server combination that
+-- ingests into a table. Multiple sources can target the same table
+-- (e.g., one per region in a multi-region deployment).
+--
+-- required_env gates which nodes can claim a source. Format:
+--   "KEY=VALUE,KEY=VALUE" (comma-separated, AND semantics)
+--   NULL means any node can claim the source.
+--
+-- See: ../../../../docs/design/kafka-source-assignment.md
+--
+
+-- Source definitions (config, registered via admin API)
+CREATE TABLE IF NOT EXISTS _kafka_source (
+    table_name          VARCHAR(64) NOT NULL,
+    source_name           VARCHAR(128) NOT NULL,
+    topic               VARCHAR(255) NOT NULL,
+    bootstrap_servers   VARCHAR(1024) NOT NULL,
+    record_transformer  VARCHAR(64) DEFAULT 'proto',
+    consumer_group_id   VARCHAR(255) NULL,
+    required_env           VARCHAR(512) NULL,
+    created_at          BIGINT NOT NULL,
+    PRIMARY KEY (table_name, source_name),
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Runtime assignment (which node owns which source)
+CREATE TABLE IF NOT EXISTS _kafka_assignment (
+    table_name      VARCHAR(64) NOT NULL,
+    source_name       VARCHAR(128) NOT NULL,
+    node_id         VARCHAR(64) NULL,
+    lease_expiry    BIGINT NULL,
+    claimed_at      BIGINT NULL,
+    PRIMARY KEY (table_name, source_name),
+    INDEX idx_kafka_node (node_id),
+    FOREIGN KEY (table_name, source_name)
+        REFERENCES _kafka_source(table_name, source_name) ON DELETE CASCADE
+) ENGINE=InnoDB;

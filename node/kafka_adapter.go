@@ -7,16 +7,11 @@ import (
 	"github.com/y-scope/metalog/telemetry"
 )
 
-// KafkaAdapter is an alias for kafka.Adapter, kept for backward compatibility
-// with code that references node.KafkaAdapter.
+// KafkaAdapter is an alias for kafka.Adapter.
 type KafkaAdapter = kafka.Adapter
 
-// KafkaAdapterFactory is an alias for kafka.AdapterFactory, kept for backward
-// compatibility with code that references node.KafkaAdapterFactory.
+// KafkaAdapterFactory is an alias for kafka.AdapterFactory.
 type KafkaAdapterFactory = kafka.AdapterFactory
-
-// ErrKafkaNotConfigured is an alias for kafka.ErrNotConfigured.
-var ErrKafkaNotConfigured = kafka.ErrNotConfigured
 
 // NodeOption configures optional Node behavior.
 type NodeOption func(*Node)

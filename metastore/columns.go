@@ -81,14 +81,16 @@ func guardedUpdateCols() []string {
 
 // Table registry table names.
 const (
-	TableRegistry       = "_table"
-	TableRegistryConfig = "_table_config"
+	TableRegistry           = "_table"
+	TableRegistryConfig     = "_table_config"
 	TableRegistryAssignment = "_table_assignment"
 	NodeRegistryTable       = "_node_registry"
 	DimRegistryTable        = "_dim_registry"
 	AggRegistryTable        = "_agg_registry"
 	SketchRegistryTable     = "_sketch_registry"
 	TemplateTable           = "_clp_template"
+	KafkaSourceTable        = "_kafka_source"
+	KafkaAssignmentTable    = "_kafka_assignment"
 )
 
 // DimColumnPrefix is the prefix for dynamically allocated dimension columns.

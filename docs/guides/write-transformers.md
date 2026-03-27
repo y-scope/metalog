@@ -66,22 +66,26 @@ type RecordTransformer interface {
 
 ## Configuration
 
-Set the transformer per table via the `config` blob in `_table_config`:
+Set the transformer per Kafka source via the `record_transformer` field in `_kafka_source`.
+Register or update a source with the `AdminService.RegisterKafkaSource` RPC:
 
 ```bash
 grpcurl -plaintext -d '{
   "table_name": "spark_logs",
-  "config_json": "{\"kafka\":{\"record_transformer\":\"json\"}}"
+  "source_name": "spark-main",
+  "topic": "spark-ir",
+  "bootstrap_servers": "kafka:29092",
+  "record_transformer": "json"
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
 ```
 
-Or via SQL (read-modify-write on the JSON blob):
+Or via SQL on the `_kafka_source` table:
 
 ```sql
-UPDATE _table_config
-SET config = JSON_SET(COALESCE(config, '{}'), '$.kafka.record_transformer', 'json')
-WHERE table_name = 'spark_logs';
+UPDATE _kafka_source
+SET record_transformer = 'json'
+WHERE table_name = 'spark_logs' AND source_name = 'spark-main';
 ```
 
 ## Creating a New Transformer
@@ -132,14 +136,17 @@ func init() {
 
 ### Step 3: Configure
 
-Enable for your table via the admin API or SQL:
+Enable for a Kafka source via the admin API or SQL:
 
 ```bash
 grpcurl -plaintext -d '{
   "table_name": "spark_logs",
-  "config_json": "{\"kafka\":{\"record_transformer\":\"spark\"}}"
+  "source_name": "spark-main",
+  "topic": "spark-ir",
+  "bootstrap_servers": "kafka:29092",
+  "record_transformer": "spark"
 }' localhost:9090 \
-  com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
 ```
 
 ## Field Mapping Reference

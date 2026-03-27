@@ -92,6 +92,8 @@ Each `IngestRequest` carries a `MetadataRecord` with typed `DimEntry` and `AggEn
 ```protobuf
 service AdminService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+  rpc RegisterKafkaSource(RegisterKafkaSourceRequest) returns (RegisterKafkaSourceResponse);
+  rpc DeleteKafkaSource(DeleteKafkaSourceRequest) returns (DeleteKafkaSourceResponse);
   rpc SetColumnAlias(SetColumnAliasRequest) returns (SetColumnAliasResponse);
   rpc InvalidateColumn(InvalidateColumnRequest) returns (InvalidateColumnResponse);
 }
@@ -622,8 +624,7 @@ rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse)
 ```bash
 # Minimal registration
 grpcurl -plaintext -d '{
-  "table_name": "my_spark_logs",
-  "config_json": "{\"kafka\":{\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\"}}"
+  "table_name": "my_spark_logs"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 # → {"tableName":"my_spark_logs","created":true}
@@ -635,16 +636,122 @@ grpcurl -plaintext -d '{
 grpcurl -plaintext -d '{
   "table_name": "my_spark_logs",
   "display_name": "Spark Logs",
-  "config_json": "{\"kafka\":{\"enabled\":true,\"topic\":\"spark-ir\",\"bootstrap_servers\":\"kafka:29092\",\"record_transformer\":\"spark\"},\"consolidation\":{\"enabled\":false}}"
+  "config_json": "{\"consolidation\":{\"enabled\":false}}"
 }' localhost:9090 \
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
+
+> **Note:** Kafka sources are registered separately via `RegisterKafkaSource`. See [below](#registerkafkasource).
 
 #### Error codes
 
 | gRPC Status | Cause |
 |-------------|-------|
 | `INVALID_ARGUMENT` | `table_name` blank, `config_json` contains unknown fields |
+| `INTERNAL` | Database error |
+
+### `RegisterKafkaSource`
+
+```
+rpc RegisterKafkaSource(RegisterKafkaSourceRequest) returns (RegisterKafkaSourceResponse)
+```
+
+Registers or updates a Kafka source for a table. Each source is an independent consumer
+identified by `(table_name, source_name)`. Sources are stored in `_kafka_source` and assigned
+to coordinator nodes via `_kafka_assignment`. The call is fully idempotent.
+
+#### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `table_name` | string | Yes | Target metadata table (must already exist) |
+| `source_name` | string | Yes | Unique source identifier within the table (e.g., `"us-east-spark"`) |
+| `topic` | string | Yes | Kafka topic to consume from |
+| `bootstrap_servers` | string | Yes | Kafka broker address(es) |
+| `record_transformer` | string | No | Named message transformer (empty = auto-detect). See [Write Transformers](../guides/write-transformers.md). |
+| `consumer_group_id` | string | Yes | Kafka consumer group ID for offset tracking. |
+| `required_env` | string | No | Environment match filter: `"KEY=VALUE,KEY=VALUE"` with AND semantics. Only nodes whose environment matches all key-value pairs will consume this source. Enables multi-region deployments. |
+
+#### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `table_name` | string | The table name (echoed) |
+| `source_name` | string | The source ID (echoed) |
+| `created` | bool | `true` = newly created; `false` = already existed (updated) |
+
+#### Examples
+
+```bash
+# Register a Kafka source
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "source_name": "spark-main",
+  "topic": "spark-ir",
+  "bootstrap_servers": "kafka:29092"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
+# → {"tableName":"clp_spark","sourceId":"spark-main","created":true}
+
+# With transformer and multi-region required_env
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "source_name": "us-east-spark",
+  "topic": "spark-ir-us-east",
+  "bootstrap_servers": "kafka-us-east:29092",
+  "record_transformer": "spark",
+  "required_env": "REGION=us-east-1,ENV=prod"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
+```
+
+#### Error codes
+
+| gRPC Status | Cause |
+|-------------|-------|
+| `INVALID_ARGUMENT` | Missing required fields, invalid `table_name` or `source_name` |
+| `NOT_FOUND` | Referenced `table_name` does not exist |
+| `INTERNAL` | Database error |
+
+### `DeleteKafkaSource`
+
+```
+rpc DeleteKafkaSource(DeleteKafkaSourceRequest) returns (DeleteKafkaSourceResponse)
+```
+
+Deletes a Kafka source. The coordinator stops the consumer on the next reconciliation cycle.
+
+#### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `table_name` | string | Yes | Target metadata table |
+| `source_name` | string | Yes | Source identifier to delete |
+
+#### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `table_name` | string | The table name (echoed) |
+| `source_name` | string | The source ID (echoed) |
+| `deleted` | bool | `true` = source was deleted; `false` = source did not exist |
+
+#### Examples
+
+```bash
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "source_name": "spark-main"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/DeleteKafkaSource
+# → {"tableName":"clp_spark","sourceId":"spark-main","deleted":true}
+```
+
+#### Error codes
+
+| gRPC Status | Cause |
+|-------------|-------|
+| `INVALID_ARGUMENT` | Missing `table_name` or `source_name` |
 | `INTERNAL` | Database error |
 
 ### `SetColumnAlias`
@@ -776,7 +883,7 @@ metalog admin register-table \
   --addr coordinator:9090 \
   --table clp_spark \
   --display-name "Spark Logs" \
-  --config-json '{"kafka":{"enabled":true,"topic":"spark-ir","bootstrap_servers":"kafka:29092"}}'
+  --config-json '{"consolidation":{"enabled":true}}'
 ```
 
 ---

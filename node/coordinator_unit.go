@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -37,7 +36,6 @@ type CoordinatorUnit struct {
 	partition         *schema.PartitionManager
 	registry          *schema.ColumnRegistry
 	progress          *coordinator.ProgressTracker
-	kafkaAdapter      KafkaAdapter
 	log               *zap.Logger
 
 	parentCtx context.Context // preserved for Restart
@@ -58,7 +56,6 @@ func NewCoordinatorUnit(
 	shared *Resources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
-	kafkaFactory KafkaAdapterFactory,
 	log *zap.Logger,
 ) (*CoordinatorUnit, error) {
 	reg, err := schema.NewColumnRegistry(ctx, shared.DB, tableName, shared.IsMariaDB, log)
@@ -131,20 +128,6 @@ func NewCoordinatorUnit(
 
 	partMgr := schema.NewPartitionManager(shared.DB, tableName, 7, 90, log)
 
-	// Create Kafka adapter if configured — routes through IngestionService
-	// for proper dim/agg column resolution.
-	var kafkaAdapter KafkaAdapter
-	if kafkaFactory != nil {
-		adapter, err := kafkaFactory(tableName, tableID, tableCfg, ingestSvc, log)
-		if errors.Is(err, ErrKafkaNotConfigured) {
-			// Table doesn't use Kafka — skip adapter setup.
-		} else if err != nil {
-			return nil, fmt.Errorf("new coordinator unit: %w", err)
-		} else {
-			kafkaAdapter = adapter
-		}
-	}
-
 	progress := coordinator.NewProgressTracker(config.DefaultProgressStallTimeout, log)
 
 	childCtx, cancel := context.WithCancel(ctx)
@@ -159,7 +142,6 @@ func NewCoordinatorUnit(
 		partition:        partMgr,
 		registry:         reg,
 		progress:         progress,
-		kafkaAdapter:     kafkaAdapter,
 		log:              log.With(zap.String("unit", "coordinator"), zap.String("table", tableName)),
 		parentCtx:     ctx,
 		ctx:           childCtx,
@@ -243,33 +225,12 @@ func (u *CoordinatorUnit) Start() {
 		u.registry.RunRecycler(ctx)
 	}()
 
-	// Kafka adapter goroutine — if the adapter exits unexpectedly (fatal
-	// Kafka error), cancel the coordinator so the reconciliation loop can
-	// restart it. Without this, other goroutines (partition maintenance,
-	// alias refresh) mask the failure and IsStalled() never fires.
-	if u.kafkaAdapter != nil {
-		u.wg.Add(1)
-		go func() {
-			defer u.wg.Done()
-			u.kafkaAdapter.Start(ctx)
-			if ctx.Err() == nil {
-				u.log.Error("kafka adapter exited unexpectedly, cancelling coordinator")
-				u.cancel()
-			}
-		}()
-	}
-
 	u.log.Info("coordinator unit started")
 }
 
 // Stop signals all goroutines to stop and waits for completion.
 func (u *CoordinatorUnit) Stop() {
 	u.log.Info("stopping coordinator unit")
-	// Stop the Kafka adapter before cancelling the context so push-based
-	// adapters can deregister cleanly while the goroutine is still running.
-	if u.kafkaAdapter != nil {
-		u.kafkaAdapter.Stop()
-	}
 	u.ctxMu.Lock()
 	cancel := u.cancel
 	u.ctxMu.Unlock()

@@ -10,18 +10,20 @@ import (
 
 	pb "github.com/y-scope/metalog/gen/proto/coordinatorpb"
 	"github.com/y-scope/metalog/coordinator"
+	"github.com/y-scope/metalog/metastore"
 )
 
 // AdminHandler implements the AdminService gRPC interface.
 type AdminHandler struct {
 	pb.UnimplementedAdminServiceServer
 	registration *coordinator.TableRegistration
+	kafkaSources *metastore.KafkaSourceStore
 	log          *zap.Logger
 }
 
 // NewAdminHandler creates an AdminHandler.
-func NewAdminHandler(reg *coordinator.TableRegistration, log *zap.Logger) *AdminHandler {
-	return &AdminHandler{registration: reg, log: log}
+func NewAdminHandler(reg *coordinator.TableRegistration, kafkaSources *metastore.KafkaSourceStore, log *zap.Logger) *AdminHandler {
+	return &AdminHandler{registration: reg, kafkaSources: kafkaSources, log: log}
 }
 
 // RegisterTable handles runtime table registration requests.
@@ -87,6 +89,86 @@ func (h *AdminHandler) InvalidateColumn(ctx context.Context, req *pb.InvalidateC
 		ColumnName:  req.GetColumnName(),
 		PreviousKey: previousKey,
 	}, nil
+}
+
+// RegisterKafkaSource registers a Kafka ingestion source for a table.
+func (h *AdminHandler) RegisterKafkaSource(ctx context.Context, req *pb.RegisterKafkaSourceRequest) (*pb.RegisterKafkaSourceResponse, error) {
+	if req.GetTableName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "table_name is required")
+	}
+	if req.GetSourceName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_name is required")
+	}
+	if req.GetTopic() == "" {
+		return nil, status.Error(codes.InvalidArgument, "topic is required")
+	}
+	if req.GetBootstrapServers() == "" {
+		return nil, status.Error(codes.InvalidArgument, "bootstrap_servers is required")
+	}
+	if req.GetConsumerGroupId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "consumer_group_id is required")
+	}
+
+	// Check for duplicate consumer_group_id across all sources for this table.
+	existing, err := h.kafkaSources.ListSources(ctx, req.GetTableName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list sources: %v", err)
+	}
+	for _, s := range existing {
+		if s.SourceName != req.GetSourceName() && s.ConsumerGroupID == req.GetConsumerGroupId() {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"consumer_group_id %q is already used by source %q for table %q",
+				req.GetConsumerGroupId(), s.SourceName, req.GetTableName())
+		}
+	}
+
+	if err := metastore.ValidateRequiredEnv(req.GetRequiredEnv()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+
+	transformer := req.GetRecordTransformer()
+	if transformer == "" {
+		transformer = "proto"
+	}
+
+	src := &metastore.KafkaSource{
+		TableName:         req.GetTableName(),
+		SourceName:          req.GetSourceName(),
+		Topic:             req.GetTopic(),
+		BootstrapServers:  req.GetBootstrapServers(),
+		RecordTransformer: transformer,
+		ConsumerGroupID:   req.GetConsumerGroupId(),
+		RequiredEnv:          req.GetRequiredEnv(),
+	}
+
+	created, err := h.kafkaSources.Register(ctx, src)
+	if err != nil {
+		h.log.Error("register kafka source failed", zap.Error(err))
+		return nil, status.Errorf(codes.Internal, "register kafka source: %v", err)
+	}
+
+	return &pb.RegisterKafkaSourceResponse{
+		TableName: src.TableName,
+		SourceName:  src.SourceName,
+		Created:   created,
+	}, nil
+}
+
+// DeleteKafkaSource removes a Kafka source and its assignment.
+func (h *AdminHandler) DeleteKafkaSource(ctx context.Context, req *pb.DeleteKafkaSourceRequest) (*pb.DeleteKafkaSourceResponse, error) {
+	if req.GetTableName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "table_name is required")
+	}
+	if req.GetSourceName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_name is required")
+	}
+
+	if err := h.kafkaSources.Delete(ctx, req.GetTableName(), req.GetSourceName()); err != nil {
+		h.log.Error("delete kafka source failed", zap.Error(err))
+		return nil, status.Errorf(codes.Internal, "delete kafka source: %v", err)
+	}
+
+	return &pb.DeleteKafkaSourceResponse{}, nil
 }
 
 // mapAdminError converts coordinator sentinel errors to gRPC status errors.

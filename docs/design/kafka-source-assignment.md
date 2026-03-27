@@ -19,19 +19,20 @@ Kafka sources are decoupled from `TableConfig`. Each source is an independent ro
 
 ```sql
 CREATE TABLE IF NOT EXISTS _kafka_source (
-    table_name         VARCHAR(128) NOT NULL,
-    source_id          VARCHAR(128) NOT NULL,
-    topic              VARCHAR(255) NOT NULL,
-    bootstrap_servers  VARCHAR(1024) NOT NULL,
-    record_transformer VARCHAR(64) DEFAULT 'proto',
-    group_id           VARCHAR(255) DEFAULT NULL,
-    env_match          VARCHAR(512) DEFAULT NULL,
-    PRIMARY KEY (table_name, source_id),
-    FOREIGN KEY (table_name) REFERENCES _table(table_name)
+    table_name          VARCHAR(64) NOT NULL,
+    source_name         VARCHAR(128) NOT NULL,
+    topic               VARCHAR(255) NOT NULL,
+    bootstrap_servers   VARCHAR(1024) NOT NULL,
+    record_transformer  VARCHAR(64) DEFAULT 'proto',
+    consumer_group_id   VARCHAR(255) NULL,
+    required_env        VARCHAR(512) NULL,
+    created_at          BIGINT NOT NULL,
+    PRIMARY KEY (table_name, source_name),
+    FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
 );
 ```
 
-#### `env_match` column
+#### `required_env` column
 
 Format: `KEY=VALUE,KEY=VALUE` (comma-separated, AND semantics). A node can claim a source only if `os.Getenv(k) == v` for every pair. NULL means any node can claim.
 
@@ -46,22 +47,22 @@ Each source can have a different set of conditions. This supports deployments wh
 
 ```sql
 CREATE TABLE IF NOT EXISTS _kafka_assignment (
-    table_name    VARCHAR(128) NOT NULL,
-    source_id     VARCHAR(128) NOT NULL,
-    node_id       VARCHAR(255) DEFAULT NULL,
-    lease_expiry  TIMESTAMP(6) NULL,
-    claimed_at    TIMESTAMP(6) NULL,
-    PRIMARY KEY (table_name, source_id),
-    INDEX idx_node_id (node_id),
-    FOREIGN KEY (table_name, source_id)
-        REFERENCES _kafka_source(table_name, source_id)
+    table_name      VARCHAR(64) NOT NULL,
+    source_name     VARCHAR(128) NOT NULL,
+    node_id         VARCHAR(64) NULL,
+    lease_expiry    BIGINT NULL,
+    claimed_at      BIGINT NULL,
+    PRIMARY KEY (table_name, source_name),
+    INDEX idx_kafka_node (node_id),
+    FOREIGN KEY (table_name, source_name)
+        REFERENCES _kafka_source(table_name, source_name) ON DELETE CASCADE
 );
 ```
 
 Claiming follows the existing CAS pattern:
-1. Node reads all unclaimed sources: `SELECT ... FROM _kafka_source ks LEFT JOIN _kafka_assignment ka USING (table_name, source_id) WHERE ka.node_id IS NULL`
-2. Filters locally by `env_match` (parse string, check `os.Getenv` for each pair)
-3. Claims matching sources: `UPDATE _kafka_assignment SET node_id = ? WHERE table_name = ? AND source_id = ? AND node_id IS NULL`
+1. Node reads all unclaimed sources: `SELECT ... FROM _kafka_source ks LEFT JOIN _kafka_assignment ka USING (table_name, source_name) WHERE ka.node_id IS NULL`
+2. Filters locally by `required_env` (parse string, check `os.Getenv` for each pair)
+3. Claims matching sources: `UPDATE _kafka_assignment SET node_id = ? WHERE table_name = ? AND source_name = ? AND node_id IS NULL`
 
 ### Node lifecycle
 
@@ -73,7 +74,7 @@ Node startup / reconciliation tick
 │
 └── Kafka source reconciliation (new, parallel)
     ├── SELECT all sources + assignments
-    ├── Filter by env_match
+    ├── Filter by required_env
     ├── Claim unclaimed matching sources
     └── Start KafkaIngestionUnit per claimed source
         ├── BatchingWriter (shared per table)
@@ -88,7 +89,7 @@ Lightweight component — just a Kafka adapter writing to BatchingWriter. No pla
 ```go
 type KafkaIngestionUnit struct {
     tableName  string
-    sourceID   string
+    sourceName   string
     adapter    kafka.Adapter
     ingestSvc  *ingestion.Service
     log        *zap.Logger

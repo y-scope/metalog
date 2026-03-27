@@ -5,15 +5,6 @@ import (
 	"fmt"
 )
 
-// KafkaConfig holds Kafka consumer routing and settings for a table.
-type KafkaConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Topic             string `json:"topic"`
-	BootstrapServers  string `json:"bootstrap_servers"`
-	RecordTransformer string `json:"record_transformer,omitempty"`
-	GroupID           string `json:"group_id,omitempty"` // override consumer group ID (default: clp-coordinator-{table}-{id})
-}
-
 // ConsolidationPolicyConfig describes a single consolidation policy.
 // The Type field selects the policy type; Config holds policy-specific
 // parameters as raw JSON, deserialized by each policy's factory.
@@ -39,14 +30,14 @@ type RetentionConfig struct {
 // _table_config.config MEDIUMTEXT column. A NULL value means all defaults.
 //
 // Each coordinator subsystem owns its enabled flag and config under a single
-// key: kafka, consolidation, retention.
+// key: consolidation, retention. Kafka ingestion is configured separately
+// via _kafka_source (see docs/design/kafka-source-assignment.md).
 //
 // JSON is used instead of LZ4+msgpack because this table has very few rows
 // (one per managed table) and the payloads are tiny (~100 bytes). Plain JSON
 // keeps the config human-readable via a simple SELECT and avoids compression
 // overhead that would actually increase size at this scale.
 type TableConfig struct {
-	Kafka         KafkaConfig         `json:"kafka"`
 	Consolidation ConsolidationConfig `json:"consolidation"`
 	Retention     RetentionConfig     `json:"retention"`
 }
@@ -54,7 +45,6 @@ type TableConfig struct {
 // DefaultTableConfig returns a TableConfig with all default values.
 func DefaultTableConfig() TableConfig {
 	return TableConfig{
-		Kafka:         KafkaConfig{Enabled: true},
 		Consolidation: ConsolidationConfig{Enabled: true},
 		Retention:     RetentionConfig{Enabled: true, Type: "default"},
 	}

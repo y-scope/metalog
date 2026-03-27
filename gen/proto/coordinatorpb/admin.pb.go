@@ -137,6 +137,251 @@ func (x *RegisterTableResponse) GetCreated() bool {
 	return false
 }
 
+// RegisterKafkaSource registers a Kafka ingestion source for a table.
+// Sources are decoupled from table config — each source targets a specific
+// Kafka topic/cluster and can be gated by required_env conditions for
+// multi-region deployments.
+type RegisterKafkaSourceRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	TableName         string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`                         // required — must reference an existing table
+	SourceName        string                 `protobuf:"bytes,2,opt,name=source_name,json=sourceName,proto3" json:"source_name,omitempty"`                      // required — unique per table
+	Topic             string                 `protobuf:"bytes,3,opt,name=topic,proto3" json:"topic,omitempty"`                                                  // required
+	BootstrapServers  string                 `protobuf:"bytes,4,opt,name=bootstrap_servers,json=bootstrapServers,proto3" json:"bootstrap_servers,omitempty"`    // required
+	RecordTransformer string                 `protobuf:"bytes,5,opt,name=record_transformer,json=recordTransformer,proto3" json:"record_transformer,omitempty"` // optional — default "proto"
+	ConsumerGroupId   string                 `protobuf:"bytes,6,opt,name=consumer_group_id,json=consumerGroupId,proto3" json:"consumer_group_id,omitempty"`     // required — Kafka consumer group ID
+	RequiredEnv       string                 `protobuf:"bytes,7,opt,name=required_env,json=requiredEnv,proto3" json:"required_env,omitempty"`                   // optional — "KEY=VALUE,KEY=VALUE" AND semantics
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RegisterKafkaSourceRequest) Reset() {
+	*x = RegisterKafkaSourceRequest{}
+	mi := &file_admin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterKafkaSourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterKafkaSourceRequest) ProtoMessage() {}
+
+func (x *RegisterKafkaSourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterKafkaSourceRequest.ProtoReflect.Descriptor instead.
+func (*RegisterKafkaSourceRequest) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RegisterKafkaSourceRequest) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetSourceName() string {
+	if x != nil {
+		return x.SourceName
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetBootstrapServers() string {
+	if x != nil {
+		return x.BootstrapServers
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetRecordTransformer() string {
+	if x != nil {
+		return x.RecordTransformer
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetConsumerGroupId() string {
+	if x != nil {
+		return x.ConsumerGroupId
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceRequest) GetRequiredEnv() string {
+	if x != nil {
+		return x.RequiredEnv
+	}
+	return ""
+}
+
+type RegisterKafkaSourceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	SourceName    string                 `protobuf:"bytes,2,opt,name=source_name,json=sourceName,proto3" json:"source_name,omitempty"`
+	Created       bool                   `protobuf:"varint,3,opt,name=created,proto3" json:"created,omitempty"` // true = new; false = already existed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterKafkaSourceResponse) Reset() {
+	*x = RegisterKafkaSourceResponse{}
+	mi := &file_admin_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterKafkaSourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterKafkaSourceResponse) ProtoMessage() {}
+
+func (x *RegisterKafkaSourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterKafkaSourceResponse.ProtoReflect.Descriptor instead.
+func (*RegisterKafkaSourceResponse) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RegisterKafkaSourceResponse) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceResponse) GetSourceName() string {
+	if x != nil {
+		return x.SourceName
+	}
+	return ""
+}
+
+func (x *RegisterKafkaSourceResponse) GetCreated() bool {
+	if x != nil {
+		return x.Created
+	}
+	return false
+}
+
+// DeleteKafkaSource removes a Kafka source and its assignment.
+type DeleteKafkaSourceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	SourceName    string                 `protobuf:"bytes,2,opt,name=source_name,json=sourceName,proto3" json:"source_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteKafkaSourceRequest) Reset() {
+	*x = DeleteKafkaSourceRequest{}
+	mi := &file_admin_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteKafkaSourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteKafkaSourceRequest) ProtoMessage() {}
+
+func (x *DeleteKafkaSourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteKafkaSourceRequest.ProtoReflect.Descriptor instead.
+func (*DeleteKafkaSourceRequest) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *DeleteKafkaSourceRequest) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *DeleteKafkaSourceRequest) GetSourceName() string {
+	if x != nil {
+		return x.SourceName
+	}
+	return ""
+}
+
+type DeleteKafkaSourceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteKafkaSourceResponse) Reset() {
+	*x = DeleteKafkaSourceResponse{}
+	mi := &file_admin_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteKafkaSourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteKafkaSourceResponse) ProtoMessage() {}
+
+func (x *DeleteKafkaSourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteKafkaSourceResponse.ProtoReflect.Descriptor instead.
+func (*DeleteKafkaSourceResponse) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{5}
+}
+
 // SetColumnAlias sets or clears the alias for a dimension or aggregation column.
 // The column must already be allocated (ACTIVE) in the registry.
 // Pass empty alias_column to clear an existing alias.
@@ -151,7 +396,7 @@ type SetColumnAliasRequest struct {
 
 func (x *SetColumnAliasRequest) Reset() {
 	*x = SetColumnAliasRequest{}
-	mi := &file_admin_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -163,7 +408,7 @@ func (x *SetColumnAliasRequest) String() string {
 func (*SetColumnAliasRequest) ProtoMessage() {}
 
 func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[2]
+	mi := &file_admin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -176,7 +421,7 @@ func (x *SetColumnAliasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasRequest.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{2}
+	return file_admin_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SetColumnAliasRequest) GetTableName() string {
@@ -210,7 +455,7 @@ type SetColumnAliasResponse struct {
 
 func (x *SetColumnAliasResponse) Reset() {
 	*x = SetColumnAliasResponse{}
-	mi := &file_admin_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +467,7 @@ func (x *SetColumnAliasResponse) String() string {
 func (*SetColumnAliasResponse) ProtoMessage() {}
 
 func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[3]
+	mi := &file_admin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +480,7 @@ func (x *SetColumnAliasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetColumnAliasResponse.ProtoReflect.Descriptor instead.
 func (*SetColumnAliasResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{3}
+	return file_admin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SetColumnAliasResponse) GetColumnName() string {
@@ -266,7 +511,7 @@ type InvalidateColumnRequest struct {
 
 func (x *InvalidateColumnRequest) Reset() {
 	*x = InvalidateColumnRequest{}
-	mi := &file_admin_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +523,7 @@ func (x *InvalidateColumnRequest) String() string {
 func (*InvalidateColumnRequest) ProtoMessage() {}
 
 func (x *InvalidateColumnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[4]
+	mi := &file_admin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +536,7 @@ func (x *InvalidateColumnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateColumnRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateColumnRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{4}
+	return file_admin_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *InvalidateColumnRequest) GetTableName() string {
@@ -318,7 +563,7 @@ type InvalidateColumnResponse struct {
 
 func (x *InvalidateColumnResponse) Reset() {
 	*x = InvalidateColumnResponse{}
-	mi := &file_admin_proto_msgTypes[5]
+	mi := &file_admin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +575,7 @@ func (x *InvalidateColumnResponse) String() string {
 func (*InvalidateColumnResponse) ProtoMessage() {}
 
 func (x *InvalidateColumnResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[5]
+	mi := &file_admin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +588,7 @@ func (x *InvalidateColumnResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateColumnResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateColumnResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{5}
+	return file_admin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *InvalidateColumnResponse) GetColumnName() string {
@@ -375,7 +620,29 @@ const file_admin_proto_rawDesc = "" +
 	"\x15RegisterTableResponse\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x18\n" +
-	"\acreated\x18\x02 \x01(\bR\acreated\"z\n" +
+	"\acreated\x18\x02 \x01(\bR\acreated\"\x9d\x02\n" +
+	"\x1aRegisterKafkaSourceRequest\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
+	"\vsource_name\x18\x02 \x01(\tR\n" +
+	"sourceName\x12\x14\n" +
+	"\x05topic\x18\x03 \x01(\tR\x05topic\x12+\n" +
+	"\x11bootstrap_servers\x18\x04 \x01(\tR\x10bootstrapServers\x12-\n" +
+	"\x12record_transformer\x18\x05 \x01(\tR\x11recordTransformer\x12*\n" +
+	"\x11consumer_group_id\x18\x06 \x01(\tR\x0fconsumerGroupId\x12!\n" +
+	"\frequired_env\x18\a \x01(\tR\vrequiredEnv\"w\n" +
+	"\x1bRegisterKafkaSourceResponse\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
+	"\vsource_name\x18\x02 \x01(\tR\n" +
+	"sourceName\x12\x18\n" +
+	"\acreated\x18\x03 \x01(\bR\acreated\"Z\n" +
+	"\x18DeleteKafkaSourceRequest\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
+	"\vsource_name\x18\x02 \x01(\tR\n" +
+	"sourceName\"\x1b\n" +
+	"\x19DeleteKafkaSourceResponse\"z\n" +
 	"\x15SetColumnAliasRequest\x12\x1d\n" +
 	"\n" +
 	"table_name\x18\x01 \x01(\tR\ttableName\x12\x1f\n" +
@@ -394,9 +661,11 @@ const file_admin_proto_rawDesc = "" +
 	"\x18InvalidateColumnResponse\x12\x1f\n" +
 	"\vcolumn_name\x18\x01 \x01(\tR\n" +
 	"columnName\x12!\n" +
-	"\fprevious_key\x18\x02 \x01(\tR\vpreviousKey2\xb5\x03\n" +
+	"\fprevious_key\x18\x02 \x01(\tR\vpreviousKey2\xe5\x05\n" +
 	"\fAdminService\x12\x86\x01\n" +
-	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponse\x12\x89\x01\n" +
+	"\rRegisterTable\x129.com.yscope.metalog.coordinator.grpc.RegisterTableRequest\x1a:.com.yscope.metalog.coordinator.grpc.RegisterTableResponse\x12\x98\x01\n" +
+	"\x13RegisterKafkaSource\x12?.com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceRequest\x1a@.com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceResponse\x12\x92\x01\n" +
+	"\x11DeleteKafkaSource\x12=.com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceRequest\x1a>.com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceResponse\x12\x89\x01\n" +
 	"\x0eSetColumnAlias\x12:.com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest\x1a;.com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse\x12\x8f\x01\n" +
 	"\x10InvalidateColumn\x12<.com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest\x1a=.com.yscope.metalog.coordinator.grpc.InvalidateColumnResponseBa\n" +
 	")com.yscope.metalog.coordinator.grpc.protoP\x01Z2github.com/y-scope/metalog/gen/proto/coordinatorpbb\x06proto3"
@@ -413,24 +682,32 @@ func file_admin_proto_rawDescGZIP() []byte {
 	return file_admin_proto_rawDescData
 }
 
-var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_admin_proto_goTypes = []any{
-	(*RegisterTableRequest)(nil),     // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	(*RegisterTableResponse)(nil),    // 1: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	(*SetColumnAliasRequest)(nil),    // 2: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	(*SetColumnAliasResponse)(nil),   // 3: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
-	(*InvalidateColumnRequest)(nil),  // 4: com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
-	(*InvalidateColumnResponse)(nil), // 5: com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
+	(*RegisterTableRequest)(nil),        // 0: com.yscope.metalog.coordinator.grpc.RegisterTableRequest
+	(*RegisterTableResponse)(nil),       // 1: com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	(*RegisterKafkaSourceRequest)(nil),  // 2: com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceRequest
+	(*RegisterKafkaSourceResponse)(nil), // 3: com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceResponse
+	(*DeleteKafkaSourceRequest)(nil),    // 4: com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceRequest
+	(*DeleteKafkaSourceResponse)(nil),   // 5: com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceResponse
+	(*SetColumnAliasRequest)(nil),       // 6: com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	(*SetColumnAliasResponse)(nil),      // 7: com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	(*InvalidateColumnRequest)(nil),     // 8: com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	(*InvalidateColumnResponse)(nil),    // 9: com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
 }
 var file_admin_proto_depIdxs = []int32{
 	0, // 0: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:input_type -> com.yscope.metalog.coordinator.grpc.RegisterTableRequest
-	2, // 1: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
-	4, // 2: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:input_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
-	1, // 3: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
-	3, // 4: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
-	5, // 5: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:output_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	2, // 1: com.yscope.metalog.coordinator.grpc.AdminService.RegisterKafkaSource:input_type -> com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceRequest
+	4, // 2: com.yscope.metalog.coordinator.grpc.AdminService.DeleteKafkaSource:input_type -> com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceRequest
+	6, // 3: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:input_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasRequest
+	8, // 4: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:input_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnRequest
+	1, // 5: com.yscope.metalog.coordinator.grpc.AdminService.RegisterTable:output_type -> com.yscope.metalog.coordinator.grpc.RegisterTableResponse
+	3, // 6: com.yscope.metalog.coordinator.grpc.AdminService.RegisterKafkaSource:output_type -> com.yscope.metalog.coordinator.grpc.RegisterKafkaSourceResponse
+	5, // 7: com.yscope.metalog.coordinator.grpc.AdminService.DeleteKafkaSource:output_type -> com.yscope.metalog.coordinator.grpc.DeleteKafkaSourceResponse
+	7, // 8: com.yscope.metalog.coordinator.grpc.AdminService.SetColumnAlias:output_type -> com.yscope.metalog.coordinator.grpc.SetColumnAliasResponse
+	9, // 9: com.yscope.metalog.coordinator.grpc.AdminService.InvalidateColumn:output_type -> com.yscope.metalog.coordinator.grpc.InvalidateColumnResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -448,7 +725,7 @@ func file_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

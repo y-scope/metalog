@@ -54,7 +54,7 @@ services:
       - --addr=coordinator:9090
       - --table=clp_cockroachdb
       - --display-name=CockroachDB Logs
-      - --config-json={"kafka":{"enabled":false},"consolidation":{"enabled":false},"retention":{"enabled":false}}
+      - --config-json={"consolidation":{"enabled":false},"retention":{"enabled":false}}
     depends_on:
       coordinator:
         condition: service_healthy

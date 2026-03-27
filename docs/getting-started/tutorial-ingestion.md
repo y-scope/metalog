@@ -8,7 +8,38 @@ The service supports gRPC (commit-then-ack) and Kafka ingestion. This tutorial u
 
 ---
 
-## 1. Create the Kafka topic
+## 1. Register a Kafka source
+
+Kafka sources are registered separately from tables. Register a source
+that consumes from the `spark-ir` topic into the `clp_spark` table
+(created in the [Quickstart](quickstart.md)):
+
+```bash
+./metalog admin register-kafka-source \
+  --addr localhost:9090 \
+  --table clp_spark \
+  --source-name spark-main \
+  --topic spark-ir \
+  --bootstrap-servers localhost:9092 \
+  --consumer-group-id clp-spark-main
+```
+
+Or via grpcurl:
+
+```bash
+grpcurl -plaintext -d '{
+  "table_name": "clp_spark",
+  "source_name": "spark-main",
+  "topic": "spark-ir",
+  "bootstrap_servers": "localhost:9092",
+  "consumer_group_id": "clp-spark-main"
+}' localhost:9090 \
+  com.yscope.metalog.coordinator.grpc.AdminService/RegisterKafkaSource
+```
+
+The coordinator picks up the source on its next reconciliation cycle and starts consuming.
+
+## 2. Create the Kafka topic
 
 ```bash
 docker compose -f docker/docker-compose.yml exec kafka kafka-topics --create --if-not-exists \
@@ -18,7 +49,7 @@ docker compose -f docker/docker-compose.yml exec kafka kafka-topics --create --i
   --replication-factor 1
 ```
 
-## 2. Produce a test message
+## 3. Produce a test message
 
 Each Kafka message represents one IR file's metadata. Produce a single record:
 
@@ -31,7 +62,7 @@ echo '{"ir_storage_backend":"s3","ir_bucket":"clp-ir","ir_path":"s3://clp-ir/app
 
 > **Note:** `kafka-console-producer` treats each **line** as a separate message. The JSON must be on a single line.
 
-## 3. Verify ingestion
+## 4. Verify ingestion
 
 The coordinator's Kafka poller consumes the message and the metadata writer batch-UPSERTs it to the `clp_spark` table. Wait a few seconds, then query:
 
