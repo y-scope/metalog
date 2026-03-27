@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/config"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/taskqueue"
 	"github.com/y-scope/metalog/worker"
 )
@@ -18,11 +19,12 @@ const drainTimeout = 30 * time.Second
 
 // WorkerUnit manages a pool of worker goroutines sharing a single TaskPrefetcher.
 type WorkerUnit struct {
-	concurrency int
-	nodeID      string
-	shared      *Resources
-	prefetcher  *worker.Prefetcher
-	log         *zap.Logger
+	concurrency    int
+	nodeID         string
+	shared         *Resources
+	archiveCreator *storage.ArchiveCreator
+	prefetcher     *worker.Prefetcher
+	log            *zap.Logger
 
 	// prefetchCtx/prefetchCancel control the prefetcher only.
 	// Workers use workerCtx which is canceled after drain timeout.
@@ -34,13 +36,14 @@ type WorkerUnit struct {
 }
 
 // NewWorkerUnit creates a worker unit derived from the given parent context.
-func NewWorkerUnit(parent context.Context, concurrency int, nodeID string, shared *Resources, log *zap.Logger) *WorkerUnit {
+func NewWorkerUnit(parent context.Context, concurrency int, nodeID string, shared *Resources, archiveCreator *storage.ArchiveCreator, log *zap.Logger) *WorkerUnit {
 	prefetchCtx, prefetchCancel := context.WithCancel(parent)
 	workerCtx, workerCancel := context.WithCancel(parent)
 	return &WorkerUnit{
 		concurrency:    concurrency,
 		nodeID:         nodeID,
 		shared:         shared,
+		archiveCreator: archiveCreator,
 		log:            log.With(zap.String("unit", "worker")),
 		prefetchCtx:    prefetchCtx,
 		prefetchCancel: prefetchCancel,
@@ -70,7 +73,7 @@ func (u *WorkerUnit) Start() {
 		go func(id int) {
 			defer u.wg.Done()
 			core := worker.NewCore(
-				tq, u.shared.ArchiveCreator, u.prefetcher,
+				tq, u.archiveCreator, u.prefetcher,
 				u.log.With(zap.Int("workerId", id)),
 			)
 			core.Run(u.workerCtx)

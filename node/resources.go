@@ -9,21 +9,16 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/schema"
-	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/telemetry"
 )
 
 // Resources holds resources shared across all units in a node.
 // The Node owns these resources and closes them after all units have stopped.
 type Resources struct {
-	DB              *sql.DB // RW pool (primary). Nil in RO-only deployments.
-	ReadDB          *sql.DB // RO pool (read replica). Nil when not configured.
-	StorageRegistry *storage.Registry
-	ArchiveCreator  *storage.ArchiveCreator
-	ArchiveBackend  string
-	ArchiveBucket   string
-	IsMariaDB       bool
-	Log             *zap.Logger
+	DB        *sql.DB // RW pool (primary). Nil in RO-only deployments.
+	ReadDB    *sql.DB // RO pool (read replica). Nil when not configured.
+	IsMariaDB bool
+	Log       *zap.Logger
 
 	// FailureLogInterval controls how often periodic loops repeat failure
 	// warnings. Set from logging.failureLogIntervalSeconds in node.yaml.

@@ -15,6 +15,7 @@ import (
 	"github.com/y-scope/metalog/coordinator/retention"
 	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/schema"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/taskqueue"
 )
 
@@ -56,6 +57,9 @@ func NewCoordinatorUnit(
 	shared *Resources,
 	writer *ingestion.BatchingWriter,
 	ingestSvc *ingestion.Service,
+	storageReg *storage.Registry,
+	archiveBackend string,
+	archiveBucket string,
 	log *zap.Logger,
 ) (*CoordinatorUnit, error) {
 	reg, err := schema.NewColumnRegistry(ctx, shared.DB, tableName, shared.IsMariaDB, log)
@@ -96,9 +100,9 @@ func NewCoordinatorUnit(
 			InFlight:           inFlight,
 			TaskQueue:          taskQueue,
 			Resolver:           reg,
-			StorageRegistry:    shared.StorageRegistry,
-			ArchiveBackend:     shared.ArchiveBackend,
-			ArchiveBucket:      shared.ArchiveBucket,
+			StorageRegistry:    storageReg,
+			ArchiveBackend:     archiveBackend,
+			ArchiveBucket:      archiveBucket,
 			Interval:           config.DefaultPlannerInterval,
 			FailureLogInterval: shared.FailureLogInterval,
 			StaleThreshold:     staleThreshold,
@@ -118,7 +122,7 @@ func NewCoordinatorUnit(
 		DB:                 shared.DB,
 		TableName:          tableName,
 		IsMariaDB:          shared.IsMariaDB,
-		StorageRegistry:    shared.StorageRegistry,
+		StorageRegistry:    storageReg,
 		FailureLogInterval: shared.FailureLogInterval,
 		Log:                log,
 	})

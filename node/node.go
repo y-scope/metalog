@@ -38,6 +38,13 @@ type Node struct {
 	workerUnit   *WorkerUnit
 	healthSrv    *health.Server
 
+	// Storage fields — initialized in Start() only when consolidation
+	// or workers are enabled. Not needed for pure ingestion nodes.
+	storageReg     *storage.Registry
+	archiveCreator *storage.ArchiveCreator
+	archiveBackend string
+	archiveBucket  string
+
 	kafkaMu      sync.Mutex
 	kafkaUnits   map[string]*KafkaIngestionUnit // key: "tableName/sourceName"
 
@@ -159,47 +166,12 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 	log.Info("detected database", zap.String("type", dbType.String()), zap.String("version", versionStr))
 	isMariaDB := dbType == db.DatabaseTypeMariaDB
 
-	// Set up storage registry
-	storageReg := storage.NewRegistry()
-	for name, backendCfg := range cfg.Storage.Backends {
-		typeName := backendCfg.Type
-		if typeName == "" {
-			typeName = "s3"
-		}
-		backend, err := storage.CreateBackend(typeName, backendCfg.ToMap())
-		if err != nil {
-			if name == cfg.Storage.DefaultBackend {
-				return nil, fmt.Errorf("create default storage backend %q: %w", name, err)
-			}
-			log.Warn("failed to create storage backend, skipping", zap.String("name", name), zap.Error(err))
-			continue
-		}
-		storageReg.Register(name, backend)
-	}
-
-	// Create compressor (only when workers are enabled)
-	var compressor *storage.ClpCompressor
-	if cfg.Worker.Concurrency > 0 && cfg.Worker.ClpBinaryPath != "" {
-		compressor = storage.NewClpCompressor(
-			cfg.Worker.ClpBinaryPath,
-			time.Duration(cfg.Worker.ClpProcessTimeoutSeconds)*time.Second,
-			log,
-		)
-	}
-
-	// Create archive creator
-	archiveCreator := storage.NewArchiveCreator(storageReg, compressor, log)
-
 	// Create telemetry provider (or use externally provided one)
 	var telemetryProvider *telemetry.Provider
 
 	shared := &Resources{
 		DB:                 pool,
 		ReadDB:             readPool,
-		StorageRegistry:    storageReg,
-		ArchiveCreator:     archiveCreator,
-		ArchiveBackend:     cfg.Storage.DefaultBackend,
-		ArchiveBucket:      cfg.Storage.Backends[cfg.Storage.DefaultBackend].Bucket,
 		IsMariaDB:          isMariaDB,
 		FailureLogInterval: cfg.Logging.FailureLogInterval(),
 		Telemetry:          telemetryProvider,
@@ -252,6 +224,39 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 // A node with only a replica DB and gRPC enabled runs as a read-only API server.
 func (n *Node) Start() error {
 	ctx := n.ctx
+
+	// Initialize storage backends (only when consolidation or workers need them).
+	if len(n.cfg.Storage.Backends) > 0 {
+		n.storageReg = storage.NewRegistry()
+		for name, backendCfg := range n.cfg.Storage.Backends {
+			typeName := backendCfg.Type
+			if typeName == "" {
+				typeName = "s3"
+			}
+			backend, err := storage.CreateBackend(typeName, backendCfg.ToMap())
+			if err != nil {
+				if name == n.cfg.Storage.DefaultBackend {
+					return fmt.Errorf("create default storage backend %q: %w", name, err)
+				}
+				n.log.Warn("failed to create storage backend, skipping", zap.String("name", name), zap.Error(err))
+				continue
+			}
+			n.storageReg.Register(name, backend)
+		}
+		var compressor *storage.ClpCompressor
+		if n.cfg.Worker.Concurrency > 0 && n.cfg.Worker.ClpBinaryPath != "" {
+			compressor = storage.NewClpCompressor(
+				n.cfg.Worker.ClpBinaryPath,
+				time.Duration(n.cfg.Worker.ClpProcessTimeoutSeconds)*time.Second,
+				n.log,
+			)
+		}
+		n.archiveCreator = storage.NewArchiveCreator(n.storageReg, compressor, n.log)
+		n.archiveBackend = n.cfg.Storage.DefaultBackend
+		if b, ok := n.cfg.Storage.Backends[n.cfg.Storage.DefaultBackend]; ok {
+			n.archiveBucket = b.Bucket
+		}
+	}
 
 	// Coordinator and ingestion subsystems require primary DB
 	if n.cfg.HasCoordinator() {
@@ -322,7 +327,7 @@ func (n *Node) Start() error {
 
 	// Workers require primary DB
 	if n.cfg.Worker.Concurrency > 0 {
-		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.log)
+		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.archiveCreator, n.log)
 		n.workerUnit.Start()
 	}
 
@@ -466,7 +471,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.storageReg, n.archiveBackend, n.archiveBucket, n.log)
 	if err != nil {
 		return err
 	}

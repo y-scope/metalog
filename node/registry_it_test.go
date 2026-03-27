@@ -10,7 +10,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/y-scope/metalog/metastore"
 	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/testutil"
 )
