@@ -266,7 +266,9 @@ func (c *Consumer) drainFlushes() {
 	c.pendingFlushes = remaining
 }
 
-// commitPending commits any pending offsets to Kafka via franz-go.
+// commitPending commits any pending offsets synchronously to Kafka.
+// Using CommitOffsetsSync ensures offsets are acknowledged by the broker
+// before we clear pendingCommit, preventing offset loss on rebalance.
 func (c *Consumer) commitPending(ctx context.Context, client *kgo.Client) {
 	if len(c.pendingCommit) == 0 {
 		return
@@ -283,16 +285,20 @@ func (c *Consumer) commitPending(ctx context.Context, client *kgo.Client) {
 		}
 	}
 
-	// Clear before commit so we don't double-commit on next cycle.
+	var commitErr error
+	client.CommitOffsetsSync(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+		commitErr = err
+	})
+	if commitErr != nil {
+		c.log.Warn("offset commit failed", zap.Error(commitErr))
+		// Keep pendingCommit so the next cycle retries.
+		return
+	}
+
+	// Clear only after broker has acknowledged the commit.
 	for k := range c.pendingCommit {
 		delete(c.pendingCommit, k)
 	}
-
-	client.CommitOffsets(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-		if err != nil {
-			c.log.Warn("offset commit failed", zap.Error(err))
-		}
-	})
 }
 
 // commitPendingSync commits pending offsets synchronously. Used during
