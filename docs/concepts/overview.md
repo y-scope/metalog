@@ -1,0 +1,287 @@
+# Architecture Overview
+
+[← Back to docs](../README.md)
+
+End-to-end data flow, data lifecycle, component responsibilities, goroutine model, and deployment. For a quick visual overview of the coordinator node and worker pool, see the [project README](../../README.md#architecture). For deep dives, see [Coordinator HA](../design/coordinator-ha.md) (failover, liveness, edge cases).
+
+## Design Principles
+
+- **Minimal moving parts** — MariaDB/MySQL is the single source of truth for metadata, task distribution, and leader election. No etcd, no ZooKeeper, no additional distributed services — even for HA.
+- **Safe crash recovery** — Idempotent UPSERTs, forward-only state transitions, and monotonic lifecycle progression mean any component can restart at any time without data loss or corruption.
+- **Separation of ingestion and processing** — Coordinators handle metadata writes; stateless workers handle heavy I/O (consolidation). They scale independently and never contend.
+
+---
+
+## End-to-End Data Flow
+
+The [README](../../README.md#architecture) shows coordinator and worker pool internals; this section shows the external data flow.
+
+**Ingestion and processing:**
+
+```mermaid
+graph TD
+    Producers["Producers (100K+ hosts)"]
+    Client["Client SDK"]
+    S3[("Object Storage<br/>(IR + Archives)")]
+    IngestionGRPC["gRPC Ingestion"]
+    Kafka["Kafka"]
+    Coord["Coordinator"]
+    DB[("Database")]
+    Workers["Worker Pool (stateless)"]
+
+    Producers --> Client
+    Client -->|"(1) write files"| S3
+    Client -->|"(1a) send metadata"| IngestionGRPC
+    Client -->|"(1b) publish metadata"| Kafka
+    IngestionGRPC -->|"(2a) commit-then-ack"| Coord
+    Kafka -->|"(2b) poll-consume"| Coord
+    Coord -->|"(2) batch-UPSERT"| DB
+    S3 <-->|"(3) read/write"| Workers
+    Workers -->|"(3) prefetch/complete tasks"| DB
+```
+
+**Data access:**
+
+```mermaid
+graph TD
+    QueryGRPC["Query gRPC"]
+    QS["Query Service"]
+    DB[("Database<br/>(replicas preferred)")]
+
+    QueryGRPC --> QS
+    QS -->|"(4) query metadata"| DB
+```
+
+**How data flows through the system:**
+
+1. **Ingestion** — the Client SDK writes files (IR or archives) to object storage and sends file metadata to the coordinator via gRPC (push, commit-then-ack) or Kafka (pull, poll-based consumption). IR files may be destined for consolidation into archives or left as-is.
+2. **Persistence** — the coordinator batch-UPSERTs metadata to the database and generates workflow tasks (e.g., consolidation).
+3. **Processing** — a `Prefetcher` batch-claims tasks from `_task_queue`; workers pull tasks from the in-memory queue, consolidate IR → Archive, and report results back for metadata updates.
+4. **Data access** — the Query Service exposes metadata via gRPC; queries go to database replicas when available, primary otherwise.
+
+---
+
+## Data Lifecycle
+
+Files exist in two formats, both using schema-free semantic compression. **IR** (Intermediate Representation) is a lightweight, streamable, appendable format semantically compressed at the edge — directly queryable even before consolidation. **Archives** are the equivalent columnar format, optimized for analytical queries and semantic search, with higher compression, richer metadata, and semantic enrichment.
+
+The entry type determines the initial state. When retention expires, the coordinator's retention strategy transitions the file to a `PURGING` state (crash-safe marker), deletes the database row while collecting storage paths, and removes files from object storage at a rate-limited pace. The `PURGING` state is durable — if the coordinator crashes or fails over, the new owner picks up from where it left off.
+
+```mermaid
+graph TD
+    A["Producer writes file to storage,<br/>sends metadata (gRPC or Kafka)"]
+    B["Coordinator ingests metadata<br/>and batch-UPSERT to metadata table"]
+
+    A --> B
+
+    B -->|"IR-only"| IR1["IR_BUFFERING"]
+    B -->|"IR+Archive"| IRA1["IR_ARCHIVE_BUFFERING"]
+    B -->|"Archive-only"| AO1["ARCHIVE_CLOSED"]
+
+    IR1 -->|"file closes"| IR2["IR_CLOSED"]
+    IR2 -->|"expires"| IR3a["IR_PURGING"]
+
+    IRA1 -->|"file closes"| IRA2["IR_ARCHIVE_CONSOLIDATION_PENDING"]
+    IRA2 -->|"worker consolidates"| IRA3["ARCHIVE_CLOSED"]
+    IRA3 -->|"expires"| IRA4a["ARCHIVE_PURGING"]
+
+    AO1 -->|"expires"| AO2a["ARCHIVE_PURGING"]
+```
+
+---
+
+## Components
+
+### Coordinator
+
+Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Kafka consumption is handled separately by the `KafkaIngestionUnit`, which manages per-source consumer goroutines independently of the CoordinatorUnit. Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
+
+- **[Coordinator HA](../design/coordinator-ha.md)** — database-backed liveness, orphan detection, failover, edge cases
+- **[Ingestion Paths](ingestion.md)** — gRPC and Kafka protocols, BatchingWriter, choosing a path
+
+### Workers
+
+Stateless processes that transform IR files into Archives — row-to-column transposition, semantic extraction and enrichment, PII handling, and sketch filter construction. A `Prefetcher` goroutine batch-claims tasks from the database via `SELECT ... FOR UPDATE` + `UPDATE` (READ COMMITTED isolation) and feeds them into a buffered channel; worker goroutines consume from that channel, execute independently, and report results back. The coordinator's Planner processes completions and applies all metadata updates.
+
+- **[Scale Workers](../guides/scale-workers.md)** — scaling, troubleshooting
+- **[Consolidation](consolidation.md)** — IR→Archive pipeline, policies
+- **[Task Queue](../design/task-queue.md)** — claim protocol, recovery, performance
+
+### Query Service
+
+Read-only metadata access via gRPC streaming with early termination. All query protocols share the same `QueryService` implementation. Queries go to database replicas when available, primary otherwise.
+
+- **[gRPC API Reference](../reference/grpc-api.md)** — gRPC services, proto messages, keyset pagination, configuration
+
+### Database
+
+MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all metadata and coordination: per-table daily-partitioned metadata tables, `_task_queue` for lock-free task distribution, and automatic schema evolution for new `dim_fNN` and `agg_fNN` columns via online DDL.
+
+- **[Metadata Schema](metadata-schema.md)** — entry types, lifecycle, denormalization rationale, partitioning
+- **[Metadata Tables](../reference/metadata-tables.md)** — DDL, column reference, index reference
+- **[Schema Evolution](../guides/evolve-schema.md)** — placeholder column names, registry tables, online DDL
+
+---
+
+## Goroutine Model
+
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` settings (retention, planner). Kafka consumption is handled by the `KafkaIngestionUnit`, which runs per-source goroutines independently of the CoordinatorUnit.
+
+Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
+
+### Per-Coordinator Goroutines (up to 5 per table)
+
+Each CoordinatorUnit owns these goroutines. They are created when a coordinator claims a table and stopped when it releases (via `context.Context` cancellation). Three are always-on; two are conditional on feature flags.
+
+| Goroutine | Name | Always On | Reads From | Writes To | Purpose |
+|-----------|------|:---------:|------------|-----------|---------|
+| 1 | **Retention Strategy** | No | Database | Database, Object storage | Three-phase retention cleanup (requires `retention.enabled`) |
+| 2 | **Partition Maintenance** | Yes | Database | Database (DDL) | Lookahead partition creation, old partition merge/drop |
+| 3 | **Alias Refresh** | Yes | Database | In-memory ColumnRegistry | Periodic re-read of alias_column values from `_dim_registry`/`_agg_registry` |
+| 4 | **Column Recycler** | Yes | Database | Database | Hourly scan to reclaim INVALIDATED column slots |
+| 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
+
+### Per-Source Goroutines (KafkaIngestionUnit)
+
+Kafka consumption is decoupled from the CoordinatorUnit. The `KafkaIngestionUnit` manages one consumer goroutine per Kafka source (registered in `_kafka_source`). Sources are assigned to nodes via `_kafka_assignment` and can be filtered by `required_env` for multi-region deployments.
+
+| Goroutine | Name | Reads From | Writes To | Purpose |
+|-----------|------|------------|-----------|---------|
+| 1 per source | **Kafka Consumer** | Kafka | BatchingWriter channel | Continuous metadata ingestion |
+
+### Node-Level Data Path Goroutines
+
+On the ingestion critical path. The Node creates the `BatchingWriter` at startup; `tableWriter` goroutines are lazily spawned per table on first submit.
+
+| Goroutine | Name | Scope | Purpose |
+|-----------|------|-------|---------|
+| — | **BatchingWriter** | 1 `tableWriter` goroutine per active table | Batch-UPSERT metadata from both Kafka and gRPC |
+
+Both gRPC and Kafka ingestion paths submit to the same `BatchingWriter`. Each active table gets a dedicated `tableWriter` goroutine that drains a buffered `chan *FileRecord` and batch-UPSERTs to the database.
+
+### Node-Level HA & Maintenance Goroutines
+
+Periodic background goroutines for coordination and housekeeping. Created once at Node startup.
+
+| Goroutine | Name | Scope | Purpose |
+|-----------|------|-------|---------|
+| — | **Heartbeat / Lease Renewal** | 1 per node | HA liveness signal (mode set by `coordinator.haStrategy`) |
+| — | **Reconciliation** | 1 per node | Claim orphans/unassigned tables, restart stalled coordinators, verify ownership |
+
+### Data Flow Paths
+
+**Ingestion Path (gRPC → Database):**
+
+| Step | Component | Action |
+|------|-----------|--------|
+| 1 | gRPC client | Sends `IngestRequest` (one record per RPC call) with file metadata |
+| 2 | `IngestionHandler` | Converts proto records → domain objects, delegates to `IngestionService` |
+| 3 | `IngestionService` | Validates records and submits to `BatchingWriter` (column resolution at flush time) |
+| 4 | `BatchingWriter` | Routes to per-table `tableWriter` channel, batches records, UPSERT to database |
+| 5 | Response | Ack sent to client after record is accepted onto the channel (async DB commit) |
+
+**Ingestion Path (Kafka → Database):**
+
+| Step | Component | Action |
+|------|-----------|--------|
+| 1 | Kafka | Produces metadata messages |
+| 2 | Kafka Consumer | `Poll()` → transform → `IngestWithCallbackWait()` submits to BatchingWriter with `Flushed chan error` (blocking) |
+| 3 | BatchingWriter | Routes to per-table `tableWriter` channel |
+| 4 | tableWriter goroutine | Drains channel → batch-UPSERT to database → signals `Flushed` channels |
+| 5 | Kafka Consumer | `drainFlushes()` checks completed flushes non-blockingly, queues offsets for commit |
+
+The Kafka consumer runs a single-threaded poll loop: poll messages, submit to BatchingWriter with a per-record `Flushed chan error`, then non-blockingly drain completed flushes to advance Kafka offsets. No goroutine-per-message — all state is single-threaded on the poll loop.
+
+**Task Distribution Path (Database → Workers):**
+
+| Step | Component | Action |
+|------|-----------|--------|
+| 1 | Planner | Query database for `IR_ARCHIVE_CONSOLIDATION_PENDING` files (MVCC read) |
+| 2 | Planner | Filter by InFlightSet → apply policy → create tasks |
+| 3 | Planner | Add files to InFlightSet → INSERT to `_task_queue` table |
+| 4 | Prefetcher | Batch-claims tasks from `_task_queue` with `SELECT ... FOR UPDATE` + `UPDATE` → feeds into buffered channel |
+| 5 | Worker goroutine | Receives task from channel → executes → creates archive in object storage |
+| 6 | Worker goroutine | Writes archive to object storage → marks task `completed` |
+| 7 | Planner | Processes completed tasks → updates metadata to `ARCHIVE_CLOSED`, removes IR paths from InFlightSet, queues IR files for storage deletion |
+
+### Shared Data Structures
+
+| Structure | Type | Capacity | Writers | Readers |
+|-----------|------|----------|---------|---------|
+| BatchingWriter channel | Buffered `chan *FileRecord` per table | Configurable | Kafka Consumer, gRPC service | tableWriter goroutine (Node-level) |
+| _task_queue | Database table | unbounded | Planner | Workers (via Prefetcher) |
+| Prefetcher channel | Buffered `chan *Task` | batchSize × 2 | Prefetcher goroutine | Worker goroutines |
+| InFlightSet | `sync.RWMutex` + `map[string]struct{}` | unbounded | Planner | Planner |
+
+### Concurrency Patterns
+
+| Pattern | Where Used | Benefit |
+|---------|------------|---------|
+| **Single Writer** | tableWriter → database metadata (1 goroutine per table) | No deadlocks, no contention |
+| **MVCC Reads** | Planner ← database | Lock-free reads |
+| **Buffered Channels** | BatchingWriter per-table, Prefetcher task channel | Backpressure, prevents OOM |
+| **`chan error` notification** | `FileRecord.Flushed` | Kafka consumer learns when records are durably committed |
+| **Context cancellation** | All goroutines | Graceful shutdown propagation |
+| **Two-phase shutdown** | WorkerUnit | Stop Prefetcher first (no new claims), drain workers, force-cancel after timeout |
+| **FOR UPDATE + UPDATE** | Worker → _task_queue | Transactional task claiming |
+
+---
+
+## Deployment
+
+In production, coordinators and workers run as separate processes on dedicated machine pools for fault isolation and independent scaling. For development and testing, they colocate in a single Node process with shared resources (database connection pool, object storage client). See [Quickstart](../getting-started/quickstart.md) for setup and [Configuration](../reference/configuration.md) for the full reference.
+
+### Startup Sequence
+
+**Node-level (once):**
+
+1. Load configuration (`node.yaml`)
+2. Create shared resources (database pool, StorageRegistry)
+3. Initialize coordination schema, claim tables
+4. Create BatchingWriter
+5. Create `IngestionService`
+6. Start all coordinator units (each runs per-coordinator startup below)
+7. Start gRPC server (if enabled)
+8. Start Node-level goroutines: Heartbeat/Lease Renewal, Reconciliation (includes stall detection)
+9. Start Health Check Server (if configured)
+
+**Per-coordinator (each claimed table):**
+
+1. Initialize schema and components (ColumnRegistry, PartitionManager, Retention Strategy)
+2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
+3. Start always-on goroutines: Partition Maintenance, Alias Refresh, Column Recycler
+4. Start conditional goroutines: Retention Strategy, Planner (based on `_table_config`)
+5. Ready to process
+
+### Shutdown Sequence
+
+**Node-level:**
+
+1. Cancel Node-level context (stops Heartbeat/Lease Renewal, Reconciliation goroutines)
+2. Stop Health Check Server
+3. Stop gRPC server
+4. Stop all coordinator units (each runs per-coordinator shutdown below)
+5. Signal BatchingWriter to stop, wait for per-table goroutines to drain
+6. Stop worker units (two-phase: stop Prefetcher first, drain workers with 30s timeout, then force-cancel)
+7. Close shared resources (database pool, StorageRegistry)
+
+**Per-coordinator:**
+
+1. Cancel coordinator context (propagates to all owned goroutines)
+2. Stop Planner
+3. Stop Retention Strategy
+4. Stop Partition Maintenance
+5. Stop Alias Refresh
+6. Close unit resources
+
+---
+
+## See Also
+
+- [Project README](../../README.md) — Quick overview, architecture diagrams, quick start
+- [Quickstart](../getting-started/quickstart.md) — Setup and first run
+- [Configuration Reference](../reference/configuration.md) — Config reference
+- [Performance Tuning](../operations/performance-tuning.md) — Benchmarks and tuning
+- [Early Termination](../design/early-termination.md) — Count columns and query short-circuiting
+- [Semantic Extraction](semantic-extraction.md) — How IR→Archive enrichment works
+- [Deploy HA](../guides/deploy-ha.md) — Operational HA setup
