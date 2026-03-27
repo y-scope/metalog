@@ -26,6 +26,7 @@ import (
 	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/node/registry"
 	"github.com/y-scope/metalog/schema"
+	"github.com/y-scope/metalog/storage"
 	"github.com/y-scope/metalog/telemetry"
 )
 
@@ -34,12 +35,15 @@ type Node struct {
 	ctx                  context.Context
 	reconcileReg         reconcileRegistry
 	healthSrv            *health.Server
+	storageReg           *storage.Registry
 	writer               *ingestion.BatchingWriter
 	ingestSvc            *ingestion.Service
 	shared               *Resources
 	coordinators         map[string]*CoordinatorUnit
+	workerUnit           *WorkerUnit
 	externalDB           *sql.DB
 	registry             *registry.Registry
+	archiveCreator       *storage.ArchiveCreator
 	log                  *zap.Logger
 	cfg                  *config.NodeConfig
 	externalReadDB       *sql.DB
@@ -47,6 +51,8 @@ type Node struct {
 	startCoordinatorFn   func(tableName string) error
 	externalTelemetry    *telemetry.Provider
 	nodeID               string
+	archiveBackend       string
+	archiveBucket        string
 	wg                   sync.WaitGroup
 	coordMu              sync.Mutex
 	hasTelemetryProvider bool
@@ -191,6 +197,39 @@ func NewNode(cfg *config.NodeConfig, log *zap.Logger, opts ...NodeOption) (*Node
 func (n *Node) Start() error {
 	ctx := n.ctx
 
+	// Initialize storage backends (only when consolidation or workers need them).
+	if len(n.cfg.Storage.Backends) > 0 {
+		n.storageReg = storage.NewRegistry()
+		for name, backendCfg := range n.cfg.Storage.Backends {
+			typeName := backendCfg.Type
+			if typeName == "" {
+				typeName = "s3"
+			}
+			backend, err := storage.CreateBackend(typeName, backendCfg.ToMap())
+			if err != nil {
+				if name == n.cfg.Storage.DefaultBackend {
+					return fmt.Errorf("create default storage backend %q: %w", name, err)
+				}
+				n.log.Warn("failed to create storage backend, skipping", zap.String("name", name), zap.Error(err))
+				continue
+			}
+			n.storageReg.Register(name, backend)
+		}
+		var compressor *storage.ClpCompressor
+		if n.cfg.Worker.Concurrency > 0 && n.cfg.Worker.ClpBinaryPath != "" {
+			compressor = storage.NewClpCompressor(
+				n.cfg.Worker.ClpBinaryPath,
+				time.Duration(n.cfg.Worker.ClpProcessTimeoutSeconds)*time.Second,
+				n.log,
+			)
+		}
+		n.archiveCreator = storage.NewArchiveCreator(n.storageReg, compressor, n.log)
+		n.archiveBackend = n.cfg.Storage.DefaultBackend
+		if b, ok := n.cfg.Storage.Backends[n.cfg.Storage.DefaultBackend]; ok {
+			n.archiveBucket = b.Bucket
+		}
+	}
+
 	// Coordinator and ingestion subsystems require primary DB
 	if n.cfg.HasCoordinator() {
 		if err := n.registry.EnsureSystemTables(ctx); err != nil {
@@ -248,6 +287,12 @@ func (n *Node) Start() error {
 		}()
 	}
 
+	// Workers require primary DB
+	if n.cfg.Worker.Concurrency > 0 {
+		n.workerUnit = NewWorkerUnit(n.ctx, n.cfg.Worker.Concurrency, n.nodeID, n.shared, n.archiveCreator, n.log)
+		n.workerUnit.Start()
+	}
+
 	// Health server
 	if n.healthSrv != nil {
 		n.wg.Add(1)
@@ -262,6 +307,7 @@ func (n *Node) Start() error {
 
 	n.log.Info("node started",
 		zap.Int("coordinators", len(n.coordinators)),
+		zap.Int("workers", n.cfg.Worker.Concurrency),
 	)
 	return nil
 }
@@ -300,6 +346,11 @@ func (n *Node) Stop() {
 	// Stop batching writer
 	if n.writer != nil {
 		n.writer.Stop()
+	}
+
+	// Stop workers
+	if n.workerUnit != nil {
+		n.workerUnit.Stop()
 	}
 
 	// Stop health server
@@ -367,7 +418,7 @@ func (n *Node) startCoordinator(tableName string) error {
 		zap.String("retentionType", tableCfg.Retention.Type),
 	)
 
-	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.log)
+	cu, err := NewCoordinatorUnit(n.ctx, tableName, tableID, tableCfg, n.shared, n.writer, n.ingestSvc, n.storageReg, n.archiveBackend, n.archiveBucket, n.log)
 	if err != nil {
 		return err
 	}

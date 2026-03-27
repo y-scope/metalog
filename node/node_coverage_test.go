@@ -392,6 +392,7 @@ func TestCoordinatorUnit_Start_LifecycleWithCancel(t *testing.T) {
 		metastore.TableConfig{}, // no consolidation, no retention
 		shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -452,6 +453,7 @@ func TestReconcile_StalledCoordinator_RestartSucceeds(t *testing.T) {
 		parentCtx, "stalled_real", "uuid-stalled",
 		metastore.TableConfig{}, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1476,6 +1478,7 @@ func TestNewCoordinatorUnit_WithConsolidation(t *testing.T) {
 		ctx, "consol_table", "uuid-consol",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1523,6 +1526,7 @@ func TestNewCoordinatorUnit_WithStaleBufferingDisabled(t *testing.T) {
 		ctx, "stale_disabled", "uuid-stale",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1568,6 +1572,7 @@ func TestNewCoordinatorUnit_InvalidPolicyType(t *testing.T) {
 		ctx, "bad_policy", "uuid-bad",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	// Planner/policy creation is not wired into NewCoordinatorUnit on this commit,
@@ -1623,6 +1628,7 @@ func TestCoordinatorUnit_Start_WithRetentionEnabled(t *testing.T) {
 		ctx, "ret_table", "uuid-ret",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1685,6 +1691,7 @@ func TestCoordinatorUnit_Start_WithPlanner(t *testing.T) {
 		ctx, "planner_table", "uuid-planner",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1733,6 +1740,7 @@ func TestNewCoordinatorUnit_InvalidRetentionType(t *testing.T) {
 		ctx, "bad_ret", "uuid-bad-ret",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	// Retention strategy creation is not wired into NewCoordinatorUnit on this commit,
@@ -1919,6 +1927,7 @@ func TestNewCoordinatorUnit_WithTelemetry(t *testing.T) {
 		metastore.TableConfig{},
 		shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1968,6 +1977,7 @@ func TestNewCoordinatorUnit_WithStaleBufferingCustom(t *testing.T) {
 		ctx, "stale_custom", "uuid-stale-custom",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2037,7 +2047,7 @@ func TestNewCoordinatorUnit_ColumnRegistryError(t *testing.T) {
 	shared := &Resources{DB: mockDB, IsMariaDB: true, Log: zap.NewNop()}
 
 	_, err := NewCoordinatorUnit(ctx, "fail_table", "uuid",
-		metastore.TableConfig{}, shared, bw, nil, zap.NewNop())
+		metastore.TableConfig{}, shared, bw, nil, nil, "", "", zap.NewNop())
 	if err == nil {
 		t.Error("expected error when column registry fails")
 	}
