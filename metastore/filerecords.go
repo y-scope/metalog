@@ -35,7 +35,7 @@ func NewFileRecords(db *sql.DB, tableName string, isMariaDB bool, log *zap.Logge
 	if err := dbutil.ValidateSQLIdentifier(tableName); err != nil {
 		return nil, fmt.Errorf("new file records: %w", err)
 	}
-	return &FileRecords{db: db, tableName: tableName, isMariaDB: isMariaDB, log: log}, nil
+	return &FileRecords{db: db, tableName: tableName, isMariaDB: isMariaDB, log: log.With(zap.String("table", tableName))}, nil
 }
 
 // UpsertBatch inserts or updates multiple file records with guarded UPSERT.
