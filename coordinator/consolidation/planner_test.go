@@ -17,12 +17,13 @@ import (
 // --- Mocks ---
 
 type mockFileRecords struct {
-	pendingRecords []*metastore.FileRecord
-	pendingErr     error
-	promoteCount   int64
-	promoteErr     error
-	closedCalls    int
-	closedErr      error
+	pendingRecords  []*metastore.FileRecord
+	pendingErr      error
+	promoteCount    int64
+	promoteErr      error
+	closedCalls     int
+	closedErr       error
+	closedAffected  *int64 // rows affected by MarkArchiveClosed (nil → 1)
 }
 
 func (m *mockFileRecords) FindConsolidationPending(_ context.Context, _, _ []metastore.ColumnMapping) ([]*metastore.FileRecord, error) {
@@ -35,6 +36,9 @@ func (m *mockFileRecords) MarkArchiveClosed(_ context.Context, _ []string, _, _,
 	m.closedCalls++
 	if m.closedErr != nil {
 		return 0, m.closedErr
+	}
+	if m.closedAffected != nil {
+		return *m.closedAffected, nil
 	}
 	return 1, nil
 }
@@ -389,6 +393,63 @@ func TestPlanOnce_MarkArchiveClosedFailureKeepsInFlight(t *testing.T) {
 	// Active task count should NOT be decremented.
 	if p.activeTaskCount != 1 {
 		t.Errorf("activeTaskCount = %d, want 1 (should not decrement on MarkArchiveClosed failure)", p.activeTaskCount)
+	}
+}
+
+func TestPlanOnce_DuplicateTaskCleansUpOrphanedArchive(t *testing.T) {
+	cons := &taskqueue.ConsolidationPayload{
+		IRPaths:        []string{"/data/dup.ir"},
+		IRBackend:      "s3",
+		IRBuckets:      []string{"ir-bucket"},
+		ArchiveBackend: "s3",
+		ArchiveBucket:  "archives",
+		ArchivePath:    "dup.clp.zst",
+	}
+	payload := &taskqueue.TaskPayload{
+		TableName:     "test_table",
+		Consolidation: cons,
+	}
+	input, _ := taskqueue.MarshalPayload(payload)
+
+	result := &taskqueue.TaskResult{
+		ArchivePath:      "dup-archive.clp.zst",
+		ArchiveSizeBytes: 2048,
+	}
+	output, _ := taskqueue.MarshalResult(result)
+
+	// MarkArchiveClosed returns 0 rows affected — files already transitioned
+	// by a prior task (duplicate).
+	zero := int64(0)
+	fr := &mockFileRecords{
+		closedAffected: &zero,
+	}
+	ts := &mockTaskStore{
+		terminalTasks: []taskqueue.TerminalTask{
+			{TaskID: 77, Input: input, Output: output},
+		},
+		activeTaskCount: 1,
+	}
+	p := newTestPlanner(fr, ts)
+	p.activeTaskCount = 1
+	p.inFlight.TryAdd(cons.IRPaths)
+
+	if err := p.planOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// MarkArchiveClosed was called.
+	if fr.closedCalls != 1 {
+		t.Errorf("MarkArchiveClosed called %d times, want 1", fr.closedCalls)
+	}
+
+	// In-flight paths should be released (duplicate is fully handled).
+	if !p.inFlight.TryAdd(cons.IRPaths) {
+		t.Error("in-flight paths should be released after duplicate task cleanup")
+	}
+
+	// Task should be deleted.
+	if len(ts.deletedTaskIDs) != 1 || ts.deletedTaskIDs[0] != 77 {
+		t.Errorf("deleted task IDs = %v, want [77]", ts.deletedTaskIDs)
 	}
 }
 
