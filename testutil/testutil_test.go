@@ -54,6 +54,38 @@ func TestConcatCompressor_Compress_BadOutputDir(t *testing.T) {
 	}
 }
 
+func TestSetupDB(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	if mc.DB == nil || mc.DSN == "" {
+		t.Fatal("DB or DSN is empty")
+	}
+	if err := mc.DB.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func TestTeardown_NilFields(t *testing.T) {
+	mc := &DBContainer{}
+	mc.Teardown(t)
+}
+
+func TestSplitStatements(t *testing.T) {
+	stmts := splitStatements("-- comment\nCREATE TABLE t1 (id INT);\nINSERT INTO t1 VALUES (1);")
+	if len(stmts) < 2 {
+		t.Errorf("expected at least 2 statements, got %d", len(stmts))
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("hello", 3); got != "hel..." {
+		t.Errorf("truncate(hello,3) = %q", got)
+	}
+	if got := truncate("hi", 10); got != "hi" {
+		t.Errorf("truncate(hi,10) = %q", got)
+	}
+}
+
 func TestWaitFor_ImmediateSuccess(t *testing.T) {
 	WaitFor(t, time.Second, "should pass immediately", func() bool {
 		return true
