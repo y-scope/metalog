@@ -140,7 +140,7 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 		db:           db,
 		tableName:    tableName,
 		isMariaDB:    isMariaDB,
-		log:          log,
+		log:          log.With(zap.String("table", tableName)),
 		dimByKey:     make(map[string]*DimRegistryEntry),
 		dimByColumn:  make(map[string]*DimRegistryEntry),
 		aggByKey:     make(map[string]*AggRegistryEntry),
@@ -155,8 +155,7 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 	if err := cr.loadActiveEntries(ctx); err != nil {
 		return nil, err
 	}
-	log.Info("column registry loaded",
-		zap.String("table", tableName),
+	cr.log.Info("column registry loaded",
 		zap.Int("dims", len(cr.dimByKey)),
 		zap.Int("aggs", len(cr.aggByKey)),
 		zap.Int("sketches", len(cr.sketchByKey)),
