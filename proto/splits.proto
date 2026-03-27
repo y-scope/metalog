@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package com.yscope.metalog.query.api.proto.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.yscope.metalog.query.api.proto.grpc";
+option java_outer_classname = "ClpMetadataProto";
+option go_package = "github.com/y-scope/metalog/gen/proto/splitspb";
+
+enum Order {
+    ORDER_UNSPECIFIED = 0;
+    ORDER_ASC  = 1;
+    ORDER_DESC = 2;
+}
+
+message OrderBy {
+    string column = 1;
+    Order  order  = 2;
+}
+
+message CursorValue {
+    oneof value {
+        int64  int_val   = 1;
+        double float_val = 2;
+        string str_val   = 3;
+    }
+}
+
+service SplitQueryService {
+    rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse);
+}
+
+message StreamSplitsRequest {
+    // Fields 1-15 use 1-byte wire tags (core fields); 16+ use 2-byte tags (optional/advanced).
+
+    // --- Core query fields ---
+    string table = 1;
+    repeated string projection = 2;             // columns to return (empty = all)
+    string filter_expression = 3;               // SQL WHERE fragment (server-validated)
+    string sketch_expression = 4;               // SQL WHERE for bloom filter pruning (= and IN only)
+    repeated OrderBy order_by = 5;              // sort specification
+    int32 limit = 6;                            // max results (0 = unlimited)
+
+    reserved 7 to 15;                           // reserved for future core fields
+
+    // --- Pagination & streaming ---
+    KeysetCursor cursor = 16;                   // resume token from a previous stream
+    bool include_cursor = 17;                   // include continuation cursor in responses
+    int64 stream_idle_timeout_ms = 18;          // max idle wait before server closes stream (0 = default 60s)
+    bool allow_unindexed_sort = 19;             // allow sorting on non-indexed columns (full scan)
+}
+
+message StreamSplitsResponse {
+    Split split = 1;
+    int32 sequence = 2;
+    QueryStats stats = 3;
+    bool done = 4;
+    KeysetCursor cursor = 5;
+}
+
+message Split {
+    FileInfo            file       = 1;   // __FILE.* fields
+    map<string, string> dimensions = 2;   // __DIM.* fields
+    repeated AggEntry   aggs       = 3;   // __AGG.* fields
+}
+
+message FileInfo {
+    // Time bounds
+    int64  min_timestamp               = 1;
+    int64  max_timestamp               = 2;
+
+    // Lifecycle
+    string state                       = 3;
+    int64  record_count                = 4;
+    int64  raw_size_bytes              = 5;
+
+    // IR location
+    string clp_ir_path                 = 6;
+    string clp_ir_storage_backend      = 7;
+    string clp_ir_bucket               = 8;
+    int64  clp_ir_size_bytes           = 9;
+
+    // Archive location (empty/zero if not yet consolidated)
+    string clp_archive_path            = 10;
+    string clp_archive_storage_backend = 11;
+    string clp_archive_bucket          = 12;
+    int64  clp_archive_size_bytes      = 13;
+    int64  clp_archive_created_at      = 14;
+
+    // Retention
+    int32  retention_days              = 15;
+    int64  expires_at                  = 16;
+}
+
+message KeysetCursor {
+    repeated CursorValue values = 1;
+    int64 id = 2;
+}
+
+enum AggregationType {
+    AGGREGATION_TYPE_UNSPECIFIED = 0;
+    AGGREGATION_TYPE_EQ  = 1;
+    AGGREGATION_TYPE_GTE = 2;
+    AGGREGATION_TYPE_GT  = 3;
+    AGGREGATION_TYPE_LTE = 4;
+    AGGREGATION_TYPE_LT  = 5;
+    AGGREGATION_TYPE_SUM = 6;
+    AGGREGATION_TYPE_AVG = 7;
+    AGGREGATION_TYPE_MIN = 8;
+    AGGREGATION_TYPE_MAX = 9;
+}
+
+message AggEntry {
+    string key = 1;
+    string value = 2;
+    AggregationType aggregation_type = 3;
+    oneof result {
+        int64  int_value   = 4;
+        double float_value = 5;
+    }
+}
+
+message QueryStats {
+    int64 splits_scanned = 1;
+    int64 splits_matched = 2;
+    bool  truncated      = 3;
+}
