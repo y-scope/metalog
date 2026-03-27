@@ -18,7 +18,7 @@ func (c *ConcatCompressor) Compress(_ context.Context, inputDir, outputDir strin
 	if err != nil {
 		return err
 	}
-	defer func() { _ = out.Close() }()
+	defer out.Close() //nolint:errcheck
 
 	entries, err := os.ReadDir(inputDir)
 	if err != nil {
@@ -28,19 +28,15 @@ func (c *ConcatCompressor) Compress(_ context.Context, inputDir, outputDir strin
 		if entry.IsDir() {
 			continue
 		}
-		if err := copyFile(out, filepath.Join(inputDir, entry.Name())); err != nil {
+		f, err := os.Open(filepath.Join(inputDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, f)
+		_ = f.Close()
+		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func copyFile(dst io.Writer, path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	_, err = io.Copy(dst, f)
-	return err
 }
