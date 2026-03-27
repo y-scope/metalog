@@ -193,7 +193,10 @@ func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *met
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	tw := bw.getOrCreateWriter(tableName)
+	tw, err := bw.getOrCreateWriter(tableName)
+	if err != nil {
+		return err
+	}
 	select {
 	case tw.ch <- rec:
 		bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tw.tableAttr))
@@ -208,7 +211,10 @@ func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *met
 // until the channel has space or the context is cancelled. Used by the
 // Kafka consumer to propagate backpressure without dropping messages.
 func (bw *BatchingWriter) SubmitWait(ctx context.Context, tableName string, rec *metastore.FileRecord) error {
-	tw := bw.getOrCreateWriter(tableName)
+	tw, err := bw.getOrCreateWriter(tableName)
+	if err != nil {
+		return err
+	}
 	select {
 	case tw.ch <- rec:
 		bw.mRecordsSubmitted.Add(ctx, 1, metric.WithAttributes(tw.tableAttr))
@@ -225,20 +231,27 @@ func (bw *BatchingWriter) Stop() {
 	bw.wg.Wait()
 }
 
-func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
+func (bw *BatchingWriter) getOrCreateWriter(tableName string) (*tableWriter, error) {
 	bw.mu.RLock()
 	tw, ok := bw.writers[tableName]
 	bw.mu.RUnlock()
 	if ok {
-		return tw
+		return tw, nil
 	}
 
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
 
+	// Reject new writers after Stop has been called. Without this check,
+	// a racing Submit could call wg.Add(1) after wg.Wait() has returned
+	// in Stop(), violating WaitGroup semantics.
+	if bw.ctx.Err() != nil {
+		return nil, bw.ctx.Err()
+	}
+
 	// Double-check
 	if tw, ok = bw.writers[tableName]; ok {
-		return tw
+		return tw, nil
 	}
 
 	flusher := bw.testFlusher
@@ -266,7 +279,7 @@ func (bw *BatchingWriter) getOrCreateWriter(tableName string) *tableWriter {
 		tw.run(bw.ctx)
 	}()
 
-	return tw
+	return tw, nil
 }
 
 func (tw *tableWriter) run(ctx context.Context) {
