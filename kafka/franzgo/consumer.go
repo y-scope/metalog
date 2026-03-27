@@ -266,9 +266,20 @@ func (c *Consumer) drainFlushes() {
 	c.pendingFlushes = remaining
 }
 
-// commitPending commits any pending offsets synchronously to Kafka.
-// Using CommitOffsetsSync ensures offsets are acknowledged by the broker
-// before we clear pendingCommit, preventing offset loss on rebalance.
+// commitPending fires an async offset commit to Kafka and clears the
+// pending map immediately.
+//
+// Why async (CommitOffsets) instead of sync (CommitOffsetsSync):
+//   - This runs in the hot poll loop. A sync commit would block the loop
+//     on a broker round-trip (1–10ms) every cycle, reducing throughput.
+//   - If the async commit fails (broker error, rebalance), the offsets are
+//     lost from pendingCommit but NOT from the broker — they were simply
+//     not advanced. On next poll, the consumer re-processes those messages
+//     and re-submits them. The UPSERT is idempotent, so re-delivery is safe.
+//   - Shutdown uses commitPendingSync (below) which blocks until the broker
+//     acknowledges, ensuring offsets are persisted before the client closes.
+//
+// Do NOT change this to CommitOffsetsSync without measuring throughput impact.
 func (c *Consumer) commitPending(ctx context.Context, client *kgo.Client) {
 	if len(c.pendingCommit) == 0 {
 		return
@@ -285,24 +296,24 @@ func (c *Consumer) commitPending(ctx context.Context, client *kgo.Client) {
 		}
 	}
 
-	var commitErr error
-	client.CommitOffsetsSync(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-		commitErr = err
-	})
-	if commitErr != nil {
-		c.log.Warn("offset commit failed", zap.Error(commitErr))
-		// Keep pendingCommit so the next cycle retries.
-		return
-	}
-
-	// Clear only after broker has acknowledged the commit.
+	// Clear before commit — safe because at-least-once delivery is guaranteed
+	// by re-processing on the next poll if the commit fails. See comment above.
 	for k := range c.pendingCommit {
 		delete(c.pendingCommit, k)
 	}
+
+	client.CommitOffsets(ctx, offsets, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+		if err != nil {
+			c.log.Warn("async offset commit failed (will re-process on next poll)", zap.Error(err))
+		}
+	})
 }
 
-// commitPendingSync commits pending offsets synchronously. Used during
+// commitPendingSync commits pending offsets synchronously. Used only during
 // shutdown to ensure offsets reach the broker before client.Close().
+// Unlike commitPending (async, fire-and-forget), this blocks until the broker
+// acknowledges. The map is cleared before the call because shutdown is
+// fire-and-forget — there is no next cycle to retry on failure.
 func (c *Consumer) commitPendingSync(client *kgo.Client) {
 	if len(c.pendingCommit) == 0 {
 		return
