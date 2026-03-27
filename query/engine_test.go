@@ -23,7 +23,7 @@ func TestBuildKeysetWhere_SingleASC(t *testing.T) {
 	)
 	sql, args, err := w.ToSql()
 	assert.NoError(t, err)
-	assert.Equal(t, "((`max_timestamp` > ?) OR (`max_timestamp` = ? AND `id` > ?))", sql)
+	assert.Equal(t, "((`max_timestamp` > ?) OR (`max_timestamp` IS NULL) OR (`max_timestamp` = ? AND `id` > ?))", sql)
 	assert.Equal(t, []any{int64(1000), int64(1000), int64(42)}, args)
 }
 
@@ -53,10 +53,10 @@ func TestBuildKeysetWhere_MixedDirections(t *testing.T) {
 	assert.NoError(t, err)
 	// max_timestamp DESC (<), min_timestamp ASC (>), id ASC (>)
 	assert.Equal(t,
-		"((`max_timestamp` < ?) OR (`max_timestamp` = ? AND `min_timestamp` > ?) OR (`max_timestamp` = ? AND `min_timestamp` = ? AND `id` > ?))",
+		"((`max_timestamp` < ?) OR (`max_timestamp` = ? AND `min_timestamp` > ?) OR (`max_timestamp` = ? AND `min_timestamp` IS NULL) OR (`max_timestamp` = ? AND `min_timestamp` = ? AND `id` > ?))",
 		sql,
 	)
-	assert.Equal(t, []any{int64(5000), int64(5000), int64(1000), int64(5000), int64(1000), int64(7)}, args)
+	assert.Equal(t, []any{int64(5000), int64(5000), int64(1000), int64(5000), int64(5000), int64(1000), int64(7)}, args)
 }
 
 func TestBuildKeysetWhere_TwoColumnsAllDESC(t *testing.T) {
@@ -438,13 +438,13 @@ func TestPrepareQuery_WildcardSkipsSortInjection(t *testing.T) {
 	assert.Equal(t, []string{"*"}, pq.cols)
 }
 
-// --- executePage NULL rejection test ---
+// --- executePage NULL sort column test ---
 
-func TestExecutePage_NullSortColumnReturnsError(t *testing.T) {
+func TestExecutePage_NullSortColumnAccepted(t *testing.T) {
 	engine, mock, db := newTestEngine(t)
 	defer db.Close()
 
-	// Return a row where min_timestamp is NULL.
+	// Return a row where min_timestamp is NULL (dim columns are nullable).
 	rows := sqlmock.NewRows([]string{"id", "min_timestamp"}).
 		AddRow(int64(1), nil)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
@@ -456,8 +456,34 @@ func TestExecutePage_NullSortColumnReturnsError(t *testing.T) {
 		orderClauses: []string{"`min_timestamp` ASC", "`id` ASC"},
 	}
 
-	_, err := engine.executePage(context.Background(), pq, 10, nil, 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "NULL value")
-	assert.Contains(t, err.Error(), "min_timestamp")
+	results, err := engine.executePage(context.Background(), pq, 10, nil, 0)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Nil(t, results[0].CursorValues[0], "NULL cursor value should be preserved")
+}
+
+func TestBuildKeysetWhere_NullCursorASC(t *testing.T) {
+	// ASC with NULL cursor: NULL is last, only id tiebreaker produces "after" rows.
+	w := buildKeysetWhere(
+		[]OrderBySpec{{Column: "dim_f01", Desc: false}},
+		[]any{nil},
+		42,
+	)
+	sql, args, err := w.ToSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "((`dim_f01` IS NULL AND `id` > ?))", sql)
+	assert.Equal(t, []any{int64(42)}, args)
+}
+
+func TestBuildKeysetWhere_NullCursorDESC(t *testing.T) {
+	// DESC with NULL cursor: NULL is first, so "after" means IS NOT NULL.
+	w := buildKeysetWhere(
+		[]OrderBySpec{{Column: "dim_f01", Desc: true}},
+		[]any{nil},
+		42,
+	)
+	sql, args, err := w.ToSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "((`dim_f01` IS NOT NULL) OR (`dim_f01` IS NULL AND `id` > ?))", sql)
+	assert.Equal(t, []any{int64(42)}, args)
 }

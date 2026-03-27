@@ -495,17 +495,11 @@ func (e *SplitQueryEngine) executePage(
 			}
 		}
 
-		// Extract cursor values from sort columns. Reject NULL values —
-		// SQL comparisons with NULL (col > NULL) evaluate to UNKNOWN, which
-		// would silently truncate pagination by returning zero subsequent rows.
+		// Extract cursor values from sort columns. NULL is allowed —
+		// buildKeysetWhere handles NULL with IS NULL / IS NOT NULL predicates.
 		cv := make([]any, len(pq.orderBy))
 		for i, ob := range pq.orderBy {
-			v := row.Values[ob.Column]
-			if v == nil {
-				return nil, fmt.Errorf("keyset cursor: sort column %q has NULL value in row id=%d; "+
-					"NULL sort columns are not supported for keyset pagination", ob.Column, row.ID)
-			}
-			cv[i] = v
+			cv[i] = row.Values[ob.Column] // nil for NULL columns
 		}
 
 		results = append(results, &SplitWithCursor{
@@ -563,25 +557,80 @@ func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64)
 	vals[n] = cursorID
 	descs[n] = false // id is always ASC
 
-	// Build OR branches: one for each position 0..n.
+	// Build OR branches for keyset pagination with NULL support.
+	//
+	// MySQL/MariaDB NULL ordering:
+	//   ASC  → NULLs sort LAST  (after all non-NULL values)
+	//   DESC → NULLs sort FIRST (before all non-NULL values)
+	//
+	// For each position i (0..n), we generate a branch that says
+	// "equal on columns 0..i-1, strictly after on column i".
+	// NULL requires special handling:
+	//
+	//   Cursor=5, ASC:  col > 5 OR col IS NULL  (NULLs come after 5)
+	//   Cursor=5, DESC: col < 5                  (NULLs already came first)
+	//   Cursor=NULL, ASC:  (skip — NULL is last, nothing after)
+	//   Cursor=NULL, DESC: col IS NOT NULL        (everything non-NULL comes after)
+
+	// addEqPrefix appends equality predicates for columns 0..end-1 to parts
+	// and corresponding args to args. NULL values use IS NULL (no arg).
+	addEqPrefix := func(end int, parts []string, args []any) ([]string, []any) {
+		for j := 0; j < end; j++ {
+			if vals[j] == nil {
+				parts = append(parts, cols[j]+" IS NULL")
+			} else {
+				parts = append(parts, cols[j]+" = ?")
+				args = append(args, vals[j])
+			}
+		}
+		return parts, args
+	}
+
 	var branches []string
 	var allArgs []any
+
 	for i := 0; i <= n; i++ {
 		var parts []string
-		// Equality prefix: f0=v0 AND f1=v1 AND ... AND f_{i-1}=v_{i-1}
-		for j := 0; j < i; j++ {
-			parts = append(parts, cols[j]+" = ?")
-			allArgs = append(allArgs, vals[j])
+		var branchArgs []any
+		parts, branchArgs = addEqPrefix(i, parts, branchArgs)
+
+		if vals[i] == nil {
+			if descs[i] {
+				// DESC, cursor=NULL: NULL is first, so "after" means IS NOT NULL.
+				parts = append(parts, cols[i]+" IS NOT NULL")
+				branches = append(branches, "("+strings.Join(parts, " AND ")+")")
+				allArgs = append(allArgs, branchArgs...)
+			}
+			// ASC, cursor=NULL: NULL is last — nothing comes after. Skip.
+			continue
 		}
-		// Strict comparison for field i
+
+		// Non-NULL cursor value: strict comparison.
 		op := ">"
 		if descs[i] {
 			op = "<"
 		}
 		parts = append(parts, cols[i]+" "+op+" ?")
-		allArgs = append(allArgs, vals[i])
-
+		branchArgs = append(branchArgs, vals[i])
 		branches = append(branches, "("+strings.Join(parts, " AND ")+")")
+		allArgs = append(allArgs, branchArgs...)
+
+		// ASC with non-NULL cursor: NULLs sort last, so rows with NULL
+		// in this column come "after" the cursor. Add an IS NULL branch.
+		// DESC: NULLs sort first (already visited), so no NULL branch needed.
+		// id tiebreaker (i==n) is NOT NULL by definition, skip.
+		if !descs[i] && i < n {
+			var nullParts []string
+			var nullArgs []any
+			nullParts, nullArgs = addEqPrefix(i, nullParts, nullArgs)
+			nullParts = append(nullParts, cols[i]+" IS NULL")
+			branches = append(branches, "("+strings.Join(nullParts, " AND ")+")")
+			allArgs = append(allArgs, nullArgs...)
+		}
+	}
+
+	if len(branches) == 0 {
+		return sq.Expr("1=0") // no rows can follow — cursor is at the end
 	}
 
 	return sq.Expr("("+strings.Join(branches, " OR ")+")", allArgs...)
