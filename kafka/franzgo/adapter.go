@@ -32,7 +32,10 @@ func NewDefaultAdapterFactory(meter metric.Meter) kafka.AdapterFactory {
 		if err != nil {
 			return nil, err
 		}
-		groupID := kafka.KafkaGroupPrefix + tableName + "-" + tableID
+		groupID := tableCfg.Kafka.GroupID
+		if groupID == "" {
+			groupID = kafka.KafkaGroupPrefix + tableName + "-" + tableID
+		}
 		consumer := NewConsumer(
 			tableCfg.Kafka.BootstrapServers, groupID, tableCfg.Kafka.Topic, tableName,
 			transformer,

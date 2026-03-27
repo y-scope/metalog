@@ -2,8 +2,9 @@ package kafka
 
 import "context"
 
-// kafkaGroupPrefix is the prefix for Kafka consumer group IDs.
-// Matches the Java implementation (clp-coordinator-{table_name}-{table_id}).
+// KafkaGroupPrefix is the default prefix for Kafka consumer group IDs.
+// The full default group ID is KafkaGroupPrefix + tableName + "-" + tableID,
+// matching the Java implementation. Override per-table via KafkaConfig.GroupID.
 const KafkaGroupPrefix = "clp-coordinator-"
 
 // MessageSource consumes messages from a Kafka topic and submits them

@@ -11,6 +11,7 @@ type KafkaConfig struct {
 	Topic             string `json:"topic"`
 	BootstrapServers  string `json:"bootstrap_servers"`
 	RecordTransformer string `json:"record_transformer,omitempty"`
+	GroupID           string `json:"group_id,omitempty"` // override consumer group ID (default: clp-coordinator-{table}-{id})
 }
 
 // ConsolidationPolicyConfig describes a single consolidation policy.
