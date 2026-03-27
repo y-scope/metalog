@@ -237,6 +237,13 @@ func (p *Planner) planOnce(ctx context.Context) error {
 	}
 
 	// 3. Backpressure check — skip creating new tasks if queue is deep.
+	// Re-seed from DB each cycle to prevent drift from failed DeleteTerminalTask
+	// calls (which skip the in-memory decrement). One SELECT COUNT(*) per cycle.
+	if count, err := p.tasks.CountActiveTasks(ctx, p.tableName); err != nil {
+		p.log.Warn("count active tasks failed, using in-memory estimate", zap.Error(err))
+	} else {
+		p.activeTaskCount = count
+	}
 	if p.activeTaskCount >= maxBackpressureDepth {
 		p.log.Info("backpressure: skipping task creation",
 			zap.Int("activeTaskCount", p.activeTaskCount),

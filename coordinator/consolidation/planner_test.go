@@ -40,21 +40,22 @@ func (m *mockFileRecords) MarkArchiveClosed(_ context.Context, _ []string, _, _,
 }
 
 type mockTaskStore struct {
-	createdTasks   [][]byte
-	createErr      error
-	nextTaskID     int64
-	terminalTasks  []taskqueue.TerminalTask
-	terminalErr    error
-	deletedTaskIDs []int64
-	staleTasks     []*taskqueue.Task
-	staleErr       error
-	reclaimErr     error
-	cleanupCount   int64
-	cleanupErr     error
+	createdTasks    [][]byte
+	createErr       error
+	nextTaskID      int64
+	terminalTasks   []taskqueue.TerminalTask
+	terminalErr     error
+	deletedTaskIDs  []int64
+	staleTasks      []*taskqueue.Task
+	staleErr        error
+	reclaimErr      error
+	cleanupCount    int64
+	cleanupErr      error
+	activeTaskCount int
 }
 
 func (m *mockTaskStore) CountActiveTasks(_ context.Context, _ string) (int, error) {
-	return 0, nil
+	return m.activeTaskCount, nil
 }
 func (m *mockTaskStore) CreateTasks(_ context.Context, _ string, _ uint8, inputs [][]byte) (int64, error) {
 	m.createdTasks = append(m.createdTasks, inputs...)
@@ -365,6 +366,7 @@ func TestPlanOnce_MarkArchiveClosedFailureKeepsInFlight(t *testing.T) {
 		terminalTasks: []taskqueue.TerminalTask{
 			{TaskID: 55, Input: input, Output: output},
 		},
+		activeTaskCount: 1,
 	}
 	p := newTestPlanner(fr, ts)
 	p.activeTaskCount = 1
