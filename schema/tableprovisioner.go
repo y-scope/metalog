@@ -1,0 +1,171 @@
+package schema
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	sq "github.com/Masterminds/squirrel"
+	"go.uber.org/zap"
+
+	"github.com/y-scope/metalog/db"
+	"github.com/y-scope/metalog/metastore"
+)
+
+// sketchSlotCount is the number of sketch slots pre-allocated per table.
+// Must match the SET members in the template DDL (schema.sql). MySQL SET
+// supports at most 64 members; BaseSchemaValidator checks this at startup.
+const sketchSlotCount = 64
+
+// EnsureTable idempotently provisions a metadata table and all registry rows.
+// Steps: create physical table, insert registry rows, pre-populate sketch slots,
+// create lookahead partitions.
+// compressionOverride can be "lz4", "none", or "" (auto-detect from isMariaDB).
+//
+// SQL safety: tableName is validated via [db.ValidateSQLIdentifier] before any interpolation.
+// Compression values come from a closed switch statement, not user input.
+func EnsureTable(ctx context.Context, database *sql.DB, tableName string, isMariaDB bool, compressionOverride string, log *zap.Logger) error {
+	if err := db.ValidateSQLIdentifier(tableName); err != nil {
+		return err
+	}
+
+	if err := createPhysicalTable(ctx, database, tableName, isMariaDB, compressionOverride); err != nil {
+		return err
+	}
+	if err := insertRegistryRows(ctx, database, tableName); err != nil {
+		return err
+	}
+	if err := prepopulateSketchSlots(ctx, database, tableName); err != nil {
+		return err
+	}
+	if _, err := createLookaheadPartitions(ctx, database, tableName, defaultProvisionLookaheadDays, log); err != nil {
+		return err
+	}
+
+	log.Info("table provisioned", zap.String("table", tableName))
+	return nil
+}
+
+func createPhysicalTable(ctx context.Context, database *sql.DB, tableName string, isMariaDB bool, compressionOverride string) error {
+	ddl, err := loadTemplateDDL()
+	if err != nil {
+		return err
+	}
+
+	// Determine compression clause
+	compression := compressionOverride
+	if compression == "" {
+		if isMariaDB {
+			compression = "page_compressed"
+		} else {
+			compression = "lz4"
+		}
+	}
+
+	var compressionClause string
+	switch compression {
+	case "none":
+		compressionClause = ""
+	case "page_compressed":
+		compressionClause = "\n  PAGE_COMPRESSED=1"
+	case "lz4":
+		compressionClause = "\n  COMPRESSION='lz4'"
+	case "zlib":
+		compressionClause = "\n  COMPRESSION='zlib'"
+	case "zstd":
+		compressionClause = "\n  COMPRESSION='zstd'"
+	default:
+		return fmt.Errorf("unsupported compression %q: must be none, page_compressed, lz4, zlib, or zstd", compression)
+	}
+
+	if compressionClause != "" {
+		ddl = strings.Replace(ddl, "COLLATE=utf8mb4_bin", "COLLATE=utf8mb4_bin"+compressionClause, 1)
+	}
+
+	// Substitute table name
+	ddl = strings.ReplaceAll(ddl, "_clp_template", tableName)
+
+	_, err = database.ExecContext(ctx, ddl)
+	if err != nil && !db.IsTableExists(err) {
+		return fmt.Errorf("create table %s: %w", tableName, err)
+	}
+	return nil
+}
+
+func loadTemplateDDL() (string, error) {
+	content := SchemaSQL
+	// Strip SQL comments
+	lines := strings.Split(content, "\n")
+	var filtered []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "--") {
+			filtered = append(filtered, line)
+		}
+	}
+	content = strings.Join(filtered, "\n")
+
+	// Find the CREATE TABLE IF NOT EXISTS _clp_template statement
+	stmts := strings.Split(content, ";")
+	for _, stmt := range stmts {
+		trimmed := strings.TrimSpace(stmt)
+		if strings.Contains(trimmed, "CREATE TABLE IF NOT EXISTS _clp_template") {
+			return trimmed, nil
+		}
+	}
+
+	return "", fmt.Errorf("CREATE TABLE IF NOT EXISTS _clp_template not found in schema.sql")
+}
+
+func insertRegistryRows(ctx context.Context, database *sql.DB, tableName string) error {
+	// _table: identity row
+	q1, a1, _ := sq.Insert(metastore.TableRegistry).Options("IGNORE").
+		Columns("table_name", "display_name").
+		Values(tableName, tableName).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q1, a1...); err != nil {
+		return fmt.Errorf("insert _table: %w", err)
+	}
+
+	// _table_config — NULL config blob means all defaults apply.
+	q2, a2, _ := sq.Insert(metastore.TableRegistryConfig).Options("IGNORE").
+		Columns("table_name").
+		Values(tableName).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q2, a2...); err != nil {
+		return fmt.Errorf("insert _table_config: %w", err)
+	}
+
+	// _table_assignment: node_id NULL — to be claimed via leader election
+	q3, a3, _ := sq.Insert(metastore.TableRegistryAssignment).Options("IGNORE").
+		Columns("table_name").
+		Values(tableName).
+		ToSql()
+	if _, err := database.ExecContext(ctx, q3, a3...); err != nil {
+		return fmt.Errorf("insert _table_assignment: %w", err)
+	}
+
+	return nil
+}
+
+// prepopulateSketchSlots inserts all sketch slot rows into _sketch_registry
+// with state=AVAILABLE. Slots are pre-allocated because the sketches column is
+// a fixed SET('s01',...,'s64') — adding a new SET member requires ALTER TABLE
+// MODIFY which rebuilds the entire table. Pre-allocating all 64 slots (the
+// MySQL SET hard limit) avoids that cost entirely.
+func prepopulateSketchSlots(ctx context.Context, database *sql.DB, tableName string) error {
+	now := time.Now().UnixNano()
+	for i := 1; i <= sketchSlotCount; i++ {
+		member := fmt.Sprintf("s%02d", i)
+		query, args, _ := sq.Insert(metastore.SketchRegistryTable).Options("IGNORE").
+			Columns("table_name", "sketch_name", "state", "created_at").
+			Values(tableName, member, "AVAILABLE", now).
+			ToSql()
+		if _, err := database.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("insert sketch slot: %w", err)
+		}
+	}
+	return nil
+}
