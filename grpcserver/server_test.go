@@ -1,0 +1,154 @@
+package grpcserver
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/y-scope/metalog/coordinator/ingestion"
+	ingpb "github.com/y-scope/metalog/gen/proto/ingestionpb"
+)
+
+// --- Server lifecycle tests ---
+
+func TestNewServer(t *testing.T) {
+	s := NewServer(0, zap.NewNop())
+	if s == nil {
+		t.Fatal("expected non-nil server")
+	}
+	if s.GRPCServer() == nil {
+		t.Fatal("expected non-nil gRPC server")
+	}
+	s.Stop()
+}
+
+func TestServer_StopWithoutStart(t *testing.T) {
+	s := NewServer(0, zap.NewNop())
+	// Stop without Start should not panic
+	s.Stop()
+}
+
+func TestServer_StartAndStop(t *testing.T) {
+	s := NewServer(0, zap.NewNop())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Start()
+	}()
+
+	// Wait briefly for the server to start listening.
+	time.Sleep(100 * time.Millisecond)
+
+	s.Stop()
+
+	err := <-errCh
+	// grpc.Server.Serve returns nil after GracefulStop.
+	if err != nil {
+		t.Fatalf("Start() returned error after Stop: %v", err)
+	}
+}
+
+func TestServer_StartListenError(t *testing.T) {
+	// Use a very large invalid port to cause listen failure.
+	s := NewServer(99999, zap.NewNop())
+	err := s.Start()
+	if err == nil {
+		t.Fatal("expected error from invalid port")
+		s.Stop()
+	}
+}
+
+// --- IngestionHandler tests ---
+
+func TestIngestionHandler_Ingest_NilRecord(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bw := ingestion.NewBatchingWriter(ctx, nil, false, zap.NewNop(),
+		ingestion.WithBatchSize(100),
+		ingestion.WithFlushInterval(10*time.Second),
+	)
+	defer bw.Stop()
+
+	svc := ingestion.NewService(bw, false, zap.NewNop())
+	h := NewIngestionHandler(svc, zap.NewNop())
+
+	req := &ingpb.IngestRequest{
+		TableName: "test_table",
+		Record:    nil,
+	}
+	_, err := h.Ingest(ctx, req)
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+func TestIngestionHandler_Ingest_MissingFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bw := ingestion.NewBatchingWriter(ctx, nil, false, zap.NewNop(),
+		ingestion.WithBatchSize(100),
+		ingestion.WithFlushInterval(10*time.Second),
+	)
+	defer bw.Stop()
+
+	svc := ingestion.NewService(bw, false, zap.NewNop())
+	h := NewIngestionHandler(svc, zap.NewNop())
+
+	req := &ingpb.IngestRequest{
+		TableName: "test_table",
+		Record:    &ingpb.MetadataRecord{},
+	}
+	_, err := h.Ingest(ctx, req)
+	assertGRPCCode(t, err, codes.InvalidArgument)
+}
+
+// --- ListTables error ---
+
+func TestMapAdminError_UnknownError(t *testing.T) {
+	err := mapAdminError(context.DeadlineExceeded)
+	st := status.Convert(err)
+	if st.Code() != codes.Internal {
+		t.Errorf("code = %v, want Internal", st.Code())
+	}
+}
+
+func TestIngestionHandler_Ingest_Success(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	db, _, _ := sqlmock.New()
+	defer db.Close() //nolint:errcheck
+
+	bw := ingestion.NewBatchingWriter(ctx, db, false, zap.NewNop(),
+		ingestion.WithBatchSize(10000),
+		ingestion.WithFlushInterval(time.Hour),
+	)
+
+	svc := ingestion.NewService(bw, false, zap.NewNop())
+	h := NewIngestionHandler(svc, zap.NewNop())
+
+	req := &ingpb.IngestRequest{
+		TableName: "test_table",
+		Record: &ingpb.MetadataRecord{
+			File: &ingpb.FileFields{
+				State:        "IR_BUFFERING",
+				MinTimestamp: 1000,
+				Ir:           &ingpb.IrFileInfo{ClpIrPath: "/test.ir"},
+			},
+		},
+	}
+	resp, err := h.Ingest(ctx, req)
+	if err != nil {
+		t.Fatalf("Ingest error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Error("expected Accepted=true")
+	}
+
+	cancel()
+	bw.Stop()
+}
