@@ -3,10 +3,12 @@ package registry
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
@@ -38,8 +40,11 @@ func (r *Registry) EnsureSystemTables(ctx context.Context) error {
 			continue
 		}
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
-			if strings.Contains(stmt, "ALTER TABLE") {
-				r.log.Debug("skipping migration statement", zap.Error(err))
+			// ALTER TABLE migrations are idempotent — tolerate "already exists"
+			// and "can't DROP" errors but propagate real failures (permissions,
+			// syntax, type mismatches).
+			if strings.Contains(stmt, "ALTER TABLE") && isIdempotentDDLError(err) {
+				r.log.Debug("skipping already-applied migration", zap.Error(err))
 				continue
 			}
 			return fmt.Errorf("ensure system tables: %w", err)
@@ -428,4 +433,24 @@ func (r *Registry) scanTableNames(ctx context.Context, query string, args ...any
 		names = append(names, name)
 	}
 	return names, rows.Err()
+}
+
+// isIdempotentDDLError returns true for MySQL/MariaDB errors that indicate
+// a DDL migration was already applied (column/index already exists, or
+// column/index to drop doesn't exist).
+func isIdempotentDDLError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	switch mysqlErr.Number {
+	case 1060: // ER_DUP_FIELDNAME — duplicate column name
+		return true
+	case 1061: // ER_DUP_KEYNAME — duplicate key name
+		return true
+	case 1091: // ER_CANT_DROP_FIELD_OR_KEY — can't DROP; check that column/key exists
+		return true
+	default:
+		return false
+	}
 }
