@@ -18,7 +18,7 @@ func (c *ConcatCompressor) Compress(_ context.Context, inputDir, outputDir strin
 	if err != nil {
 		return err
 	}
-	defer func() { _ = out.Close() }()
+	defer out.Close() //nolint:errcheck
 
 	entries, err := os.ReadDir(inputDir)
 	if err != nil {
@@ -32,12 +32,10 @@ func (c *ConcatCompressor) Compress(_ context.Context, inputDir, outputDir strin
 		if err != nil {
 			return err
 		}
-		_, copyErr := io.Copy(out, f)
-		if closeErr := f.Close(); closeErr != nil && copyErr == nil {
-			copyErr = closeErr
-		}
-		if copyErr != nil {
-			return copyErr
+		_, err = io.Copy(out, f)
+		_ = f.Close()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
