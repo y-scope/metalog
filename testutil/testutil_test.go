@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
+	"github.com/y-scope/metalog/schema"
 )
 
 func TestConcatCompressor_Compress(t *testing.T) {
@@ -64,6 +66,18 @@ func TestSetupDB(t *testing.T) {
 	}
 	if err := mc.DB.Ping(); err != nil {
 		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func TestLoadSchemaAndCreateTable(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	mc.LoadSchema(t)
+	mc.CreateTestTable(t, "test_logs")
+
+	var count int
+	if err := mc.DB.QueryRow("SELECT COUNT(*) FROM test_logs").Scan(&count); err != nil {
+		t.Fatalf("query test_logs: %v", err)
 	}
 }
 
@@ -218,4 +232,44 @@ func TestSetupDB(t *testing.T) {
 func TestTeardown_NilFields(t *testing.T) {
 	mc := &DBContainer{}
 	mc.Teardown(t)
+}
+
+func TestDBContainer_LoadSchema(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	// LoadSchema splits schema.SchemaSQL and executes each non-empty statement.
+	// We can't predict the exact count, so use MatchExpectationsInOrder(false)
+	// and allow any number of exec calls.
+	mock.MatchExpectationsInOrder(false)
+
+	// Get the number of expected statements
+	stmts := splitStatements(schema.SchemaSQL)
+	execCount := 0
+	for _, s := range stmts {
+		trimmed := ""
+		for _, c := range s {
+			if c != '\n' && c != ' ' && c != '\t' && c != '\r' {
+				trimmed += string(c)
+			}
+		}
+		if trimmed != "" {
+			execCount++
+			mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	mc := &DBContainer{DB: db}
+	mc.LoadSchema(t)
+}
+
+func TestLoadSchemaAndCreateTable(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	mc.LoadSchema(t)
+	mc.CreateTestTable(t, "test_logs")
+	var count int
+	if err := mc.DB.QueryRow("SELECT COUNT(*) FROM test_logs").Scan(&count); err != nil {
+		t.Fatalf("query: %v", err)
+	}
 }
