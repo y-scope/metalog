@@ -30,8 +30,7 @@ type RetentionConfig struct {
 // _table_config.config MEDIUMTEXT column. A NULL value means all defaults.
 //
 // Each coordinator subsystem owns its enabled flag and config under a single
-// key: consolidation, retention. Kafka ingestion is configured separately
-// via _kafka_source (see docs/design/kafka-source-assignment.md).
+// key: consolidation, retention.
 //
 // JSON is used instead of LZ4+msgpack because this table has very few rows
 // (one per managed table) and the payloads are tiny (~100 bytes). Plain JSON
