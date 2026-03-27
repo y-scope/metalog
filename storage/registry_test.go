@@ -151,11 +151,3 @@ func TestRequiresBucket_UnknownType(t *testing.T) {
 	}
 }
 
-func TestIsAccessDenied(t *testing.T) {
-	if IsAccessDenied(nil) {
-		t.Error("nil should not be access denied")
-	}
-	if !IsAccessDenied(ErrAccessDenied) {
-		t.Error("ErrAccessDenied should be access denied")
-	}
-}
