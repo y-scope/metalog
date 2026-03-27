@@ -255,6 +255,9 @@ func (fr *FileRecords) GetCurrentStates(ctx context.Context, irPaths []string) (
 }
 
 // MarkArchiveClosed transitions files to ARCHIVE_CLOSED after consolidation completes.
+// Returns the number of rows actually updated. A return of (0, nil) means all files
+// were already transitioned (e.g., by a duplicate task) — the caller should clean up
+// the archive to prevent orphaned storage objects.
 func (fr *FileRecords) MarkArchiveClosed(
 	ctx context.Context,
 	irPaths []string,
@@ -263,20 +266,20 @@ func (fr *FileRecords) MarkArchiveClosed(
 	archiveBucket string,
 	archiveSizeBytes int64,
 	archiveCreatedAt int64,
-) error {
+) (int64, error) {
 	if len(irPaths) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	tx, err := fr.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 
 	currentStates, err := fr.getCurrentStatesInTx(ctx, tx, irPaths)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	target := StateArchiveClosed
@@ -287,7 +290,7 @@ func (fr *FileRecords) MarkArchiveClosed(
 			continue
 		}
 		if !cs.CanTransitionTo(target) {
-			return fmt.Errorf("cannot transition %s from %s to %s", p, cs, target)
+			return 0, fmt.Errorf("cannot transition %s from %s to %s", p, cs, target)
 		}
 	}
 
@@ -299,7 +302,7 @@ func (fr *FileRecords) MarkArchiveClosed(
 		}
 	}
 	if len(validPaths) == 0 {
-		return tx.Commit()
+		return 0, tx.Commit()
 	}
 
 	// Batch update — all validated files are in the same source state.
@@ -319,14 +322,20 @@ func (fr *FileRecords) MarkArchiveClosed(
 		Where(sq.Eq{ColState: string(StateIRArchiveConsolidationPending)}).
 		ToSql()
 	if err != nil {
-		return fmt.Errorf("mark archive closed: build query: %w", err)
+		return 0, fmt.Errorf("mark archive closed: build query: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("mark archive closed: %w", err)
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("mark archive closed: %w", err)
 	}
 
-	return tx.Commit()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("mark archive closed: rows affected: %w", err)
+	}
+
+	return affected, tx.Commit()
 }
 
 // UpdateState transitions files to a new state with validation.

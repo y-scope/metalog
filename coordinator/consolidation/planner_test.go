@@ -31,9 +31,12 @@ func (m *mockFileRecords) FindConsolidationPending(_ context.Context, _, _ []met
 func (m *mockFileRecords) PromoteStuckBuffering(_ context.Context, _ int64) (int64, error) {
 	return m.promoteCount, m.promoteErr
 }
-func (m *mockFileRecords) MarkArchiveClosed(_ context.Context, _ []string, _, _, _ string, _, _ int64) error {
+func (m *mockFileRecords) MarkArchiveClosed(_ context.Context, _ []string, _, _, _ string, _, _ int64) (int64, error) {
 	m.closedCalls++
-	return m.closedErr
+	if m.closedErr != nil {
+		return 0, m.closedErr
+	}
+	return 1, nil
 }
 
 type mockTaskStore struct {

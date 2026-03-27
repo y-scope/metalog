@@ -38,7 +38,7 @@ type ColumnResolver interface {
 type fileRecordStore interface {
 	FindConsolidationPending(ctx context.Context, dimMappings, aggMappings []metastore.ColumnMapping) ([]*metastore.FileRecord, error)
 	PromoteStuckBuffering(ctx context.Context, staleBeforeNanos int64) (int64, error)
-	MarkArchiveClosed(ctx context.Context, irPaths []string, archivePath, archiveBackend, archiveBucket string, archiveSizeBytes, archiveCreatedAt int64) error
+	MarkArchiveClosed(ctx context.Context, irPaths []string, archivePath, archiveBackend, archiveBucket string, archiveSizeBytes, archiveCreatedAt int64) (int64, error)
 }
 
 // taskStore is the subset of task queue operations used by the planner.
@@ -466,7 +466,7 @@ func (p *Planner) processTerminalTasks(ctx context.Context) error {
 		}
 
 		// Mark files as ARCHIVE_CLOSED
-		err = p.fileRecs.MarkArchiveClosed(ctx,
+		affected, err := p.fileRecs.MarkArchiveClosed(ctx,
 			cons.IRPaths,
 			result.ArchivePath,
 			cons.ArchiveBackend,
@@ -480,6 +480,19 @@ func (p *Planner) processTerminalTasks(ctx context.Context) error {
 			// FindConsolidationPending to re-queue the same files as a
 			// duplicate task. The next cycle will retry MarkArchiveClosed
 			// against the still-completed task.
+			continue
+		}
+
+		if affected == 0 {
+			// Files were already transitioned by a prior task (duplicate).
+			// Delete the orphaned archive to prevent storage leaks.
+			p.log.Warn("mark archive closed matched 0 rows (duplicate task), deleting orphaned archive",
+				zap.Int64("taskId", t.TaskID),
+				zap.String("archivePath", result.ArchivePath),
+			)
+			p.deleteArchive(ctx, result.ArchivePath, cons.ArchiveBackend, cons.ArchiveBucket)
+			p.inFlight.Remove(cons.IRPaths)
+			p.markTaskProcessed(ctx, t.TaskID)
 			continue
 		}
 
@@ -537,6 +550,22 @@ func (p *Planner) deleteIRFiles(ctx context.Context, cons *taskqueue.Consolidati
 			p.log.Warn("failed to delete IR file",
 				zap.String("path", irPath), zap.String("bucket", bucket), zap.Error(err))
 		}
+	}
+}
+
+// deleteArchive removes an orphaned archive from storage (best-effort).
+func (p *Planner) deleteArchive(ctx context.Context, archivePath, backendName, bucket string) {
+	if p.storageResolver == nil || backendName == "" || archivePath == "" {
+		return
+	}
+	backend, err := p.storageResolver.Get(backendName)
+	if err != nil {
+		p.log.Warn("archive deletion: unknown backend", zap.String("backend", backendName))
+		return
+	}
+	if err := backend.Delete(ctx, bucket, archivePath); err != nil {
+		p.log.Warn("failed to delete orphaned archive",
+			zap.String("path", archivePath), zap.String("bucket", bucket), zap.Error(err))
 	}
 }
 
