@@ -13,12 +13,15 @@ package testutil
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mariadb"
+
+	"github.com/y-scope/metalog/schema"
 )
 
 const (
@@ -82,6 +85,37 @@ func (mc *DBContainer) Teardown(t *testing.T) {
 	}
 	if mc.Container != nil {
 		_ = mc.Container.Terminate(context.Background())
+	}
+}
+
+// LoadSchema executes the embedded schema DDL against the database.
+func (mc *DBContainer) LoadSchema(t *testing.T) {
+	t.Helper()
+	for _, stmt := range splitStatements(schema.SchemaSQL) {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := mc.DB.ExecContext(context.Background(), stmt); err != nil {
+			t.Fatalf("schema statement failed:\n%s\nerror: %v", truncate(stmt, 200), err)
+		}
+	}
+}
+
+// CreateTestTable provisions a metadata table by cloning _clp_template
+// and inserting the required registry rows.
+func (mc *DBContainer) CreateTestTable(t *testing.T, tableName string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		fmt.Sprintf("INSERT IGNORE INTO _table (table_name, display_name) VALUES ('%s', '%s')", tableName, tableName),
+		fmt.Sprintf("INSERT IGNORE INTO _table_config (table_name) VALUES ('%s')", tableName),
+		fmt.Sprintf("INSERT IGNORE INTO _table_assignment (table_name) VALUES ('%s')", tableName),
+		fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s` LIKE _clp_template", tableName),
+	} {
+		if _, err := mc.DB.ExecContext(ctx, q); err != nil {
+			t.Fatalf("CreateTestTable(%s): %v", tableName, err)
+		}
 	}
 }
 

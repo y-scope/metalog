@@ -69,6 +69,18 @@ func TestSetupDB(t *testing.T) {
 	}
 }
 
+func TestLoadSchemaAndCreateTable(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	mc.LoadSchema(t)
+	mc.CreateTestTable(t, "test_logs")
+
+	var count int
+	if err := mc.DB.QueryRow("SELECT COUNT(*) FROM test_logs").Scan(&count); err != nil {
+		t.Fatalf("query test_logs: %v", err)
+	}
+}
+
 func TestTeardown_NilFields(t *testing.T) {
 	mc := &DBContainer{}
 	mc.Teardown(t)
