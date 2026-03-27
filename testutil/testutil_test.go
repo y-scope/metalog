@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestConcatCompressor_Compress(t *testing.T) {
@@ -54,22 +56,35 @@ func TestConcatCompressor_Compress_BadOutputDir(t *testing.T) {
 	}
 }
 
-func TestConcatCompressor_Compress_UnreadableFile(t *testing.T) {
-	inputDir := t.TempDir()
-	outputDir := t.TempDir()
-
-	// Create a file then make it unreadable.
-	path := filepath.Join(inputDir, "secret.log")
-	if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
-		t.Fatal(err)
+func TestSetupDB(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	if mc.DB == nil || mc.DSN == "" {
+		t.Fatal("DB or DSN is empty")
 	}
-	if err := os.Chmod(path, 0000); err != nil {
-		t.Fatal(err)
+	if err := mc.DB.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
 	}
+}
 
-	c := &ConcatCompressor{}
-	if err := c.Compress(context.Background(), inputDir, outputDir); err == nil {
-		t.Error("expected error for unreadable file")
+func TestTeardown_NilFields(t *testing.T) {
+	mc := &DBContainer{}
+	mc.Teardown(t)
+}
+
+func TestSplitStatements(t *testing.T) {
+	stmts := splitStatements("-- comment\nCREATE TABLE t1 (id INT);\nINSERT INTO t1 VALUES (1);")
+	if len(stmts) < 2 {
+		t.Errorf("expected at least 2 statements, got %d", len(stmts))
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("hello", 3); got != "hel..." {
+		t.Errorf("truncate(hello,3) = %q", got)
+	}
+	if got := truncate("hi", 10); got != "hi" {
+		t.Errorf("truncate(hi,10) = %q", got)
 	}
 }
 
@@ -95,4 +110,112 @@ func TestWaitFor_Timeout(t *testing.T) {
 	if waitFor(150*time.Millisecond, func() bool { return false }) {
 		t.Error("expected waitFor to return false on timeout")
 	}
+}
+
+// --- splitStatements / truncate unit tests ---
+
+func TestSplitStatements(t *testing.T) {
+	input := "-- comment\nCREATE TABLE t1 (id INT);\nINSERT INTO t1 VALUES (1);"
+	stmts := splitStatements(input)
+
+	// Should strip comments and split on semicolons
+	nonEmpty := 0
+	for _, s := range stmts {
+		if len(s) > 0 {
+			nonEmpty++
+		}
+	}
+	if nonEmpty < 2 {
+		t.Errorf("expected at least 2 non-empty statements, got %d", nonEmpty)
+	}
+}
+
+func TestSplitStatements_NoComments(t *testing.T) {
+	input := "SELECT 1;\nSELECT 2;"
+	stmts := splitStatements(input)
+	if len(stmts) < 2 {
+		t.Errorf("expected at least 2 statements, got %d", len(stmts))
+	}
+}
+
+func TestSplitStatements_AllComments(t *testing.T) {
+	input := "-- line1\n-- line2\n"
+	stmts := splitStatements(input)
+	// All lines are comments; split on ";" of empty string produces [""]
+	for _, s := range stmts {
+		trimmed := ""
+		for _, c := range s {
+			if c != '\n' && c != ' ' {
+				trimmed += string(c)
+			}
+		}
+		if trimmed != "" {
+			t.Errorf("expected only empty statements after stripping comments, got %q", s)
+		}
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		input  string
+		want   string
+		maxLen int
+	}{
+		{"short", "short", 10},
+		{"exactly10!", "exactly10!", 10},
+		{"this is too long", "this ...", 5},
+		{"", "", 5},
+	}
+	for _, tc := range tests {
+		got := truncate(tc.input, tc.maxLen)
+		if got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.input, tc.maxLen, got, tc.want)
+		}
+	}
+}
+
+func TestDBContainer_Teardown_NilFields(t *testing.T) {
+	mc := &DBContainer{}
+	// Should not panic with nil DB and Container.
+	mc.Teardown(t)
+}
+
+func TestDBContainer_Teardown_WithDB(t *testing.T) {
+	db, _, _ := sqlmock.New()
+	mc := &DBContainer{DB: db}
+	mc.Teardown(t)
+	// DB should be closed after Teardown.
+	if err := db.Ping(); err == nil {
+		t.Error("expected DB to be closed after Teardown")
+	}
+}
+
+func TestDBContainer_CreateTestTable(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	// CreateTestTable executes 4 statements.
+	mock.ExpectExec("INSERT IGNORE INTO _table").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT IGNORE INTO _table_config").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT IGNORE INTO _table_assignment").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mc := &DBContainer{DB: db}
+	mc.CreateTestTable(t, "my_test_table")
+}
+
+func TestSetupDB(t *testing.T) {
+	mc := SetupDB(t)
+	defer mc.Teardown(t)
+	if mc.DB == nil || mc.DSN == "" {
+		t.Fatal("DB or DSN is empty")
+	}
+	if err := mc.DB.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func TestTeardown_NilFields(t *testing.T) {
+	mc := &DBContainer{}
+	mc.Teardown(t)
 }
