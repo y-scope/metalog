@@ -2527,7 +2527,7 @@ func TestNewCoordinatorUnit_ColumnRegistryError(t *testing.T) {
 	shared := &Resources{DB: mockDB, IsMariaDB: true, Log: zap.NewNop()}
 
 	_, err := NewCoordinatorUnit(ctx, "fail_table", "uuid",
-		metastore.TableConfig{}, shared, bw, nil, zap.NewNop())
+		metastore.TableConfig{}, shared, bw, nil, nil, "", "", zap.NewNop())
 	if err == nil {
 		t.Error("expected error when column registry fails")
 	}
