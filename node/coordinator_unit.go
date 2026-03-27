@@ -65,6 +65,9 @@ func NewCoordinatorUnit(
 	if err != nil {
 		return nil, fmt.Errorf("new coordinator unit: column registry: %w", err)
 	}
+	if shared.Telemetry != nil {
+		reg.SetMeter(shared.Telemetry.Meter("metalog.schema"))
+	}
 
 	writer.SetRegistry(tableName, reg)
 	shared.SetColumnRegistry(tableName, reg)

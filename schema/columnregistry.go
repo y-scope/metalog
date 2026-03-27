@@ -11,9 +11,13 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/db"
+	"github.com/y-scope/metalog/logutil"
 	"github.com/y-scope/metalog/metastore"
 )
 
@@ -106,6 +110,10 @@ type ColumnRegistry struct {
 	nextAggSlot int
 
 	allocMu sync.Mutex // serializes slot allocation
+
+	tableAttr        attribute.KeyValue
+	mSlotsExhausted  metric.Int64Counter // dims/aggs dropped due to slot exhaustion
+	exhaustionFL     *logutil.FailureLogger
 }
 
 // NewColumnRegistry creates a ColumnRegistry and loads all ACTIVE entries from the DB.
@@ -122,7 +130,10 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 		sketchByKey: make(map[string]*SketchRegistryEntry),
 		nextDimSlot: 1,
 		nextAggSlot: 1,
+		tableAttr:    attribute.String("table", tableName),
+		exhaustionFL: logutil.NewFailureLogger(log, time.Minute),
 	}
+	cr.initMetrics(noop.Meter{})
 	if err := cr.loadActiveEntries(ctx); err != nil {
 		return nil, err
 	}
@@ -133,6 +144,15 @@ func NewColumnRegistry(ctx context.Context, db *sql.DB, tableName string, isMari
 		zap.Int("sketches", len(cr.sketchByKey)),
 	)
 	return cr, nil
+}
+
+// SetMeter configures OpenTelemetry metrics. Must be called before serving.
+func (cr *ColumnRegistry) SetMeter(m metric.Meter) { cr.initMetrics(m) }
+
+func (cr *ColumnRegistry) initMetrics(m metric.Meter) {
+	cr.mSlotsExhausted, _ = m.Int64Counter("metalog.schema.slots_exhausted",
+		metric.WithDescription("Dimension/aggregation columns dropped due to slot exhaustion"),
+		metric.WithUnit("{column}"))
 }
 
 func (cr *ColumnRegistry) loadActiveEntries(ctx context.Context) error {
@@ -757,13 +777,25 @@ func (cr *ColumnRegistry) batchAllocateDimSlots(ctx context.Context, reqs []DimR
 
 	remaining := 100 - cr.nextDimSlot
 	if remaining <= 0 {
-		cr.log.Warn("dim slots exhausted, skipping new dimensions",
-			zap.Int("requested", len(pending)))
+		dropped := make([]string, len(pending))
+		for i, r := range pending {
+			dropped[i] = r.DimKey
+		}
+		cr.exhaustionFL.Fail("dim slots exhausted, dropping dimensions",
+			zap.Int("dropped", len(pending)), zap.Strings("keys", dropped))
+		cr.mSlotsExhausted.Add(context.Background(), int64(len(pending)),
+			metric.WithAttributes(cr.tableAttr, attribute.String("kind", "dim")))
 		return result, nil
 	}
 	if len(pending) > remaining {
-		cr.log.Warn("dim slots partially exhausted, allocating what remains",
-			zap.Int("requested", len(pending)), zap.Int("available", remaining))
+		dropped := make([]string, 0, len(pending)-remaining)
+		for _, r := range pending[remaining:] {
+			dropped = append(dropped, r.DimKey)
+		}
+		cr.exhaustionFL.Fail("dim slots partially exhausted, dropping excess dimensions",
+			zap.Int("allocated", remaining), zap.Int("dropped", len(dropped)), zap.Strings("droppedKeys", dropped))
+		cr.mSlotsExhausted.Add(context.Background(), int64(len(dropped)),
+			metric.WithAttributes(cr.tableAttr, attribute.String("kind", "dim")))
 		pending = pending[:remaining]
 	}
 
@@ -931,13 +963,25 @@ func (cr *ColumnRegistry) batchAllocateAggSlots(ctx context.Context, reqs []AggR
 
 	remaining := 100 - cr.nextAggSlot
 	if remaining <= 0 {
-		cr.log.Warn("agg slots exhausted, skipping new aggregations",
-			zap.Int("requested", len(pending)))
+		dropped := make([]string, len(pending))
+		for i, r := range pending {
+			dropped[i] = AggCacheKey(r.AggKey, r.AggValue, r.AggType)
+		}
+		cr.exhaustionFL.Fail("agg slots exhausted, dropping aggregations",
+			zap.Int("dropped", len(pending)), zap.Strings("keys", dropped))
+		cr.mSlotsExhausted.Add(context.Background(), int64(len(pending)),
+			metric.WithAttributes(cr.tableAttr, attribute.String("kind", "agg")))
 		return result, nil
 	}
 	if len(pending) > remaining {
-		cr.log.Warn("agg slots partially exhausted, allocating what remains",
-			zap.Int("requested", len(pending)), zap.Int("available", remaining))
+		dropped := make([]string, 0, len(pending)-remaining)
+		for _, r := range pending[remaining:] {
+			dropped = append(dropped, AggCacheKey(r.AggKey, r.AggValue, r.AggType))
+		}
+		cr.exhaustionFL.Fail("agg slots partially exhausted, dropping excess aggregations",
+			zap.Int("allocated", remaining), zap.Int("dropped", len(dropped)), zap.Strings("droppedKeys", dropped))
+		cr.mSlotsExhausted.Add(context.Background(), int64(len(dropped)),
+			metric.WithAttributes(cr.tableAttr, attribute.String("kind", "agg")))
 		pending = pending[:remaining]
 	}
 
