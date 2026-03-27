@@ -445,10 +445,20 @@ func (n *Node) startCoordinator(tableName string) error {
 	if err != nil {
 		return err
 	}
-	cu.Start()
+
 	n.coordMu.Lock()
+	if _, exists := n.coordinators[tableName]; exists {
+		n.coordMu.Unlock()
+		// Another goroutine started this coordinator concurrently. Stop
+		// the duplicate to prevent a leaked goroutine.
+		cu.Stop()
+		n.log.Debug("coordinator already running, discarding duplicate", zap.String("table", tableName))
+		return nil
+	}
 	n.coordinators[tableName] = cu
 	n.coordMu.Unlock()
+
+	cu.Start()
 	return nil
 }
 
