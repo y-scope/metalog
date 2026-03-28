@@ -1,0 +1,20 @@
+# Go
+bin/
+/metalog
+/benchmark-*
+*.exe
+
+# Java (legacy)
+target/
+dependency-reduced-pom.xml
+
+# Build
+*.deb
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.claude/
+ingestion
