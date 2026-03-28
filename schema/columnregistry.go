@@ -490,6 +490,19 @@ func AggCacheKey(aggKey, aggValue, aggType string) string {
 	return aggType + "\x00" + aggKey + "\x00" + aggValue
 }
 
+// validDimBaseTypes is the set of recognized dimension base types.
+var validDimBaseTypes = map[string]bool{
+	"str": true, "str_utf8": true, "int": true, "bool": true, "float": true,
+}
+
+// ValidateDimBaseType returns an error if baseType is not a recognized dimension type.
+func ValidateDimBaseType(baseType string) error {
+	if !validDimBaseTypes[baseType] {
+		return fmt.Errorf("unknown dimension base type: %q", baseType)
+	}
+	return nil
+}
+
 func dimSQLType(baseType string, width int) string {
 	if width <= 0 {
 		width = defaultVarcharWidth
@@ -512,9 +525,7 @@ func dimSQLType(baseType string, width int) string {
 	case "float":
 		return "DOUBLE"
 	default:
-		if width < minVarcharWidth {
-			width = minVarcharWidth
-		}
+		// Should never reach here if ValidateDimBaseType was called at entry.
 		return fmt.Sprintf("VARCHAR(%d)", width)
 	}
 }

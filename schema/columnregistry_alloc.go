@@ -25,6 +25,9 @@ import (
 // case where the dim already exists. The slow path (allocMu) serializes DDL
 // operations and double-checks under the lock to handle concurrent allocations.
 func (cr *ColumnRegistry) ResolveOrAllocateDim(ctx context.Context, dimKey, baseType string, width int) (string, error) {
+	if err := ValidateDimBaseType(baseType); err != nil {
+		return "", err
+	}
 	// Fast path: check if already allocated (read-only, concurrent-safe).
 	cr.mu.RLock()
 	if e, ok := cr.dimByKey[dimKey]; ok {
