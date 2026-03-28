@@ -104,6 +104,7 @@ type ColumnRegistry struct {
 	nextDimSlot     int
 	nextAggSlot     int
 	mu              sync.RWMutex
+	allocMu         sync.Mutex
 	isMariaDB       bool
 }
 
