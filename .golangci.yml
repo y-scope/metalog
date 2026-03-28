@@ -1,0 +1,98 @@
+# .golangci.yml — Go linting configuration for metalog.
+# Run with: golangci-lint run ./...
+#
+# Migrated from v1 to v2 format. Changes from Uber's original v1 config:
+#   - Added version: "2" (required by golangci-lint v2)
+#   - Removed gosimple (merged into staticcheck in v2)
+#   - linters-settings → settings (v2 schema)
+#   - issues → formatters.exclusions (v2 schema)
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    # ── go vet ──────────────────────────────────────────────────────────
+    - govet
+
+    # ── staticcheck (SA, S, ST series; includes gosimple in v2) ───────
+    - staticcheck
+
+    # ── error checking ──────────────────────────────────────────────────
+    - errcheck
+
+    # ── unused / dead code ──────────────────────────────────────────────
+    - ineffassign
+    - unused
+
+    # ── type safety ─────────────────────────────────────────────────────
+    - forcetypeassert
+    - unconvert
+
+    # ── performance ─────────────────────────────────────────────────────
+    - prealloc
+
+  settings:
+    govet:
+      enable:
+        - assign
+        - atomic
+        - atomicalign
+        - bools
+        - buildtag
+        - composite
+        - copylock
+        - deepequalerrors
+        - fieldalignment
+        - httpresponse
+        - lostcancel
+        - nilfunc
+        - printf
+        - shadow
+        - shift
+        - stdmethods
+        - stringintconv
+        - structtag
+        - tests
+        - unmarshal
+        - unreachable
+        - unsafeptr
+        - unusedresult
+        - appends
+
+    staticcheck:
+      checks:
+        - "SA1*"    # misuses of the standard library
+        - "SA2*"    # concurrency issues
+        - "SA4*"    # useless code
+        - "SA6001"  # inefficient slice/map usage
+        - "SA6005"  # inefficient string comparison
+        - "SA6006"  # inefficient string slicing
+        - "S1*"     # simple code simplifications
+        - "ST1001"  # dot imports
+        - "ST1003"  # naming conventions
+        - "ST1005"  # error strings
+        - "ST1006"  # receiver naming
+        - "ST1008"  # error return position
+        - "ST1012"  # error var naming
+        - "ST1021"  # comment on exported type
+        - "ST1022"  # comment on exported var
+
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - forcetypeassert
