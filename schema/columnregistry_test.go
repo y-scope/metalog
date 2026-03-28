@@ -57,8 +57,9 @@ func TestParseSlotNumber(t *testing.T) {
 
 func TestDimSQLType(t *testing.T) {
 	for _, tt := range []struct {
-		baseType, want string
-		width          int
+		baseType string
+		want     string
+		width    int
 	}{
 		{"str", "VARCHAR(256) CHARACTER SET ascii COLLATE ascii_bin", 256},
 		{"str_utf8", "VARCHAR(256)", 100},
@@ -66,6 +67,7 @@ func TestDimSQLType(t *testing.T) {
 		{"int", "BIGINT", 0},
 		{"float", "DOUBLE", 0},
 		{"str", "VARCHAR(256) CHARACTER SET ascii COLLATE ascii_bin", -1},
+		{"unknown_type", "VARCHAR(256)", 0},
 	} {
 		got := dimSQLType(tt.baseType, tt.width)
 		if got != tt.want {
@@ -128,6 +130,12 @@ func TestSnapshot(t *testing.T) {
 	}
 	if len(snap.AllAggEntries()) != 1 {
 		t.Errorf("agg entries = %d, want 1", len(snap.AllAggEntries()))
+	}
+	if snap.ResolveDim("missing") != "" {
+		t.Error("missing dim should return empty")
+	}
+	if snap.ResolveAgg("missing", "", "SUM") != "" {
+		t.Error("missing agg should return empty")
 	}
 }
 
