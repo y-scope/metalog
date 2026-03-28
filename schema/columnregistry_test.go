@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -18,6 +19,13 @@ func newTestRegistry() *ColumnRegistry {
 		sketchByKey: make(map[string]*SketchRegistryEntry),
 		log:         zap.NewNop(),
 	}
+}
+
+func newTestRegistryWithDB(db *sql.DB) *ColumnRegistry {
+	cr := newTestRegistry()
+	cr.db = db
+	cr.tableName = "test_table"
+	return cr
 }
 
 func TestAggCacheKey(t *testing.T) {
@@ -306,5 +314,95 @@ func TestNewColumnRegistry_LoadSuccess(t *testing.T) {
 	}
 	if cr.ResolveSketch("uuid") == nil {
 		t.Error("should resolve uuid sketch")
+	}
+}
+
+func TestSnapshot_NotFound(t *testing.T) {
+	cr := newTestRegistry()
+	snap := cr.Snapshot()
+	if snap.ResolveDim("missing") != "" {
+		t.Error("should return empty for missing dim")
+	}
+	if snap.ResolveAgg("missing", "", "SUM") != "" {
+		t.Error("should return empty for missing agg")
+	}
+}
+
+func TestNewColumnRegistry_HWMQueryError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close() //nolint:errcheck
+	// First HWM query fails
+	mock.ExpectQuery("SELECT").WillReturnError(context.DeadlineExceeded)
+	_, err := NewColumnRegistry(context.Background(), db, "test_table", true, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestNewColumnRegistry_DimQueryError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close() //nolint:errcheck
+	// HWM queries succeed
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	// Dim query fails
+	mock.ExpectQuery("SELECT").WillReturnError(context.DeadlineExceeded)
+	_, err := NewColumnRegistry(context.Background(), db, "test_table", true, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSnapshot_DeepCopy(t *testing.T) {
+	cr := newTestRegistry()
+	cr.dimByKey["host"] = &DimRegistryEntry{ColumnName: "dim_f01", DimKey: "host"}
+	cr.dimByColumn["dim_f01"] = cr.dimByKey["host"]
+	cr.aggByKey[AggCacheKey("cpu", "", "SUM")] = &AggRegistryEntry{ColumnName: "agg_f01"}
+	cr.aggByColumn["agg_f01"] = cr.aggByKey[AggCacheKey("cpu", "", "SUM")]
+
+	snap := cr.Snapshot()
+
+	// Mutate original — snapshot should not change
+	cr.dimByKey["host"].ColumnName = "modified"
+	if snap.ResolveDim("host") == "modified" {
+		t.Error("snapshot should be a deep copy")
+	}
+}
+
+func TestDimSQLType_LargeWidth(t *testing.T) {
+	got := dimSQLType("str", 500)
+	if got != "VARCHAR(500) CHARACTER SET ascii COLLATE ascii_bin" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestNewColumnRegistry_AggQueryError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close() //nolint:errcheck
+	// HWM queries succeed
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	// Dim query succeeds
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name", "base_type", "width", "dim_key", "alias_column"}))
+	// Agg query fails
+	mock.ExpectQuery("SELECT").WillReturnError(context.DeadlineExceeded)
+	_, err := NewColumnRegistry(context.Background(), db, "test_table", true, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestNewColumnRegistry_SketchQueryError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close() //nolint:errcheck
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name", "base_type", "width", "dim_key", "alias_column"}))
+	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"column_name", "agg_key", "agg_value", "aggregation_type", "value_type", "alias_column"}))
+	// Sketch query fails
+	mock.ExpectQuery("SELECT").WillReturnError(context.DeadlineExceeded)
+	_, err := NewColumnRegistry(context.Background(), db, "test_table", true, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
