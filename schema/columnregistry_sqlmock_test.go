@@ -804,19 +804,90 @@ func TestAllocateNewAggSlot_SlotsExhausted(t *testing.T) {
 }
 
 
-func TestResolveOrAllocateDims_BatchWithWidening(t *testing.T) {
+func TestAllocateNewDimSlot_FreshAllocation(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	defer db.Close() //nolint:errcheck
 
 	cr := testCRWithDB(db)
 	cr.isMariaDB = true
-	cr.dimByKey["host"] = &DimRegistryEntry{ColumnName: "dim_f01", DimKey: "host", BaseType: "str", Width: 100}
-	cr.dimByColumn["dim_f01"] = cr.dimByKey["host"]
+	cr.nextDimSlot = 1
 
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	mock.ExpectQuery("SELECT column_name FROM _dim_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectRollback()
 	mock.ExpectExec("ALTER TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("UPDATE _dim_registry").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO _dim_registry").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	reqs := []DimRequest{{DimKey: "host", BaseType: "str", Width: 500}}
+	col, err := cr.ResolveOrAllocateDim(context.Background(), "host", "str", 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col != "dim_f01" {
+		t.Errorf("col = %q, want dim_f01", col)
+	}
+}
+
+func TestAllocateNewAggSlot_FreshAllocation(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	cr := testCRWithDB(db)
+	cr.isMariaDB = true
+	cr.nextAggSlot = 1
+
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	mock.ExpectQuery("SELECT column_name FROM _agg_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name, value_type FROM _agg_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "value_type"}))
+	mock.ExpectRollback()
+	mock.ExpectExec("ALTER TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO _agg_registry").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	col, err := cr.ResolveOrAllocateAgg(context.Background(), "level", "error", "EQ", "INT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col != "agg_f01" {
+		t.Errorf("col = %q, want agg_f01", col)
+	}
+}
+
+func TestBatchAllocateDimSlots_Fresh(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	cr := testCRWithDB(db)
+	cr.isMariaDB = true
+	cr.nextDimSlot = 1
+
+	// Advisory lock
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	// Check DB for existing — none found
+	mock.ExpectQuery("SELECT column_name FROM _dim_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	// Claim available — none
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectRollback()
+	// ALTER TABLE + INSERT for dim_f01
+	mock.ExpectExec("ALTER TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO _dim_registry").WillReturnResult(sqlmock.NewResult(1, 1))
+	// Release lock
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	reqs := []DimRequest{{DimKey: "host", BaseType: "str", Width: 256}}
 	result, err := cr.ResolveOrAllocateDims(context.Background(), reqs)
 	if err != nil {
 		t.Fatal(err)
@@ -826,30 +897,103 @@ func TestResolveOrAllocateDims_BatchWithWidening(t *testing.T) {
 	}
 }
 
-func TestLoadSlotHighWaterMarks_ScanError(t *testing.T) {
+func TestBatchAllocateAggSlots_Fresh(t *testing.T) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	defer db.Close() //nolint:errcheck
 
-	// Return a row that can't be scanned as string
-	mock.ExpectQuery("SELECT column_name FROM _dim_registry").WillReturnRows(
-		sqlmock.NewRows([]string{"column_name"}).AddRow(nil).RowError(0, fmt.Errorf("scan error")))
+	cr := testCRWithDB(db)
+	cr.isMariaDB = true
+	cr.nextAggSlot = 1
 
-	cr := &ColumnRegistry{
-		db:          db,
-		tableName:   "test_table",
-		dimByKey:    make(map[string]*DimRegistryEntry),
-		dimByColumn: make(map[string]*DimRegistryEntry),
-		aggByKey:    make(map[string]*AggRegistryEntry),
-		aggByColumn: make(map[string]*AggRegistryEntry),
-		sketchByKey: make(map[string]*SketchRegistryEntry),
-		nextDimSlot: 1,
-		nextAggSlot: 1,
-		log:         zap.NewNop(),
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	mock.ExpectQuery("SELECT column_name FROM _agg_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name, value_type FROM _agg_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "value_type"}))
+	mock.ExpectRollback()
+	mock.ExpectExec("ALTER TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO _agg_registry").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	key := AggCacheKey("cpu", "", "SUM")
+	reqs := []AggRequest{{AggKey: "cpu", AggValue: "", AggType: "SUM", ValueType: "FLOAT"}}
+	result, err := cr.ResolveOrAllocateAggs(context.Background(), reqs)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	err := cr.loadSlotHighWaterMarks(context.Background())
-	if err == nil {
-		t.Fatal("expected error from scan")
+	if result[key] != "agg_f01" {
+		t.Errorf("cpu = %q, want agg_f01", result[key])
 	}
 }
 
+func TestLookupDimFromDB_NotFound(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	cr := testCRWithDB(db)
+	mock.ExpectQuery("SELECT column_name FROM _dim_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+
+	col, err := cr.lookupDimFromDB(context.Background(), "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col != "" {
+		t.Errorf("got %q, want empty", col)
+	}
+}
+
+func TestAllocateNewDimSlot_UnknownBaseType(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	cr := testCRWithDB(db)
+	cr.isMariaDB = true
+	cr.nextDimSlot = 1
+
+	// Advisory lock
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	// DB lookup — not found
+	mock.ExpectQuery("SELECT column_name FROM _dim_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	// No available slots
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectRollback()
+	// Release lock
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	_, err := cr.ResolveOrAllocateDim(context.Background(), "bad_dim", "unknown_type", 256)
+	if err == nil {
+		t.Fatal("expected error for unknown base type")
+	}
+}
+
+func TestBatchAllocateDimSlots_UnknownType(t *testing.T) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	defer db.Close() //nolint:errcheck
+
+	cr := testCRWithDB(db)
+	cr.isMariaDB = true
+	cr.nextDimSlot = 1
+
+	mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(
+		sqlmock.NewRows([]string{"result"}).AddRow(1))
+	mock.ExpectQuery("SELECT column_name FROM _dim_registry").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	mock.ExpectRollback()
+	mock.ExpectExec("SELECT RELEASE_LOCK").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	reqs := []DimRequest{{DimKey: "bad", BaseType: "unknown_type", Width: 256}}
+	_, err := cr.ResolveOrAllocateDims(context.Background(), reqs)
+	if err == nil {
+		t.Fatal("expected error for unknown base type in batch")
+	}
+}
