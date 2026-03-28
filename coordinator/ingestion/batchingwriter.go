@@ -1,15 +1,13 @@
 // Package ingestion implements the metadata ingestion pipeline.
 //
 // The pipeline has three stages:
-//  1. Records arrive via gRPC push (converted by [ConvertRecord]) or Kafka
-//     pull (converted by a kafka.MessageTransformer) into [metastore.FileRecord]
-//     values.
+//  1. Records arrive via gRPC push (converted by [ConvertRecord]) into
+//     [metastore.FileRecord] values.
 //  2. The [Service] validates and routes records to the [BatchingWriter].
 //  3. The [BatchingWriter] maintains a per-table goroutine that accumulates
 //     records into batches, resolves logical dim/agg keys to physical columns
 //     via the ColumnRegistry, and flushes them to the database using guarded
-//     UPSERTs. Each record's Flushed channel is notified on completion,
-//     enabling back-pressure to Kafka offset commits.
+//     UPSERTs. Each record's Flushed channel is notified on completion.
 package ingestion
 
 import (
@@ -212,8 +210,7 @@ func (bw *BatchingWriter) Submit(ctx context.Context, tableName string, rec *met
 }
 
 // SubmitWait sends a record to the per-table writer goroutine, blocking
-// until the channel has space or the context is cancelled. Used by the
-// Kafka consumer to propagate backpressure without dropping messages.
+// until the channel has space or the context is cancelled.
 func (bw *BatchingWriter) SubmitWait(ctx context.Context, tableName string, rec *metastore.FileRecord) error {
 	tw, err := bw.getOrCreateWriter(tableName)
 	if err != nil {

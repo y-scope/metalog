@@ -17,4 +17,4 @@ dependency-reduced-pom.xml
 .vscode/
 *.swp
 .claude/
-ingestion
+/ingestion
