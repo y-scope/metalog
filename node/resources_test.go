@@ -144,12 +144,3 @@ func TestResources_Close_WithTelemetry(t *testing.T) {
 
 // Suppress unused import warning
 var _ *sql.DB
-
-func TestResources_Close_WithTelemetry(t *testing.T) {
-	tp, _ := telemetry.NewProvider(telemetry.Config{})
-	r := &Resources{
-		Log:       zap.NewNop(),
-		Telemetry: tp,
-	}
-	r.Close()
-}
