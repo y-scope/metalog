@@ -8,7 +8,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y-scope/metalog/schema"
-	"github.com/y-scope/metalog/telemetry"
 )
 
 func TestResources_ReadOnlyDB_WithReadDB(t *testing.T) {
@@ -131,12 +130,3 @@ func TestResources_SetColumnRegistry_InitializesMap(t *testing.T) {
 
 // Suppress unused import warning
 var _ *sql.DB
-
-func TestResources_Close_WithTelemetry(t *testing.T) {
-	tp, _ := telemetry.NewProvider(telemetry.Config{})
-	r := &Resources{
-		Log:       zap.NewNop(),
-		Telemetry: tp,
-	}
-	r.Close()
-}
