@@ -24,7 +24,7 @@ const pipelineTable = "test_pipeline"
 // pipelineEnv holds the shared test infrastructure for end-to-end pipeline tests.
 type pipelineEnv struct {
 	db  *sql.DB
-	mc  *testutil.MariaDBContainer
+	mc  *testutil.DBContainer
 	mio *testutil.MinIOContainer
 	log *zap.Logger
 }
@@ -32,7 +32,7 @@ type pipelineEnv struct {
 func setupPipelineEnv(t *testing.T) *pipelineEnv {
 	t.Helper()
 
-	mc := testutil.SetupMariaDB(t)
+	mc := testutil.SetupDB(t)
 	mc.LoadSchema(t)
 	mc.CreateTestTable(t, pipelineTable)
 
