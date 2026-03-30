@@ -1,5 +1,3 @@
-//go:build integration
-
 package taskqueue_test
 
 import (
@@ -15,9 +13,9 @@ import (
 
 const testTable = "clp_spark"
 
-func setupTaskQueueIT(t *testing.T) (*testutil.MariaDBContainer, *taskqueue.Queue) {
+func setupTaskQueueIT(t *testing.T) (*testutil.DBContainer, *taskqueue.Queue) {
 	t.Helper()
-	mc := testutil.SetupMariaDB(t)
+	mc := testutil.SetupDB(t)
 	mc.LoadSchema(t)
 	mc.CreateTestTable(t, testTable)
 
@@ -41,7 +39,7 @@ func mustCreateTask(t *testing.T, tq *taskqueue.Queue, ctx context.Context) int6
 }
 
 // mustScanState queries the state of a task by ID.
-func mustScanState(t *testing.T, mc *testutil.MariaDBContainer, ctx context.Context, taskID int64) string {
+func mustScanState(t *testing.T, mc *testutil.DBContainer, ctx context.Context, taskID int64) string {
 	t.Helper()
 	var state string
 	err := mc.DB.QueryRowContext(ctx,
@@ -53,7 +51,7 @@ func mustScanState(t *testing.T, mc *testutil.MariaDBContainer, ctx context.Cont
 }
 
 // mustScanCount queries the count of tasks matching the given query.
-func mustScanCount(t *testing.T, mc *testutil.MariaDBContainer, ctx context.Context, query string, args ...any) int {
+func mustScanCount(t *testing.T, mc *testutil.DBContainer, ctx context.Context, query string, args ...any) int {
 	t.Helper()
 	var count int
 	err := mc.DB.QueryRowContext(ctx, query, args...).Scan(&count)

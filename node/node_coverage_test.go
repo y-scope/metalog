@@ -102,14 +102,13 @@ func TestStart_WithStorageBackend_DefaultFails(t *testing.T) {
 		t.Fatalf("NewNode error = %v", err)
 	}
 
-	// Storage backend initialization is not wired into Start() on this commit,
-	// so Start() succeeds even with a broken backend config.
-	mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
+	// Storage backend initialization is wired into Start(), so a broken
+	// default backend causes Start() to return an error.
 	err = n.Start()
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+	if err == nil {
+		n.Stop()
+		t.Fatal("expected Start() to fail with broken default backend")
 	}
-	n.Stop()
 }
 
 func TestStart_WithStorageBackend_NonDefaultSkipped(t *testing.T) {
@@ -194,13 +193,13 @@ func TestStart_WithStorageBackend_EmptyType(t *testing.T) {
 		t.Fatalf("NewNode error = %v", err)
 	}
 
-	// Storage backend initialization is not wired into Start() on this commit.
-	mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 1))
+	// Empty type defaults to "s3", which fails without an endpoint config.
+	// Since it's the default backend, Start() returns an error.
 	err = n.Start()
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+	if err == nil {
+		n.Stop()
+		t.Fatal("expected Start() to fail with unconfigured s3 backend")
 	}
-	n.Stop()
 }
 
 // Health server Start/Stop tests are skipped because the health server goroutine
@@ -877,6 +876,7 @@ func TestCoordinatorUnit_Start_LifecycleWithCancel(t *testing.T) {
 		metastore.TableConfig{}, // no consolidation, no retention
 		shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -937,6 +937,7 @@ func TestReconcile_StalledCoordinator_RestartSucceeds(t *testing.T) {
 		parentCtx, "stalled_real", "uuid-stalled",
 		metastore.TableConfig{}, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -1963,6 +1964,7 @@ func TestNewCoordinatorUnit_WithConsolidation(t *testing.T) {
 		ctx, "consol_table", "uuid-consol",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2010,6 +2012,7 @@ func TestNewCoordinatorUnit_WithStaleBufferingDisabled(t *testing.T) {
 		ctx, "stale_disabled", "uuid-stale",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2055,6 +2058,7 @@ func TestNewCoordinatorUnit_InvalidPolicyType(t *testing.T) {
 		ctx, "bad_policy", "uuid-bad",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	// Planner/policy creation is not wired into NewCoordinatorUnit on this commit,
@@ -2110,6 +2114,7 @@ func TestCoordinatorUnit_Start_WithRetentionEnabled(t *testing.T) {
 		ctx, "ret_table", "uuid-ret",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2172,6 +2177,7 @@ func TestCoordinatorUnit_Start_WithPlanner(t *testing.T) {
 		ctx, "planner_table", "uuid-planner",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2220,6 +2226,7 @@ func TestNewCoordinatorUnit_InvalidRetentionType(t *testing.T) {
 		ctx, "bad_ret", "uuid-bad-ret",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	// Retention strategy creation is not wired into NewCoordinatorUnit on this commit,
@@ -2406,6 +2413,7 @@ func TestNewCoordinatorUnit_WithTelemetry(t *testing.T) {
 		metastore.TableConfig{},
 		shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -2455,6 +2463,7 @@ func TestNewCoordinatorUnit_WithStaleBufferingCustom(t *testing.T) {
 		ctx, "stale_custom", "uuid-stale-custom",
 		tableCfg, shared, bw,
 		ingestion.NewService(bw, false, zap.NewNop()),
+		nil, "", "",
 		zap.NewNop(),
 	)
 	if err != nil {

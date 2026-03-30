@@ -48,7 +48,7 @@ func TestConsolidationPipeline(t *testing.T) {
 	t.Logf("using clp-s: %s", clpBinary)
 
 	// --- Setup infrastructure ---
-	mc := testutil.SetupMariaDB(t)
+	mc := testutil.SetupDB(t)
 	defer mc.Teardown(t)
 	mc.LoadSchema(t)
 	mc.CreateTestTable(t, e2eTable)
@@ -286,7 +286,7 @@ func TestConsolidationPipeline(t *testing.T) {
 
 // --- Helpers ---
 
-func newE2EPlanner(t *testing.T, mc *testutil.MariaDBContainer, reg *storage.Registry, tq *taskqueue.Queue, log *zap.Logger) *consolidation.Planner {
+func newE2EPlanner(t *testing.T, mc *testutil.DBContainer, reg *storage.Registry, tq *taskqueue.Queue, log *zap.Logger) *consolidation.Planner {
 	t.Helper()
 	planner, err := consolidation.NewPlanner(consolidation.PlannerConfig{
 		DB:                 mc.DB,
