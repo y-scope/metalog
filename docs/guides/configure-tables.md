@@ -37,9 +37,6 @@ grpcurl -plaintext -d '{
   com.yscope.metalog.coordinator.grpc.AdminService/RegisterTable
 ```
 
-> **Note:** Kafka sources are registered separately via `AdminService.RegisterKafkaSource`.
-> See [gRPC API — AdminService](../reference/grpc-api.md#registerkafkasource) for details.
-
 See [gRPC API — AdminService](../reference/grpc-api.md#adminservice) for full field reference.
 
 ---
@@ -52,10 +49,6 @@ Tables can also be registered directly via SQL:
 INSERT INTO _table (table_name, display_name) VALUES ('spark', 'Spark Logs');
 INSERT INTO _table_config (table_name, config) VALUES ('spark', '{}');
 INSERT INTO _table_assignment (table_name) VALUES ('spark');
-
--- Register a Kafka source separately
-INSERT INTO _kafka_source (table_name, source_name, topic, bootstrap_servers)
-VALUES ('spark', 'spark-main', 'spark-ir', 'kafka:29092');
 ```
 
 ---
@@ -66,11 +59,7 @@ VALUES ('spark', 'spark-main', 'spark-ir', 'kafka:29092');
 |-------|---------|
 | `_table` | Identity — `table_id` (UUID PK), `table_name` (UNIQUE), `display_name`, `active` |
 | `_table_config` | Unified JSON config blob — feature flags, consolidation policies (NULL = all defaults) |
-| `_kafka_source` | Kafka source definitions — one row per source (topic, bootstrap servers, transformer, env match) |
-| `_kafka_assignment` | Kafka source-to-node assignment — tracks which node owns each source |
 | `_table_assignment` | Node assignment — `node_id` (NULL = unassigned), `lease_expiry`, `node_assigned_at` |
-
-The Kafka consumer group ID is derived from the `consumer_group_id` field in `_kafka_source` . When a source migrates to a new node, the new owner reuses the same group ID and Kafka resumes from the last committed offset. No offset storage in the database.
 
 See [Coordinator HA Design](../design/coordinator-ha.md) for liveness, heartbeat, orphan detection, and failover mechanics built on `_table_assignment` and `_node_registry`.
 
@@ -109,8 +98,6 @@ When `_table_config.config` is NULL (no explicit config stored), `DefaultTableCo
 | `consolidation` | `true` | Uses default `time_window(1h)` policy when `policies` array is empty |
 | `retention` | `true` | Strategy type `"default"` |
 
-Kafka sources are managed independently via `_kafka_source` rows and the `RegisterKafkaSource` RPC — they are not part of `_table_config`.
-
 A NULL config is functionally identical to storing the JSON above — `DecodeTableConfig(nil)` returns `DefaultTableConfig()`. To disable a subsystem, store an explicit config with `"enabled": false`.
 
 ---
@@ -137,11 +124,6 @@ its settings under a single key.
   }
 }
 ```
-
-> **Kafka sources** are no longer configured here. They are registered as independent
-> entities in `_kafka_source` via the `AdminService.RegisterKafkaSource` RPC. Each source
-> specifies its own `topic`, `bootstrap_servers`, `record_transformer`, `consumer_group_id`, and
-> `required_env`. See [gRPC API — RegisterKafkaSource](../reference/grpc-api.md#registerkafkasource).
 
 ### `consolidation` — IR-to-archive consolidation
 
@@ -190,6 +172,5 @@ Each policy in the `policies` array has a `type` and a policy-specific `config` 
 - [Configuration Reference](../reference/configuration.md) — Full node.yaml and environment variable reference
 - [Quickstart](../getting-started/quickstart.md) — Setup and first run
 - [Deploy HA](../guides/deploy-ha.md) — Node assignment, liveness, and failover
-- [Ingestion Paths](../concepts/ingestion.md) — gRPC vs Kafka ingestion
-- [Write Transformers](write-transformers.md) — `recordTransformer` values
+- [Ingestion Paths](../concepts/ingestion.md) — gRPC ingestion
 - [Schema Evolution](evolve-schema.md) — Online DDL for new columns

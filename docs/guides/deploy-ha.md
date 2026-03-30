@@ -8,7 +8,7 @@ How to configure, operate, and troubleshoot coordinator high availability. For d
 
 The CLP Metastore Service can be deployed on stateless platforms where nodes disappear at any time and may not be replaced for hours or days. Nodes claim tables on startup, report health periodically, detect dead peers, and automatically take over from failed nodes — no human intervention required.
 
-**What HA coordinates:** Each table has a single owner node that runs its lifecycle goroutines (Kafka consumer, planner, retention, storage deletion) — exactly one instance per table, with automatic recovery during outages or planned rollouts.
+**What HA coordinates:** Each table has a single owner node that runs its lifecycle goroutines (planner, retention, storage deletion) — exactly one instance per table, with automatic recovery during outages or planned rollouts.
 
 **What's independent of HA:** gRPC ingestion runs on every node and requires no single-owner coordination (see [Ingestion Paths](../concepts/ingestion.md)). Workers and the query service are also independent.
 
@@ -82,9 +82,9 @@ coordinator:
 2. **Dead threshold passes** — heartbeat becomes stale (all tables orphaned at once) or leases expire (each table becomes individually claimable)
 3. **Surviving nodes detect orphans** — during their next reconciliation scan
 4. **Surviving nodes claim orphans** — each calculates a fair share and attempts to claim accordingly; claiming may take multiple iterations
-5. **Processing resumes** — the new owner starts a per-table coordinator. For Kafka ingestion, the new owner resumes from the last committed offset. For gRPC ingestion, clients reconnect and resume sending.
+5. **Processing resumes** — the new owner starts a per-table coordinator. For gRPC ingestion, clients reconnect and resume sending.
 
-During the recovery window, surviving nodes continue ingesting for their own tables and the query service continues serving previously registered data. No data is lost — gRPC clients receive errors and can retry, and Kafka events remain in the topic.
+During the recovery window, surviving nodes continue ingesting for their own tables and the query service continues serving previously registered data. No data is lost — gRPC clients receive errors and can retry.
 
 ---
 
@@ -177,4 +177,4 @@ FROM _node_registry;
 - [Coordinator HA Design](../design/coordinator-ha.md) — Edge cases, walkthroughs, data model, design alternatives
 - [Architecture Overview](../concepts/overview.md) — System overview and deployment options
 - [Configuration](../reference/configuration.md) — Full configuration reference
-- [Ingestion Paths](../concepts/ingestion.md) — gRPC and Kafka protocols
+- [Ingestion Paths](../concepts/ingestion.md) — gRPC ingestion protocol

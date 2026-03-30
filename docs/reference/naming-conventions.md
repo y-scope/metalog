@@ -107,7 +107,7 @@ Unlike dims/aggs, sketch slots are pre-allocated in the table schema — no `ALT
 |-----------------|-------------|--------|---------|
 | `sketch/{type}/{field}` | `{field}` | `{type}` | `sketch/parquet_sbbf_xxhash64/uuid` |
 
-The value is base64-encoded raw SBBF block bytes (not msgpack). The Kafka consumer reconstructs the msgpack snapshot `{type, data}` from the key components.
+The value is base64-encoded raw SBBF block bytes (not msgpack).
 
 See [Sketches](../concepts/sketches.md) for the full ingestion and query pipeline.
 
@@ -213,7 +213,7 @@ Add a `dim_*` column when **all three criteria** are met:
 
 Dimension and aggregation columns are **auto-discovered** — no manual DDL is needed. When a new field appears in ingested records, `ColumnRegistry` allocates the next available slot and runs online DDL to add the physical column.
 
-1. **Include the field in record metadata** — send it in the `Ingest` gRPC request or Kafka message. The coordinator discovers it on first ingestion and allocates a `dim_fNN` slot automatically.
+1. **Include the field in record metadata** — send it in the `Ingest` gRPC request. The coordinator discovers it on first ingestion and allocates a `dim_fNN` slot automatically.
 
 2. **Verify discovery** — check the registry to confirm the field was picked up with the expected type and width:
    ```sql

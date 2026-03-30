@@ -12,8 +12,8 @@ keeping OSS and enterprise code in sync.
 
 ## Design Philosophy
 
-Metalog deliberately excludes opinions about RPC frameworks, cloud SDKs, Kafka
-clients, secret management, and deployment topology. These are infrastructure
+Metalog deliberately excludes opinions about RPC frameworks, cloud SDKs,
+secret management, and deployment topology. These are infrastructure
 decisions that vary across organizations. Instead, metalog exposes small Go
 interfaces at each integration boundary and provides a global registry for
 runtime discovery.
@@ -26,7 +26,6 @@ The result is a clean separation:
 | Data model | `FileRecord`, lifecycle states, column registry | — |
 | Transport | Reference gRPC handlers (`grpcserver/`) | Your RPC handlers (Connect, Twirp, etc.) |
 | Storage | S3/filesystem/HTTP | Your internal blob store |
-| Kafka | franz-go consumer | Your managed Kafka proxy |
 | Config & secrets | Plain YAML, plain strings | Your secret manager integration |
 | Auth | None | Your auth middleware |
 
@@ -52,7 +51,6 @@ package main
 
 import (
     _ "your.company/metalog-ext/storage/internalblob" // registers "ib" backend
-    _ "your.company/metalog-ext/kafka/proxy"           // registers custom transformers
 )
 ```
 
@@ -165,211 +163,7 @@ storage:
 
 ---
 
-### 2. Message Transformers (Kafka wire format)
-
-**Package:** `kafka` · **Interface:** `MessageTransformer`
-
-Converts raw Kafka message bytes into a protobuf `MetadataRecord`. Use this
-when your data producers emit a wire format other than the standard protobuf
-or JSON schemas — Avro, custom binary, Spark event payloads, etc.
-
-```go
-type MessageTransformer interface {
-    Transform(payload []byte) (*pb.MetadataRecord, error)
-}
-```
-
-**Built-in:** `""` / `"auto"` (auto-detect JSON/protobuf), `"proto"` (protobuf only)
-
-#### Why this exists
-
-In practice, ingestion pipelines evolve. You start with a standard proto
-format, then a team ships a Spark job that emits JSON with nested metadata,
-then another team has an Avro-encoded stream. Rather than forcing all producers
-to converge on one format, metalog lets each table declare its own transformer.
-
-The built-in auto-detect transformer handles the common case (JSON starts with
-`{`, everything else is treated as protobuf). For anything more complex, you
-register a named transformer:
-
-```go
-package kafka
-
-import mkafka "github.com/y-scope/metalog/kafka"
-
-func init() {
-    mkafka.RegisterTransformer("spark_event", func() mkafka.MessageTransformer {
-        return &sparkTransformer{}
-    })
-}
-
-type sparkTransformer struct{}
-
-func (t *sparkTransformer) Transform(payload []byte) (*pb.MetadataRecord, error) {
-    // Parse Spark executor event JSON, extract IR path, timestamps,
-    // build MetadataRecord with dimensions like executor_id, app_name
-    // ...
-}
-```
-
-**Activate** per-source via the `_kafka_source` table (registered with
-`AdminService.RegisterKafkaSource`):
-
-```sql
--- The record_transformer field on _kafka_source selects which transformer to use
-INSERT INTO _kafka_source (table_name, source_name, topic, bootstrap_servers, record_transformer)
-VALUES ('my_table', 'spark-src', 'spark-ir', 'kafka:29092', 'spark_event');
-```
-
-#### Self-describing key-value format
-
-For producers that can't emit full protobuf, metalog's built-in JSON
-transformer supports a self-describing key-value format where the key encodes
-the field type:
-
-```json
-{
-  "self_describing_kv": [
-    {"key": "dim/str128/hostname", "value": "web-42"},
-    {"key": "dim/int/status_code", "value": "200"},
-    {"key": "agg_int/GTE/latency_ms/p99", "value": "150"},
-    {"key": "sketch/sbbf/trace_id", "value": "<base64-encoded-bloom-filter>"}
-  ]
-}
-```
-
-This means producers don't need to know the metastore schema. They emit
-typed key-value pairs, and the transformer routes them to the correct proto
-fields. New dimensions and aggregations are auto-discovered by schema
-evolution — no metastore-side changes needed.
-
-See [Write Transformers](write-transformers.md) for a full walkthrough.
-
----
-
-### 3. Kafka Adapters (transport replacement)
-
-**Package:** `node` · **Interface:** `KafkaAdapter`
-
-Replaces the entire Kafka transport layer. Unlike the other extension points
-which use a global registry, Kafka adapters are wired programmatically via a
-`NodeOption` — because swapping the transport is a deployment-level decision,
-not a per-source one.
-
-```go
-type KafkaAdapter interface {
-    Start(ctx context.Context)  // blocks until ctx is done
-    Stop()                      // pre-cancel cleanup
-}
-
-type KafkaAdapterFactory func(
-    source *metastore.KafkaSource,
-    ingestSvc *ingestion.Service,
-    log *zap.Logger,
-) (KafkaAdapter, error)
-```
-
-The factory receives a `*metastore.KafkaSource` containing the source's
-`table_name`, `source_name`, `topic`, `bootstrap_servers`, `record_transformer`,
-`consumer_group_id`, and `required_env` fields — all registered via the
-`AdminService.RegisterKafkaSource` RPC and stored in the `_kafka_source` table.
-
-#### Why this is a NodeOption, not a registry
-
-Storage backends and transformers are per-table concerns — different tables can
-use different backends or wire formats. But the Kafka transport is typically a
-deployment-wide choice dictated by infrastructure (your managed Kafka service,
-your consumer proxy, your operational tooling). Making it a `NodeOption` keeps
-the decision in `main.go` where it belongs, rather than in per-source config
-where it would be confusing.
-
-#### Example: push-based Kafka proxy adapter
-
-Organizations with managed Kafka infrastructure often have a push-based
-consumer proxy rather than a pull-based consumer. The proxy delivers messages
-via gRPC push, and the service returns commit/retry/stash decisions per
-message. This inverts the typical consumer pattern.
-
-The adapter bridges this by managing a gRPC server with a dynamic topic
-handler registry:
-
-```go
-// adapter.go — implements node.KafkaAdapter
-type proxyAdapter struct {
-    server  *ProxyServer
-    handler *TableHandler
-    topic   string
-}
-
-func (a *proxyAdapter) Start(ctx context.Context) {
-    // Register this table's handler with the shared proxy server.
-    // The server routes incoming messages to handlers by topic.
-    a.server.Register(a.topic, a.handler)
-    <-ctx.Done() // block until the node shuts down this source
-}
-
-func (a *proxyAdapter) Stop() {
-    // Deregister before context cancellation, so in-flight messages
-    // for this topic are drained gracefully.
-    a.server.Deregister(a.topic)
-}
-```
-
-The factory reads Kafka settings from the `KafkaSource` struct:
-
-```go
-func NewProxyAdapterFactory(server *ProxyServer) node.KafkaAdapterFactory {
-    return func(
-        source *metastore.KafkaSource,
-        ingestSvc *ingestion.Service,
-        log *zap.Logger,
-    ) (node.KafkaAdapter, error) {
-        if source.Topic == "" {
-            return nil, kafka.ErrNotConfigured
-        }
-        transformer := NewTransformer(source.RecordTransformer)
-        handler := NewTableHandler(source.TableName, transformer, ingestSvc)
-        return &proxyAdapter{
-            server:  server,
-            handler: handler,
-            topic:   source.Topic,
-        }, nil
-    }
-}
-```
-
-Key design details from real-world implementation:
-
-- **Dynamic registration.** The proxy server is long-lived (started once at
-  service boot), but sources come and go as the `KafkaIngestionUnit` starts
-  and stops adapters. The `Register`/`Deregister` pattern lets the adapter
-  lifecycle track the source lifecycle without restarting the server.
-
-- **Flush-before-commit.** The `TableHandler` blocks on the ingestion
-  pipeline's flush callback before returning success to the proxy. This
-  ensures at-least-once delivery — the proxy doesn't commit the offset until
-  the record is durably written to the database.
-
-- **Concurrent message handling.** The proxy delivers batches of messages.
-  Handler goroutines process them concurrently, with actions collected via a
-  channel and sent back to the proxy in order.
-
-**Wire in your binary:**
-
-```go
-func main() {
-    proxySrv, _ := proxy.NewServer(9091, log)
-    n, _ := node.NewNode(cfg, log,
-        node.WithKafkaAdapterFactory(proxy.NewProxyAdapterFactory(proxySrv)),
-    )
-    proxySrv.Start()
-    n.Start()
-}
-```
-
----
-
-### 4. Consolidation Policies
+### 2. Consolidation Policies
 
 **Package:** `coordinator/consolidation` · **Interface:** `Policy`
 
@@ -424,7 +218,7 @@ Policies are evaluated in order (waterfall). See [Consolidation](../concepts/con
 
 ---
 
-### 5. Telemetry Exporters (metrics backend)
+### 3. Telemetry Exporters (metrics backend)
 
 **Package:** `telemetry` · **Interface:** `ExporterFactory`
 
@@ -474,7 +268,7 @@ options (it uses the health port).
 
 ---
 
-### 6. Record Transformers (semantic enrichment)
+### 4. Record Transformers (semantic enrichment)
 
 **Package:** `coordinator/ingestion` · **Interface:** `RecordTransformer`
 
@@ -531,23 +325,6 @@ format is identical. This means:
 
 If you use a different proto code generator, you'll need a thin conversion
 package that maps between your generated types and metalog's `FileRecord`.
-Place this in a shared package (not inside a transport handler) so both your
-RPC and Kafka paths can reuse it.
-
-### Proto conversion layer architecture
-
-When both RPC and Kafka ingestion paths exist, they both need proto-to-domain
-conversion. The conversion should be a shared leaf package:
-
-```
-rpc/ingestion.go   ──imports──►  protoconv/  ──imports──►  metalog/metastore
-rpc/query.go       ──imports──►  metalog/query
-kafka/handler.go   ──imports──►  protoconv/  ──imports──►  metalog/metastore
-```
-
-If the conversion lived inside the RPC handler package, the Kafka handler would
-need to import the RPC layer just to convert records — coupling two unrelated
-transports. A shared `protoconv` package keeps them independent.
 
 ### Monorepo and Bazel integration
 
@@ -598,7 +375,7 @@ production deployments use two pools from the same binary:
 
 | Pool | Role |
 |------|------|
-| **Coordinator pool** | Ingestion, schema evolution, task scheduling, retention scanning, Kafka consumption (via KafkaIngestionUnit) |
+| **Coordinator pool** | Ingestion, schema evolution, task scheduling, retention scanning |
 | **Worker pool** | CLP compression and consolidation tasks |
 
 The pool is selected at runtime via a config file or environment variable.
@@ -623,17 +400,12 @@ This keeps the binary identical and simplifies rollouts.
    metalog's reference gRPC handler and your custom handler call this — ~20
    lines each instead of ~100 duplicated lines of column mapping.
 
-4. **`kafka.ErrNotConfigured` sentinel.** Your adapter factory returns this
-   when a table doesn't use Kafka. The caller detects it and silently skips
-   Kafka setup. No error logs, no special handling needed.
-
-5. **`BackendMeta.RequiresBucket`.** Tells metalog whether your storage uses
+4. **`BackendMeta.RequiresBucket`.** Tells metalog whether your storage uses
    bucket-scoped addressing (like S3) or flat keys (like an HTTP blob store).
    Archive paths are constructed accordingly without backend-specific logic.
 
-6. **Per-table config via `_table_config` JSON and `_kafka_source` rows.**
-   Policy configs are per-table via `_table_config`; Kafka source settings
-   (topic, bootstrap servers, transformer) are per-source via `_kafka_source`.
+5. **Per-table config via `_table_config` JSON.**
+   Policy configs are per-table via `_table_config`.
    Tables with different producers or different consolidation needs coexist
    in the same metastore without code changes.
 
@@ -644,8 +416,6 @@ This keeps the binary identical and simplifies rollouts.
 | Extension Point | Interface | Registration | Config |
 |----------------|-----------|--------------|--------|
 | Storage Backends | `storage.Backend` | `storage.RegisterType()` | `node.yaml` `storage.backends` |
-| Message Transformers | `kafka.MessageTransformer` | `kafka.RegisterTransformer()` | `_kafka_source` `record_transformer` |
-| Kafka Adapters | `node.KafkaAdapter` | `node.WithKafkaAdapterFactory()` | Programmatic (`NodeOption`) |
 | Consolidation Policies | `consolidation.Policy` | `consolidation.RegisterPolicyType()` | `_table_config` `consolidation.policies` |
 | Telemetry Exporters | `telemetry.ExporterFactory` | `telemetry.RegisterExporter()` | `node.yaml` `telemetry.exporter` |
 | Record Transformers | `ingestion.RecordTransformer` | `ingestion.RegisterRecordTransformer()` | Not yet wired |
@@ -654,7 +424,6 @@ This keeps the binary identical and simplifies rollouts.
 
 ## See Also
 
-- [Write Transformers](write-transformers.md) — Transformer implementation walkthrough
 - [Configure Tables](configure-tables.md) — Per-table config schema and activation
 - [Configuration Reference](../reference/configuration.md) — `node.yaml` reference
 - [Consolidation](../concepts/consolidation.md) — Policy evaluation and task distribution

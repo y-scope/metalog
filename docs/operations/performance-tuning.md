@@ -13,7 +13,6 @@ Rough measured characteristics on a local testcontainers-go setup:
 | Metric | Ballpark | Notes |
 |--------|----------|-------|
 | **batch-UPSERT (gRPC)** | ~32,000 records/sec | Default mode (batch size 5000, MariaDB) |
-| **Kafka ingestion** | ~10,000 rec/sec | Kafka path (consumer poll + reconciliation overhead) |
 | **Query (Pending Files)** | < 50ms | With proper indexing |
 
 > **Critical:** These numbers require proper database driver configuration. See [Performance Gotchas](#performance-gotchas).
@@ -39,15 +38,14 @@ In production, each file goes through multiple state transitions (3-5 upserts pe
 
 ### Single Coordinator Constraints
 
-Both gRPC and Kafka ingestion paths share the same `BatchingWriter` — each active table gets a dedicated `tableWriter` goroutine that batch-UPSERTs to the database. Measured throughput: gRPC concurrent push achieves ~32K rec/sec, while Kafka consumption reaches ~10K rec/sec (limited by consumer poll overhead and reconciliation).
+The `BatchingWriter` gives each active table a dedicated `tableWriter` goroutine that batch-UPSERTs to the database. Measured throughput: gRPC concurrent push achieves ~32K rec/sec.
 
 ### Goroutine Architecture Benefits
 
-**Per-coordinator goroutines (up to 6 per table):**
+**Per-coordinator goroutines (up to 5 per table):**
 
 | Goroutine | Purpose | Throughput Impact |
 |-----------|---------|-------------------|
-| **Kafka Consumer** | Hides Kafka latency, sustains ~10K rec/sec (Kafka path) |
 | **Planner** | Task creation, policy evaluation, completion processing |
 | **Retention Strategy** | Three-phase cleanup (transition → delete rows → delete storage), rate-limited at 500 ops/sec |
 | **Partition Maintenance** | Lookahead creation, old partition merge/drop |
@@ -84,9 +82,9 @@ Optimal batch sizes for database batch-UPSERT (with `interpolateParams=true` in 
 
 ### 1. Horizontal Scaling (Multiple Coordinators)
 
-Each coordinator is responsible for an **independent** database table (and optionally a Kafka topic). This provides workload isolation rather than shared scaling.
+Each coordinator is responsible for an **independent** database table. This provides workload isolation rather than shared scaling.
 
-Each coordinator owns an independent database table (one-to-one mapping). For Kafka ingestion, each coordinator also owns a dedicated Kafka topic. Total throughput scales linearly with coordinators. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
+Each coordinator owns an independent database table (one-to-one mapping). Total throughput scales linearly with coordinators. There is no contention between coordinators — this provides workload isolation (high-volume services don't impact others) rather than shared pool scaling.
 
 ### 2. Vertical Scaling
 
@@ -122,7 +120,6 @@ Throughput scales linearly with coordinators (each owns independent tables). Mea
    - Mitigation: Larger batches, horizontal scaling
 
 2. **Network Latency**
-   - Kafka polling: Mitigated by background consumer goroutine
    - Database commits: Batch operations reduce round trips
 
 3. **Memory**
@@ -133,7 +130,6 @@ Throughput scales linearly with coordinators (each owns independent tables). Mea
 
 - **CPU**: Metadata processing is I/O bound
 - **Database polling**: `UPDATE LIMIT` scales with workers
-- **Kafka**: Can sustain 50K+ msg/sec easily
 
 ---
 
@@ -143,8 +139,7 @@ Throughput scales linearly with coordinators (each owns independent tables). Mea
 2. **Scale horizontally** when approaching 80% capacity
 3. **Monitor database slow query log** for index optimization opportunities
 4. **Keep default batch size of 5000** unless you need lower latency (decrease to 500 for latency-sensitive workloads)
-5. **Enable Kafka consumer backpressure** (gRPC path returns `RESOURCE_EXHAUSTED` when queue is full; Kafka path uses built-in consumer backpressure)
-6. **Verify DSN settings** - see [Performance Gotchas](#performance-gotchas) for critical configuration
+5. **Verify DSN settings** - see [Performance Gotchas](#performance-gotchas) for critical configuration
 
 ---
 
@@ -184,15 +179,7 @@ The Go implementation uses `strings.Builder` to construct multi-row INSERT state
 
 **Recommendation:** The default of 5000 balances throughput and latency. Run the ingestion benchmark to measure other batch sizes on your hardware.
 
-### 3. Kafka Consumer Design
-
-The Go Kafka consumer uses a **single-threaded poll loop** — all consumer operations (`Poll()`, `CommitOffsets()`, offset tracking) happen on one goroutine. This eliminates the thread-safety issues common with multi-threaded Kafka consumers.
-
-The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` channels each poll cycle, and `commitPending()` commits the highest confirmed offset per partition. No mutex, no goroutine-per-message.
-
-**Shutdown** is handled by cancelling the consumer's context, which causes `Poll()` to return. The consumer drains remaining flushes and commits final offsets before exiting.
-
-### 5. Index Overhead
+### 3. Index Overhead
 
 **Problem:** The `clp_spark` table has 7 base indexes, each updated on every INSERT. Dimension indexes are added dynamically by `IndexManager` as new `dim_*` columns are discovered.
 
@@ -226,17 +213,10 @@ The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` 
 
 ## End-to-End Benchmark
 
-The unified ingestion benchmark exercises the full pipeline against real Docker infrastructure (MariaDB, optionally Kafka). It starts containers via testcontainers, runs the coordinator in-process, produces records, and reports throughput.
+The unified ingestion benchmark exercises the full pipeline against real Docker infrastructure (MariaDB). It starts containers via testcontainers, runs the coordinator in-process, produces records via gRPC, and reports throughput.
 
 ```bash
-# gRPC mode (default — just MariaDB)
 go run ./test/benchmarks/ingestion --mode grpc -r 100000
-
-# Kafka protobuf mode (MariaDB + Kafka)
-go run ./test/benchmarks/ingestion --mode kafka-proto -r 100000
-
-# Kafka JSON mode (MariaDB + Kafka)
-go run ./test/benchmarks/ingestion --mode kafka-json -r 100000
 ```
 
 See the [Summary](#summary) table for expected throughput ranges. Results vary by hardware — run the benchmark to get numbers for your environment.
@@ -297,17 +277,7 @@ go run ./test/benchmarks/task-queue-scalability -w 50,100 -b 1,5 -t 50
 
 ### Replication Considerations
 
-By default, keep `_task_queue` replicated for simpler failover (tasks resume exactly where they left off).
-
-For edge cases with extremely high task churn, `_task_queue` can optionally be excluded from semi-sync replication since it's recoverable from Kafka:
-
-```ini
-# Replica my.cnf (optional, not recommended for most deployments)
-[mysqld]
-replicate-ignore-table=metalog_metastore._task_queue
-```
-
-On failover, the new coordinator reuses the same Kafka consumer group ID and resumes from the last committed offset. No checkpoint table is needed. See [Coordinator HA Design: Resumption State](../design/coordinator-ha.md#a3-resumption-state) for details.
+By default, keep `_task_queue` replicated for simpler failover (tasks resume exactly where they left off). See [Coordinator HA Design: Resumption State](../design/coordinator-ha.md#a3-resumption-state) for details.
 
 ---
 

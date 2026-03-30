@@ -87,8 +87,6 @@ Key metrics exposed:
 | `metalog_ingestion_records_flushed` | Counter | Records flushed to DB (by table, status) |
 | `metalog_ingestion_flush_duration_seconds` | Histogram | Batch flush latency (by table) |
 | `metalog_ingestion_submit_rejected` | Counter | Records rejected (by table, reason) |
-| `metalog_kafka_messages_consumed` | Counter | Kafka messages consumed (by topic) |
-| `metalog_kafka_messages_failed` | Counter | Kafka message failures (by topic, reason) |
 
 For custom exporters (Datadog, M3, etc.), see [Extending — Telemetry Exporters](../guides/extending.md#5-telemetry-exporters-metrics-backend).
 
@@ -148,20 +146,6 @@ SELECT * FROM _task_queue WHERE state = 'dead_letter';
 
 Any `dead_letter` rows require manual investigation. They indicate repeated worker failures (storage errors, corrupt IR files, CLP binary crashes).
 
-### Kafka consumer lag
-
-Monitor via standard Kafka tooling:
-
-```bash
-# Check consumer group lag (replace <table_id> with the UUID from _table.table_id)
-kafka-consumer-groups.sh \
-  --bootstrap-server kafka:9092 \
-  --describe \
-  --group clp-coordinator-clp_spark-<table_id>
-```
-
-Consumer group IDs follow the pattern `clp-coordinator-{table_name}-{table_id}`, where `table_id` is the UUID from `_table.table_id`. The UUID suffix ensures uniqueness across environments sharing the same Kafka cluster. Lag > 0 during steady state is normal (batch window); lag growing continuously indicates the coordinator is not keeping up.
-
 ### Node liveness (heartbeat mode)
 
 ```sql
@@ -184,7 +168,7 @@ Alert if `seconds_stale > deadNodeThresholdSeconds` (default 180) — this is wh
 | Node dead | `last_heartbeat_at < NOW() - 180s` (heartbeat mode) | Critical | HA failover should be in progress; verify reconciliation is running |
 | Task queue growing | `pending count increasing over 10 min` | Warning | Scale up workers; check for storage errors |
 | Dead-letter tasks | `dead_letter count > 0` | Warning | Investigate worker logs; may indicate corrupt files or storage issues |
-| No recent ingestion | `files created in last 5 min = 0` (when traffic expected) | Critical | Check producer, Kafka consumer lag, coordinator logs |
+| No recent ingestion | `files created in last 5 min = 0` (when traffic expected) | Critical | Check producer, coordinator logs |
 | Health endpoint down | `/health/live` returns non-200 | Critical | Process crash or OOM; restart pod |
 
 ---

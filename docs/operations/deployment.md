@@ -13,7 +13,7 @@ Production deployment patterns for the CLP Metastore Service.
 All components run in one process. Suitable for development, testing, and small single-table deployments.
 
 ```bash
-# Start infrastructure (MariaDB, Kafka, MinIO) and coordinator nodes
+# Start infrastructure (MariaDB, MinIO) and coordinator nodes
 ./docker/start.sh -d
 
 # Or run the binary directly against the running infrastructure
@@ -96,10 +96,10 @@ Worst-case failover time with defaults: ~4 minutes (3 min dead threshold + up to
 
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
-| CPU | 2 cores | 4 cores | Metadata processing is I/O-bound; extra cores help Kafka polling |
+| CPU | 2 cores | 4 cores | Metadata processing is I/O-bound |
 | Memory | 512 MB | 2 GB | BatchingWriter queues, InFlightSet, task queue |
 | Disk | Minimal | 20 GB | Log files only; no data stored locally |
-| Network | 100 Mbps | 1 Gbps | Database writes, Kafka consumption |
+| Network | 100 Mbps | 1 Gbps | Database writes |
 
 One coordinator handles ~32,000 records/sec sustained (gRPC path). For throughput above 115M records/hour, add coordinators (each owns independent tables). See [Performance Tuning](performance-tuning.md) for benchmarks.
 
@@ -272,7 +272,7 @@ env:
 
 The service supports zero-downtime rolling updates because:
 
-1. **Coordinators** use the HA liveness mechanism — a node that goes silent becomes claimable after the dead threshold (default 3 min). The replacement pod starts, claims the table, and resumes from the last committed Kafka offset.
+1. **Coordinators** use the HA liveness mechanism — a node that goes silent becomes claimable after the dead threshold (default 3 min). The replacement pod starts and claims the table.
 
 2. **Workers** are stateless — they can be stopped and restarted at any time. Tasks that were in-progress are automatically reclaimed by the Planner after the task stale timeout (default 5 min, defined in `config/timeouts.go`).
 

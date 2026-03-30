@@ -336,7 +336,7 @@ Standard MySQL recommended. Vitess is supported but suboptimal:
 | File Records | `metastore/filerecords.go` |
 | Partition Manager | `schema/partitionmanager.go` |
 | Performance | [Performance Tuning](../operations/performance-tuning.md) |
-| Benchmark | `go run ./test/benchmarks/ingestion --mode kafka-proto`, `go run ./test/benchmarks/ingestion --mode grpc` |
+| Benchmark | `go run ./test/benchmarks/ingestion --mode grpc` |
 
 **Critical DSN setting:** `interpolateParams=true` required for optimal performance — avoids server-side prepared statements and reduces round-trips.
 

@@ -254,11 +254,11 @@ The 1-minute polling interval means alias changes propagate to all nodes within 
 
 ## Demo
 
-The Kafka ingestion benchmark exercises automatic schema evolution end-to-end. It starts MariaDB and Kafka, runs the coordinator, and produces records that introduce new dimensions and aggregates — triggering live `ALTER TABLE ADD COLUMN` operations:
+The gRPC ingestion benchmark exercises automatic schema evolution end-to-end. It starts MariaDB, runs the coordinator, and produces records that introduce new dimensions and aggregates — triggering live `ALTER TABLE ADD COLUMN` operations:
 
 ```bash
 # From the metalog directory
-go run ./test/benchmarks/ingestion --mode kafka-proto --records 10000
+go run ./test/benchmarks/ingestion --mode grpc --records 10000
 ```
 
 Prerequisites: Docker, Go 1.25+.

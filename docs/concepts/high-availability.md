@@ -21,7 +21,7 @@ How nodes coordinate, detect failures, and recover automatically — without Zoo
 
 ## Coordination Model
 
-Each metadata table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally Kafka consumer and planner). Ownership is tracked in `_table_assignment` — a database table where `node_id` indicates the current owner.
+Each metadata table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally planner). Ownership is tracked in `_table_assignment` — a database table where `node_id` indicates the current owner.
 
 ### Two HA Strategies
 
@@ -100,8 +100,7 @@ Step 4 handles split-brain: if a network partition caused another node to claim 
 
 1. Initialize schema and components
 2. **[BLOCKING]** Ensure lookahead partitions exist (one-time check)
-3. Recover from restart (Kafka consumer group resumes from last committed offset)
-4. Start goroutines: Partition Maintenance, Alias Refresh, Column Recycler, and conditionally Kafka Consumer, Planner, Retention Strategy
+3. Start goroutines: Partition Maintenance, Alias Refresh, Column Recycler, and conditionally Planner, Retention Strategy
 
 ### Shutdown Sequence
 

@@ -135,11 +135,11 @@ Because `expires_at ≈ min_timestamp + retention`, and rows within a partition 
 
 ## UPSERT Strategy
 
-Metadata is written via `INSERT ... ON DUPLICATE KEY UPDATE` — every write is an upsert. The first message for a file inserts a new row; subsequent messages update the existing row in place. This enables at-least-once delivery from both Kafka and gRPC without requiring the caller to distinguish inserts from updates.
+Metadata is written via `INSERT ... ON DUPLICATE KEY UPDATE` — every write is an upsert. The first message for a file inserts a new row; subsequent messages update the existing row in place. This enables at-least-once delivery from gRPC without requiring the caller to distinguish inserts from updates.
 
 ### Guarded Updates
 
-Not every update should succeed. Once a file progresses past buffering (e.g., picked up by the Planner for consolidation), late re-deliveries from Kafka must not regress its state. Two guards prevent this:
+Not every update should succeed. Once a file progresses past buffering (e.g., picked up by the Planner for consolidation), late re-deliveries must not regress its state. Two guards prevent this:
 
 | Guard | SQL Condition | Purpose |
 |-------|---------------|---------|

@@ -606,7 +606,7 @@ CLP Metastore (per file UPSERT):
 
 ### Horizontal Scaling
 
-CLP scales via **independent topic/table pairs** within a shared database. Each tenant has its own Kafka topic, database table, and coordinator — logical isolation while sharing infrastructure.
+CLP scales via **independent table/coordinator pairs** within a shared database. Each tenant has its own database table and coordinator — logical isolation while sharing infrastructure.
 
 ### What About Other Metastores?
 

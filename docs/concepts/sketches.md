@@ -91,7 +91,7 @@ Producer (clp-ffi-go)
   → BloomFilter.Observe(value)     // insert into SBBF
   → BloomFilter.MarshalMsgpack()   // serialize {type, data}
 
-Proto / Kafka
+Proto (gRPC)
   → SketchEntry { sketch_key, data }   // msgpack bytes in proto
 
 Service.IngestWithCallback()
@@ -115,21 +115,6 @@ message SketchEntry {
   bytes  data       = 2;  // msgpack-encoded BloomFilterSnapshot
 }
 ```
-
-**Kafka JSON (self-describing key):**
-
-```json
-{
-  "self_describing_kv": [
-    {
-      "key": "sketch/parquet_sbbf_xxhash64/uuid",
-      "value": "<base64 raw SBBF block bytes>"
-    }
-  ]
-}
-```
-
-The self-describing format puts the type in the key and the raw filter bytes (not msgpack) in the value. The Kafka consumer reconstructs the msgpack snapshot from the key components.
 
 ---
 

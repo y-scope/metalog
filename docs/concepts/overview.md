@@ -24,17 +24,14 @@ graph TD
     Client["Client SDK"]
     S3[("Object Storage<br/>(IR + Archives)")]
     IngestionGRPC["gRPC Ingestion"]
-    Kafka["Kafka"]
     Coord["Coordinator"]
     DB[("Database")]
     Workers["Worker Pool (stateless)"]
 
     Producers --> Client
     Client -->|"(1) write files"| S3
-    Client -->|"(1a) send metadata"| IngestionGRPC
-    Client -->|"(1b) publish metadata"| Kafka
-    IngestionGRPC -->|"(2a) commit-then-ack"| Coord
-    Kafka -->|"(2b) poll-consume"| Coord
+    Client -->|"(1) send metadata"| IngestionGRPC
+    IngestionGRPC -->|"(2) commit-then-ack"| Coord
     Coord -->|"(2) batch-UPSERT"| DB
     S3 <-->|"(3) read/write"| Workers
     Workers -->|"(3) prefetch/complete tasks"| DB
@@ -54,7 +51,7 @@ graph TD
 
 **How data flows through the system:**
 
-1. **Ingestion** — the Client SDK writes files (IR or archives) to object storage and sends file metadata to the coordinator via gRPC (push, commit-then-ack) or Kafka (pull, poll-based consumption). IR files may be destined for consolidation into archives or left as-is.
+1. **Ingestion** — the Client SDK writes files (IR or archives) to object storage and sends file metadata to the coordinator via gRPC (push, commit-then-ack). IR files may be destined for consolidation into archives or left as-is.
 2. **Persistence** — the coordinator batch-UPSERTs metadata to the database and generates workflow tasks (e.g., consolidation).
 3. **Processing** — a `Prefetcher` batch-claims tasks from `_task_queue`; workers pull tasks from the in-memory queue, consolidate IR → Archive, and report results back for metadata updates.
 4. **Data access** — the Query Service exposes metadata via gRPC; queries go to database replicas when available, primary otherwise.
@@ -69,7 +66,7 @@ The entry type determines the initial state. When retention expires, the coordin
 
 ```mermaid
 graph TD
-    A["Producer writes file to storage,<br/>sends metadata (gRPC or Kafka)"]
+    A["Producer writes file to storage,<br/>sends metadata (gRPC)"]
     B["Coordinator ingests metadata<br/>and batch-UPSERT to metadata table"]
 
     A --> B
@@ -94,10 +91,10 @@ graph TD
 
 ### Coordinator
 
-Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). Kafka consumption is handled separately by the `KafkaIngestionUnit`, which manages per-source consumer goroutines independently of the CoordinatorUnit. Both ingestion paths feed into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
+Each table is owned by exactly one node at a time. The owner runs per-table lifecycle goroutines (retention strategy, partition maintenance, alias refresh, and optionally planner); every node runs shared goroutines (gRPC ingestion, BatchingWriter, HA & maintenance). gRPC ingestion feeds into the BatchingWriter, which batch-UPSERTs metadata to the database. See the [README](../../README.md#architecture) for visual diagrams.
 
 - **[Coordinator HA](../design/coordinator-ha.md)** — database-backed liveness, orphan detection, failover, edge cases
-- **[Ingestion Paths](ingestion.md)** — gRPC and Kafka protocols, BatchingWriter, choosing a path
+- **[Ingestion Paths](ingestion.md)** — gRPC protocol, BatchingWriter
 
 ### Workers
 
@@ -125,7 +122,7 @@ MariaDB 10.4+ or MySQL 8.0+ (auto-detected). The single source of truth for all 
 
 ## Goroutine Model
 
-Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` settings (retention, planner). Kafka consumption is handled by the `KafkaIngestionUnit`, which runs per-source goroutines independently of the CoordinatorUnit.
+Goroutines are split across two levels: **per-coordinator** goroutines that each CoordinatorUnit owns, and **Node-level** goroutines shared across all coordinators in the process. Three per-coordinator goroutines are always-on (partition maintenance, alias refresh, column recycler); two are conditional on `_table_config` settings (retention, planner).
 
 Workers are independent of the coordinator goroutine model. Each worker node runs a single `Prefetcher` goroutine that batch-claims tasks from the database, plus N worker goroutines consuming from a shared channel. For development and testing, they run inside the same process (`worker.concurrency` in `node.yaml`); in production, they run as separate processes (see [Scale Workers](../guides/scale-workers.md)).
 
@@ -141,23 +138,15 @@ Each CoordinatorUnit owns these goroutines. They are created when a coordinator 
 | 4 | **Column Recycler** | Yes | Database | Database | Hourly scan to reclaim INVALIDATED column slots |
 | 5 | **Planner** | No | Database (MVCC) | _task_queue table, InFlightSet | Task creation, policy evaluation (requires `consolidation.enabled`) |
 
-### Per-Source Goroutines (KafkaIngestionUnit)
-
-Kafka consumption is decoupled from the CoordinatorUnit. The `KafkaIngestionUnit` manages one consumer goroutine per Kafka source (registered in `_kafka_source`). Sources are assigned to nodes via `_kafka_assignment` and can be filtered by `required_env` for multi-region deployments.
-
-| Goroutine | Name | Reads From | Writes To | Purpose |
-|-----------|------|------------|-----------|---------|
-| 1 per source | **Kafka Consumer** | Kafka | BatchingWriter channel | Continuous metadata ingestion |
-
 ### Node-Level Data Path Goroutines
 
 On the ingestion critical path. The Node creates the `BatchingWriter` at startup; `tableWriter` goroutines are lazily spawned per table on first submit.
 
 | Goroutine | Name | Scope | Purpose |
 |-----------|------|-------|---------|
-| — | **BatchingWriter** | 1 `tableWriter` goroutine per active table | Batch-UPSERT metadata from both Kafka and gRPC |
+| — | **BatchingWriter** | 1 `tableWriter` goroutine per active table | Batch-UPSERT metadata from gRPC |
 
-Both gRPC and Kafka ingestion paths submit to the same `BatchingWriter`. Each active table gets a dedicated `tableWriter` goroutine that drains a buffered `chan *FileRecord` and batch-UPSERTs to the database.
+gRPC ingestion submits to the `BatchingWriter`. Each active table gets a dedicated `tableWriter` goroutine that drains a buffered `chan *FileRecord` and batch-UPSERTs to the database.
 
 ### Node-Level HA & Maintenance Goroutines
 
@@ -180,18 +169,6 @@ Periodic background goroutines for coordination and housekeeping. Created once a
 | 4 | `BatchingWriter` | Routes to per-table `tableWriter` channel, batches records, UPSERT to database |
 | 5 | Response | Ack sent to client after record is accepted onto the channel (async DB commit) |
 
-**Ingestion Path (Kafka → Database):**
-
-| Step | Component | Action |
-|------|-----------|--------|
-| 1 | Kafka | Produces metadata messages |
-| 2 | Kafka Consumer | `Poll()` → transform → `IngestWithCallbackWait()` submits to BatchingWriter with `Flushed chan error` (blocking) |
-| 3 | BatchingWriter | Routes to per-table `tableWriter` channel |
-| 4 | tableWriter goroutine | Drains channel → batch-UPSERT to database → signals `Flushed` channels |
-| 5 | Kafka Consumer | `drainFlushes()` checks completed flushes non-blockingly, queues offsets for commit |
-
-The Kafka consumer runs a single-threaded poll loop: poll messages, submit to BatchingWriter with a per-record `Flushed chan error`, then non-blockingly drain completed flushes to advance Kafka offsets. No goroutine-per-message — all state is single-threaded on the poll loop.
-
 **Task Distribution Path (Database → Workers):**
 
 | Step | Component | Action |
@@ -208,7 +185,7 @@ The Kafka consumer runs a single-threaded poll loop: poll messages, submit to Ba
 
 | Structure | Type | Capacity | Writers | Readers |
 |-----------|------|----------|---------|---------|
-| BatchingWriter channel | Buffered `chan *FileRecord` per table | Configurable | Kafka Consumer, gRPC service | tableWriter goroutine (Node-level) |
+| BatchingWriter channel | Buffered `chan *FileRecord` per table | Configurable | gRPC service | tableWriter goroutine (Node-level) |
 | _task_queue | Database table | unbounded | Planner | Workers (via Prefetcher) |
 | Prefetcher channel | Buffered `chan *Task` | batchSize × 2 | Prefetcher goroutine | Worker goroutines |
 | InFlightSet | `sync.RWMutex` + `map[string]struct{}` | unbounded | Planner | Planner |
@@ -220,7 +197,7 @@ The Kafka consumer runs a single-threaded poll loop: poll messages, submit to Ba
 | **Single Writer** | tableWriter → database metadata (1 goroutine per table) | No deadlocks, no contention |
 | **MVCC Reads** | Planner ← database | Lock-free reads |
 | **Buffered Channels** | BatchingWriter per-table, Prefetcher task channel | Backpressure, prevents OOM |
-| **`chan error` notification** | `FileRecord.Flushed` | Kafka consumer learns when records are durably committed |
+| **`chan error` notification** | `FileRecord.Flushed` | Callers learn when records are durably committed |
 | **Context cancellation** | All goroutines | Graceful shutdown propagation |
 | **Two-phase shutdown** | WorkerUnit | Stop Prefetcher first (no new claims), drain workers, force-cancel after timeout |
 | **FOR UPDATE + UPDATE** | Worker → _task_queue | Transactional task claiming |

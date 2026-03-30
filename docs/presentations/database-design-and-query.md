@@ -313,10 +313,8 @@ Every design decision compounds:
 | Path | Measured | vs. Sustained (~400/sec) | vs. 10x Burst (~4K/sec) |
 |------|---------|-------------------------|-------------------------|
 | gRPC push (MariaDB) | ~32K/sec | ~80x headroom | ~8x headroom |
-| Kafka protobuf (2 partitions) | ~10K/sec | ~25x headroom | ~2.5x headroom |
-| Kafka JSON (2 partitions) | ~10K/sec | ~25x headroom | ~2.5x headroom |
 
-Each table has its own writer goroutine — multiple tables multiply throughput with no cross-table contention. Kafka throughput (~10K/sec) is limited by consumer-side processing, not database write speed.
+Each table has its own writer goroutine — multiple tables multiply throughput with no cross-table contention.
 
 ---
 

@@ -83,22 +83,6 @@ SHOW PROCESSLIST;
 
 ## Ingestion Issues
 
-### Kafka consumer lag growing
-
-**Symptom:** `kafka-consumer-groups.sh --describe` shows lag increasing over time.
-
-**Causes:**
-
-1. **BatchingWriter channel full** — coordinator is receiving records faster than it can write to the DB. The Kafka consumer blocks (`SubmitWait`) until space opens, stopping the poll loop and propagating backpressure. No messages are dropped, but lag increases. Fix: increase `database.poolSize`, or reduce Kafka topic throughput.
-
-2. **Database write speed insufficient** — check slow query log and verify `interpolateParams=true` in the DSN. Without it, each parameter requires a separate protocol round-trip.
-
-3. **Coordinator not owning the table** — verify the table has an active assignment:
-   ```sql
-   SELECT table_name, node_id FROM _table_assignment WHERE table_name = 'clp_spark';
-   ```
-   If `node_id` is NULL, no coordinator has claimed the table. Check reconciliation logs.
-
 ### gRPC ingestion returns RESOURCE_EXHAUSTED
 
 **Symptom:** gRPC ingestion clients receive `StatusRuntimeException: RESOURCE_EXHAUSTED`.
@@ -153,7 +137,6 @@ WARN  restarting stalled coordinator
 **Symptom:** Logs show repeated coordinator restarts for the same table.
 
 Indicates a persistent error in one of the per-coordinator goroutines. Check for:
-- Kafka Consumer: Kafka broker unreachable, topic deleted
 - Planner: database connectivity, task queue corruption
 - Storage Deletion: object storage unreachable
 - Retention Cleanup: slow `DELETE` queries, lock contention
@@ -248,16 +231,6 @@ The daily partition for the file's `min_timestamp` does not exist. Causes:
 ---
 
 ## Common Error Messages
-
-### Kafka consumer errors during shutdown
-
-**Cause:** The Kafka consumer receives errors during shutdown if the context is cancelled while a `Poll()` call is in progress.
-
-**Where it appears:** During coordinator shutdown — typically a benign log message indicating the poll was interrupted.
-
-**Fix:** Ensure graceful shutdown by sending `SIGTERM` (not `SIGKILL`). The coordinator shutdown sequence cancels the consumer's context, which causes `Poll()` to return. The consumer then drains remaining flushes and commits final offsets before exiting. If you see unexpected errors in production, check for:
-- `kill -9` being used by your container orchestrator
-- `terminationGracePeriodSeconds` too short in Kubernetes (increase to at least 60s)
 
 ### `sort column "x" is not indexed`
 

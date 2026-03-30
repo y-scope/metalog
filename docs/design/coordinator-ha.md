@@ -24,7 +24,6 @@ When a node starts:
    - **Liveness goroutine** — heartbeat mode writes to `_node_registry`; lease mode renews `lease_expiry`
 
    Per-table (one instance per claimed table):
-   - **Kafka consumer** — if enabled, polls Kafka and submits records to the node-level BatchingWriter (see [Ingestion Paths](../concepts/ingestion.md))
    - **Lifecycle goroutines** — planner, retention, storage deletion
 
 ### Liveness Detection
@@ -330,11 +329,7 @@ MariaDB/MySQL is a single point of failure for both coordination and data storag
 
 ### A.3 Resumption State
 
-When a new owner takes over, it starts a Kafka consumer with the same consumer group ID as the previous owner (`clp-coordinator-{table_name}-{table_id}`). This ID is deterministic — derived from the table, not the node — so any node that claims the table gets the same ID.
-
-Kafka brokers track how far each consumer group has read (the "committed offset"). Because the new owner reuses the same group ID, Kafka automatically delivers messages starting from where the old owner left off. No offset is stored in the database.
-
-If the old owner crashed before committing its latest offset, some messages may be re-delivered. This is safe because all metadata operations are idempotent (UPSERTs with forward-only state transitions) — re-processing the same message produces the same result.
+When a new owner takes over a table, it resumes processing from the current database state. No external offset tracking is needed. All metadata operations are idempotent (UPSERTs with forward-only state transitions), so any re-processing produces the same result.
 
 ---
 
@@ -411,7 +406,7 @@ Three designs were evaluated:
 
 ### Design C: Ruled Out
 
-An external consensus cluster adds a dependency to a service that must function during outages. If ZooKeeper is down when failover is needed, the mechanism fails precisely when it matters most. Kafka spent years migrating away from ZooKeeper (KRaft) for similar reasons.
+An external consensus cluster adds a dependency to a service that must function during outages. If ZooKeeper is down when failover is needed, the mechanism fails precisely when it matters most.
 
 ### Where A and B Are Equivalent
 
@@ -443,7 +438,7 @@ Design B's simplicity advantage (one fewer table, one fewer goroutine) is real b
 
 - [Deploy HA](../guides/deploy-ha.md) — Operational HA configuration, graceful migration, shutdown
 - [Architecture Overview](../concepts/overview.md) — System overview and deployment options
-- [Ingestion Paths](../concepts/ingestion.md) — gRPC and Kafka protocols, BatchingWriter
+- [Ingestion Paths](../concepts/ingestion.md) — gRPC ingestion, BatchingWriter
 - [Configuration](../reference/configuration.md) — HA strategy and heartbeat/lease settings
 - [Task Queue Design](task-queue.md) — Task recovery on failover
 - [Metadata Schema: Partitioning](../concepts/metadata-schema.md#partitioning) — Daily partitions, advisory lock coordination

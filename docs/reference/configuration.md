@@ -8,7 +8,7 @@ Configuration is loaded from `node.yaml` (node-level settings). Per-table config
 
 ## node.yaml — Node Settings
 
-Settings are organized by role: shared resources (`database`, `storage`), network (`grpc`, `health`), coordinator logic (`coordinator`), and worker pool (`worker`). Per-table configuration (Kafka routing, feature flags) is managed via the admin gRPC API and stored in the database.
+Settings are organized by role: shared resources (`database`, `storage`), network (`grpc`, `health`), coordinator logic (`coordinator`), and worker pool (`worker`). Per-table configuration (feature flags) is managed via the admin gRPC API and stored in the database.
 
 ```yaml
 database:
@@ -220,6 +220,5 @@ All schema setup is automatic. On startup, the node creates the database, initia
 - [Performance Tuning](../operations/performance-tuning.md) — DSN tuning, batch size impact
 - [Deploy HA](../guides/deploy-ha.md) — Node assignment, liveness, and failover
 - [Scale Workers](../guides/scale-workers.md) — Scaling worker nodes and `concurrency` tuning
-- [Ingestion Paths](../concepts/ingestion.md) — gRPC vs Kafka ingestion, when to use each
-- [Write Transformers](../guides/write-transformers.md) — Transformer interface and registration
+- [Ingestion Paths](../concepts/ingestion.md) — gRPC ingestion
 - [Schema Evolution](../guides/evolve-schema.md) — Online DDL for new fields
