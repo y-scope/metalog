@@ -1,5 +1,3 @@
-//go:build integration
-
 package consolidation_test
 
 import (
@@ -19,9 +17,9 @@ import (
 
 const plannerTable = "test_planner"
 
-func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Planner, *taskqueue.Queue) {
+func setupPlannerIT(t *testing.T) (*testutil.DBContainer, *consolidation.Planner, *taskqueue.Queue) {
 	t.Helper()
-	mc := testutil.SetupMariaDB(t)
+	mc := testutil.SetupDB(t)
 	mc.LoadSchema(t)
 	mc.CreateTestTable(t, plannerTable)
 
@@ -51,15 +49,15 @@ func setupPlannerIT(t *testing.T) (*testutil.MariaDBContainer, *consolidation.Pl
 
 func insertConsolidationPendingFiles(t *testing.T, db *sql.DB, count int) {
 	t.Helper()
-	baseTs := int64(1704067200000000000)
+	baseTS := int64(1704067200000000000)
 	for i := 0; i < count; i++ {
 		query, args, err := sq.Insert("`"+plannerTable+"`").
 			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 				"clp_ir_storage_backend", "clp_ir_bucket",
 				"state", "record_count", "retention_days", "expires_at").
 			Values(
-				baseTs+int64(i)*1000000,
-				baseTs+int64(i)*1000000+500000,
+				baseTS+int64(i)*1000000,
+				baseTS+int64(i)*1000000+500000,
 				fmt.Sprintf("/data/consolidation_%d.ir", i),
 				"minio", "logs",
 				"IR_ARCHIVE_CONSOLIDATION_PENDING",
@@ -115,7 +113,7 @@ func TestPlanner_NoTasksForInsufficientFiles(t *testing.T) {
 }
 
 func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
-	mc := testutil.SetupMariaDB(t)
+	mc := testutil.SetupDB(t)
 	defer mc.Teardown(t)
 	mc.LoadSchema(t)
 	mc.CreateTestTable(t, plannerTable)
@@ -144,15 +142,15 @@ func TestPlanner_PromotesStuckBufferingFiles(t *testing.T) {
 	}
 
 	// Insert stuck IR_ARCHIVE_BUFFERING files with old timestamps.
-	baseTs := int64(1704067200000000000)
+	baseTS := int64(1704067200000000000)
 	for i := 0; i < 5; i++ {
 		query, args, sqlErr := sq.Insert("`"+plannerTable+"`").
 			Columns("min_timestamp", "max_timestamp", "clp_ir_path",
 				"clp_ir_storage_backend", "clp_ir_bucket",
 				"state", "record_count", "retention_days", "expires_at").
 			Values(
-				baseTs+int64(i)*1000000,
-				baseTs+int64(i)*1000000+500000,
+				baseTS+int64(i)*1000000,
+				baseTS+int64(i)*1000000+500000,
 				fmt.Sprintf("/data/stuck_%d.ir", i),
 				"minio", "logs",
 				"IR_ARCHIVE_BUFFERING",
