@@ -45,11 +45,31 @@ func (s *Resources) SetColumnRegistry(tableName string, reg *schema.ColumnRegist
 	s.registries[tableName] = reg
 }
 
-// GetColumnRegistry returns the column registry for a table, or nil.
+// GetColumnRegistry returns the column registry for a table.
+// If no registry is cached (e.g. the table is not assigned to this node),
+// one is loaded on-demand from the database. This allows any node to serve
+// read-only queries regardless of table assignment.
 func (s *Resources) GetColumnRegistry(tableName string) *schema.ColumnRegistry {
+	// Fast path: check cache.
 	s.regMu.RLock()
-	defer s.regMu.RUnlock()
-	return s.registries[tableName]
+	if reg, ok := s.registries[tableName]; ok {
+		s.regMu.RUnlock()
+		return reg
+	}
+	s.regMu.RUnlock()
+
+	// Slow path: load from DB (read-only operation).
+	reg, err := schema.NewColumnRegistry(context.Background(), s.ReadOnlyDB(), tableName, s.IsMariaDB, s.Log)
+	if err != nil {
+		s.Log.Warn("failed to load column registry on demand",
+			zap.String("table", tableName), zap.Error(err))
+		return nil
+	}
+
+	// Cache for future queries. If a coordinator starts for this table later,
+	// SetColumnRegistry will overwrite with its own registry.
+	s.SetColumnRegistry(tableName, reg)
+	return reg
 }
 
 // Close releases all shared resources. Database pools are only closed
