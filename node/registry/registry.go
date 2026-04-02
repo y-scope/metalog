@@ -43,6 +43,13 @@ func (r *Registry) EnsureSystemTables(ctx context.Context) error {
 		if stmt == "" {
 			continue
 		}
+		// Strip MariaDB-specific IF [NOT] EXISTS from ALTER TABLE statements
+		// for MySQL compatibility. The idempotent error handler below catches
+		// the equivalent MySQL errors (1060, 1091).
+		if !r.isMariaDB && strings.Contains(stmt, "ALTER TABLE") {
+			stmt = strings.ReplaceAll(stmt, " IF NOT EXISTS", "")
+			stmt = strings.ReplaceAll(stmt, " IF EXISTS", "")
+		}
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
 			// ALTER TABLE migrations are idempotent — tolerate "already exists"
 			// and "can't DROP" errors but propagate real failures (permissions,
