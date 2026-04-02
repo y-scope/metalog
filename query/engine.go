@@ -180,6 +180,12 @@ func (e *SplitQueryEngine) StreamSplitsAsync(
 	// Background producer: fetches pages and pushes to channel.
 	go func() {
 		defer close(ch)
+
+		if producerCtx.Err() != nil {
+			e.log.Warn("producer context already cancelled before first page")
+			return
+		}
+
 		cv := cursorValues
 		cid := cursorID
 		totalSent := 0
@@ -426,7 +432,13 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 		}
 		orderClauses = append(orderClauses, db.QuoteIdentifier(ob.Column)+" "+dir)
 	}
-	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" ASC")
+	// The id tiebreaker must match the primary sort direction to allow the
+	// database to use a composite index scan instead of a filesort.
+	idDir := "ASC"
+	if len(resolvedOrderBy) > 0 && resolvedOrderBy[0].Desc {
+		idDir = "DESC"
+	}
+	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" "+idDir)
 
 	return &preparedQuery{
 		tableName:        params.TableName,
@@ -474,6 +486,11 @@ func (e *SplitQueryEngine) executePage(
 		return nil, fmt.Errorf("build query: %w", err)
 	}
 
+	e.log.Info("executing split query",
+		zap.String("sql", sqlStr),
+		zap.Int("limit", limit),
+	)
+
 	rows, err := e.db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("execute query: %w", err)
@@ -484,6 +501,8 @@ func (e *SplitQueryEngine) executePage(
 	if err != nil {
 		return nil, fmt.Errorf("query: columns: %w", err)
 	}
+
+	e.log.Info("split query returned", zap.Int("columnCount", len(columns)))
 
 	var results []*SplitWithCursor
 	for rows.Next() {
@@ -523,6 +542,7 @@ func (e *SplitQueryEngine) executePage(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query: rows: %w", err)
 	}
+	e.log.Info("split query results", zap.Int("rows", len(results)))
 	return results, nil
 }
 
@@ -566,7 +586,12 @@ func buildKeysetWhere(orderBy []OrderBySpec, cursorValues []any, cursorID int64)
 	}
 	cols[n] = db.QuoteIdentifier(metastore.ColID)
 	vals[n] = cursorID
-	descs[n] = false // id is always ASC
+	// id tiebreaker direction matches the primary sort direction.
+	if n > 0 {
+		descs[n] = orderBy[0].Desc
+	} else {
+		descs[n] = false
+	}
 
 	// Build OR branches for keyset pagination with NULL support.
 	//
