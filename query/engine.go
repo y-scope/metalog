@@ -63,6 +63,7 @@ type QueryParams struct {
 	CursorID       int64
 	HasCursor      bool
 	AllowUnindexed bool
+	QueryTimeout   time.Duration
 }
 
 // OrderBySpec defines a sort column and direction.
@@ -106,6 +107,7 @@ type preparedQuery struct {
 	orderBy          []OrderBySpec
 	orderClauses     []string
 	sketchPredicates []SketchPredicate
+	queryTimeout     time.Duration
 }
 
 // Query executes a single-page query and returns rows. This is the original
@@ -440,6 +442,11 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 	}
 	orderClauses = append(orderClauses, db.QuoteIdentifier(metastore.ColID)+" "+idDir)
 
+	queryTimeout := params.QueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = 30 * time.Second
+	}
+
 	return &preparedQuery{
 		tableName:        params.TableName,
 		cols:             cols,
@@ -448,6 +455,7 @@ func (e *SplitQueryEngine) prepareQuery(params *QueryParams) (*preparedQuery, er
 		orderClauses:     orderClauses,
 		sketchPredicates: sketchPredicates,
 		sketchExtExpr:    sketchExtExpr,
+		queryTimeout:     queryTimeout,
 	}, nil
 }
 
@@ -491,7 +499,11 @@ func (e *SplitQueryEngine) executePage(
 		zap.Int("limit", limit),
 	)
 
-	rows, err := e.db.QueryContext(ctx, sqlStr, args...)
+	// Apply per-page query timeout to guard against slow queries (e.g., filesort).
+	queryCtx, queryCancel := context.WithTimeout(ctx, pq.queryTimeout)
+	defer queryCancel()
+
+	rows, err := e.db.QueryContext(queryCtx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("execute query: %w", err)
 	}
