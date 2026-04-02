@@ -304,7 +304,6 @@ type StreamSplitsRequest struct {
 	IncludeCursor       bool          `protobuf:"varint,17,opt,name=include_cursor,json=includeCursor,proto3" json:"include_cursor,omitempty"`                       // include continuation cursor in responses
 	StreamIdleTimeoutMs int64         `protobuf:"varint,18,opt,name=stream_idle_timeout_ms,json=streamIdleTimeoutMs,proto3" json:"stream_idle_timeout_ms,omitempty"` // max idle wait before server closes stream (0 = default 60s)
 	AllowUnindexedSort  bool          `protobuf:"varint,19,opt,name=allow_unindexed_sort,json=allowUnindexedSort,proto3" json:"allow_unindexed_sort,omitempty"`      // allow sorting on non-indexed columns (full scan)
-	QueryTimeoutMs      int64         `protobuf:"varint,20,opt,name=query_timeout_ms,json=queryTimeoutMs,proto3" json:"query_timeout_ms,omitempty"`                  // per-page SQL query timeout (0 = default 30s)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -407,13 +406,6 @@ func (x *StreamSplitsRequest) GetAllowUnindexedSort() bool {
 		return x.AllowUnindexedSort
 	}
 	return false
-}
-
-func (x *StreamSplitsRequest) GetQueryTimeoutMs() int64 {
-	if x != nil {
-		return x.QueryTimeoutMs
-	}
-	return 0
 }
 
 type StreamSplitsResponse struct {
@@ -951,7 +943,7 @@ const file_splits_proto_rawDesc = "" +
 	"\aint_val\x18\x01 \x01(\x03H\x00R\x06intVal\x12\x1d\n" +
 	"\tfloat_val\x18\x02 \x01(\x01H\x00R\bfloatVal\x12\x19\n" +
 	"\astr_val\x18\x03 \x01(\tH\x00R\x06strValB\a\n" +
-	"\x05value\"\x95\x04\n" +
+	"\x05value\"\xeb\x03\n" +
 	"\x13StreamSplitsRequest\x12\x14\n" +
 	"\x05table\x18\x01 \x01(\tR\x05table\x12\x1e\n" +
 	"\n" +
@@ -964,8 +956,7 @@ const file_splits_proto_rawDesc = "" +
 	"\x06cursor\x18\x10 \x01(\v25.com.yscope.metalog.query.api.proto.grpc.KeysetCursorR\x06cursor\x12%\n" +
 	"\x0einclude_cursor\x18\x11 \x01(\bR\rincludeCursor\x123\n" +
 	"\x16stream_idle_timeout_ms\x18\x12 \x01(\x03R\x13streamIdleTimeoutMs\x120\n" +
-	"\x14allow_unindexed_sort\x18\x13 \x01(\bR\x12allowUnindexedSort\x12(\n" +
-	"\x10query_timeout_ms\x18\x14 \x01(\x03R\x0equeryTimeoutMsJ\x04\b\a\x10\x10\"\xa6\x02\n" +
+	"\x14allow_unindexed_sort\x18\x13 \x01(\bR\x12allowUnindexedSortJ\x04\b\a\x10\x10\"\xa6\x02\n" +
 	"\x14StreamSplitsResponse\x12D\n" +
 	"\x05split\x18\x01 \x01(\v2..com.yscope.metalog.query.api.proto.grpc.SplitR\x05split\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x05R\bsequence\x12I\n" +

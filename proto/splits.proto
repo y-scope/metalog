@@ -48,7 +48,6 @@ message StreamSplitsRequest {
     bool include_cursor = 17;                   // include continuation cursor in responses
     int64 stream_idle_timeout_ms = 18;          // max idle wait before server closes stream (0 = default 60s)
     bool allow_unindexed_sort = 19;             // allow sorting on non-indexed columns (full scan)
-    int64 query_timeout_ms = 20;                // per-page SQL query timeout (0 = default 30s)
 }
 
 message StreamSplitsResponse {
