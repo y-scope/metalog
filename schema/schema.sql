@@ -481,7 +481,7 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- Operational indexes
     INDEX idx_consolidation (state, min_timestamp ASC),  -- Coordinator: pending files, oldest first
     INDEX idx_expiration (expires_at ASC),               -- Retention: expired files
-    INDEX idx_max_timestamp (max_timestamp DESC)     -- Queries: time-range overlap
+    INDEX idx_max_timestamp (max_timestamp DESC, id DESC)  -- Queries: time-range overlap (id DESC for keyset pagination)
 
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
