@@ -8,6 +8,7 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
+	"github.com/y-scope/metalog/config"
 	dbutil "github.com/y-scope/metalog/db"
 )
 
@@ -77,7 +78,12 @@ func (fr *FileRecords) UpsertBatch(
 			}
 		}
 
-		res, err := fr.db.ExecContext(ctx, query, allArgs...)
+		var res sql.Result
+		err = dbutil.WithDeadlockRetry(ctx, config.DefaultDeadlockMaxRetries, func() error {
+			var execErr error
+			res, execErr = fr.db.ExecContext(ctx, query, allArgs...)
+			return execErr
+		})
 		if err != nil {
 			return totalAffected, fmt.Errorf("upsert batch: %w", err)
 		}
