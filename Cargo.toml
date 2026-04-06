@@ -5,6 +5,7 @@ members = [
     "crates/metalog-encoding",
     "crates/metalog-timeutil",
     "crates/metalog-logutil",
+    "crates/metalog-config",
 ]
 
 [workspace.package]
@@ -30,3 +31,13 @@ tracing = "0.1"
 # Error handling
 thiserror = "2"
 anyhow = "1"
+
+# YAML
+serde_yaml = "0.9"
+
+# System
+hostname = "0.4"
+which = "7"
+
+# Internal crates
+metalog-types = { path = "crates/metalog-types" }
