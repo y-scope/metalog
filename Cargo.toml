@@ -12,6 +12,7 @@ members = [
     "crates/metalog-proto",
     "crates/metalog-ingestion",
     "crates/metalog-coordinator",
+    "crates/metalog-query",
 ]
 
 [workspace.package]
@@ -38,6 +39,9 @@ tracing = "0.1"
 tonic = "0.12"
 tonic-build = "0.12"
 prost = "0.13"
+
+# SQL parsing
+sqlparser = "0.53"
 
 # Error handling
 thiserror = "2"
