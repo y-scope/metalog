@@ -10,6 +10,7 @@ members = [
     "crates/metalog-metastore",
     "crates/metalog-schema",
     "crates/metalog-proto",
+    "crates/metalog-ingestion",
 ]
 
 [workspace.package]
@@ -66,6 +67,9 @@ which = "7"
 metalog-types = { path = "crates/metalog-types" }
 metalog-config = { path = "crates/metalog-config" }
 metalog-db = { path = "crates/metalog-db" }
+metalog-encoding = { path = "crates/metalog-encoding" }
+metalog-proto = { path = "crates/metalog-proto" }
+metalog-schema = { path = "crates/metalog-schema" }
 metalog-metastore = { path = "crates/metalog-metastore" }
 metalog-timeutil = { path = "crates/metalog-timeutil" }
 metalog-logutil = { path = "crates/metalog-logutil" }
