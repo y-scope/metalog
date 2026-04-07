@@ -89,22 +89,33 @@ impl SplitQueryEngine {
         let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
 
         let mut results = Vec::with_capacity(rows.len());
-        for row in &rows {
+
+        // Detect column types from the first row, then reuse for subsequent rows.
+        // Avoids repeated try_get failures (each creates a discarded error).
+        let mut col_types: Vec<ColType> = Vec::new();
+
+        for (row_idx, row) in rows.iter().enumerate() {
             use sqlx::Row;
             let mut split_row = SplitRow::new();
-            for col in row.columns() {
-                let name = col.name().to_string();
-                // Try to extract as various types.
-                if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else {
-                    split_row.insert(name, serde_json::Value::Null);
+
+            if row_idx == 0 {
+                // First row: detect types via try cascade, cache the result.
+                col_types.reserve(row.columns().len());
+                for col in row.columns() {
+                    let name = col.name().to_string();
+                    let (val, typ) = detect_column_value(row, col.ordinal());
+                    col_types.push(typ);
+                    split_row.insert(name, val);
+                }
+            } else {
+                // Subsequent rows: use cached types directly.
+                for (col, typ) in row.columns().iter().zip(col_types.iter()) {
+                    let name = col.name().to_string();
+                    let val = extract_by_type(row, col.ordinal(), *typ);
+                    split_row.insert(name, val);
                 }
             }
+
             results.push(split_row);
         }
 
@@ -206,6 +217,56 @@ impl SplitQueryEngine {
         conditions.push(format!("({id_prefix} AND `id` {id_op} {cursor_id})"));
 
         conditions.join(" OR ")
+    }
+}
+
+/// Column type detected from the first row, cached for subsequent rows.
+#[derive(Debug, Clone, Copy)]
+enum ColType {
+    Int,
+    Str,
+    Float,
+    Null,
+}
+
+/// Detects the column type by trying i64, String, f64 in order.
+fn detect_column_value(
+    row: &sqlx::mysql::MySqlRow,
+    ordinal: usize,
+) -> (serde_json::Value, ColType) {
+    use sqlx::Row;
+    if let Ok(v) = row.try_get::<i64, _>(ordinal) {
+        (serde_json::json!(v), ColType::Int)
+    } else if let Ok(v) = row.try_get::<String, _>(ordinal) {
+        (serde_json::json!(v), ColType::Str)
+    } else if let Ok(v) = row.try_get::<f64, _>(ordinal) {
+        (serde_json::json!(v), ColType::Float)
+    } else {
+        (serde_json::Value::Null, ColType::Null)
+    }
+}
+
+/// Extracts a value using the cached column type, avoiding failed try_get calls.
+fn extract_by_type(
+    row: &sqlx::mysql::MySqlRow,
+    ordinal: usize,
+    typ: ColType,
+) -> serde_json::Value {
+    use sqlx::Row;
+    match typ {
+        ColType::Int => row
+            .try_get::<i64, _>(ordinal)
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Str => row
+            .try_get::<String, _>(ordinal)
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Float => row
+            .try_get::<f64, _>(ordinal)
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Null => serde_json::Value::Null,
     }
 }
 
