@@ -54,13 +54,9 @@ struct Args {
     #[arg(long, default_value = "clp_spark")]
     table: String,
 
-    /// Maximum concurrent in-flight RPCs.
-    #[arg(long, default_value_t = 5_000)]
-    concurrency: usize,
-
-    /// Number of HTTP/2 connections to the server.
-    #[arg(long, default_value_t = 8)]
-    connections: usize,
+    /// Number of independent clients (each opens its own connection).
+    #[arg(long, default_value_t = 100)]
+    clients: usize,
 
     /// Use a real MariaDB via testcontainers.
     #[arg(long)]
@@ -82,8 +78,7 @@ async fn main() {
     println!("========================================");
     println!("  Records     : {}", args.records);
     println!("  Apps        : {}", args.apps);
-    println!("  Concurrency : {}", args.concurrency);
-    println!("  Connections : {}", args.connections);
+    println!("  Clients     : {}", args.clients);
     println!("  Batch size  : {}", args.batch_size);
     println!("  With DB     : {}", args.with_db);
     println!("  Table       : {}", args.table);
@@ -157,15 +152,8 @@ async fn run_with_db(args: &Args) {
     .await;
 
     // Run benchmark.
-    let (accepted, rejected, elapsed) = run_grpc(
-        addr,
-        &args.table,
-        args.records,
-        args.apps,
-        args.concurrency,
-        args.connections,
-    )
-    .await;
+    let (accepted, rejected, elapsed) =
+        run_grpc(addr, &args.table, args.records, args.apps, args.clients).await;
 
     // Wait for BatchingWriter to flush remaining records.
     println!("Stopping writer (flushing remaining batches)...");
@@ -184,15 +172,8 @@ async fn run_with_db(args: &Args) {
 async fn run_channel_only(args: &Args) {
     let (addr, _writer) = start_server_no_db(args.batch_size).await;
 
-    let (accepted, rejected, elapsed) = run_grpc(
-        addr,
-        &args.table,
-        args.records,
-        args.apps,
-        args.concurrency,
-        args.connections,
-    )
-    .await;
+    let (accepted, rejected, elapsed) =
+        run_grpc(addr, &args.table, args.records, args.apps, args.clients).await;
 
     print_results(args, accepted, rejected, elapsed, None);
 }
@@ -281,42 +262,49 @@ async fn start_server_no_db(batch_size: usize) -> (SocketAddr, Arc<BatchingWrite
     (addr, writer)
 }
 
-/// Runs the gRPC benchmark using IngestionClientPool.
+/// Runs the gRPC benchmark simulating independent clients.
+///
+/// Each worker creates its own HTTP/2 connection (separate `Channel`),
+/// simulating the production pattern where many SDK clients connect
+/// independently. This avoids the single-connection h2 bottleneck entirely.
 async fn run_grpc(
     addr: SocketAddr,
     table: &str,
     records: usize,
     apps: usize,
-    concurrency: usize,
-    num_connections: usize,
+    num_clients: usize,
 ) -> (i64, i64, Duration) {
     let accepted = Arc::new(AtomicI64::new(0));
     let rejected = Arc::new(AtomicI64::new(0));
 
     let endpoint = format!("http://{addr}");
-    let pool = Arc::new(
-        metalog_grpc::IngestionClientPool::connect(&endpoint, num_connections)
-            .await
-            .unwrap(),
-    );
-
-    let (tx, rx) = async_channel::bounded::<usize>(concurrency);
+    let (tx, rx) = async_channel::bounded::<usize>(num_clients);
 
     let start = Instant::now();
 
+    // Each worker = one independent client with its own connection.
     let mut join_set = JoinSet::new();
-    for _ in 0..concurrency {
+    for _ in 0..num_clients {
         let rx = rx.clone();
-        let pool = pool.clone();
         let accepted = accepted.clone();
         let rejected = rejected.clone();
         let table = table.to_string();
+        let endpoint = endpoint.clone();
 
         join_set.spawn(async move {
+            // Each worker opens its own HTTP/2 connection — simulates
+            // independent SDK clients in production.
+            let channel = tonic::transport::Channel::from_shared(endpoint)
+                .unwrap()
+                .connect()
+                .await
+                .unwrap();
+            let mut client = metalog_proto::MetadataIngestionServiceClient::new(channel);
+
             while let Ok(idx) = rx.recv().await {
                 let req = build_ingest_request(&table, idx, apps);
 
-                match pool.ingest(req).await {
+                match client.ingest(tonic::Request::new(req)).await {
                     Ok(resp) => {
                         if resp.into_inner().accepted {
                             accepted.fetch_add(1, Ordering::Relaxed);
