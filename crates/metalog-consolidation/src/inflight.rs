@@ -17,6 +17,7 @@ impl InFlightSet {
 
     /// Atomically adds all paths if none are already present.
     /// Returns false (and adds nothing) if any path is already in-flight.
+    #[must_use]
     pub fn try_add(&self, paths: &[String]) -> bool {
         let mut set = self.paths.write().unwrap();
         for path in paths {
@@ -73,7 +74,7 @@ mod tests {
     #[test]
     fn try_add_conflict() {
         let set = InFlightSet::new();
-        set.try_add(&["a.ir".into()]);
+        let _ = set.try_add(&["a.ir".into()]);
         // Adding a set that overlaps should fail.
         assert!(!set.try_add(&["a.ir".into(), "c.ir".into()]));
         // Nothing from the failed set should be added.
@@ -84,7 +85,7 @@ mod tests {
     #[test]
     fn remove() {
         let set = InFlightSet::new();
-        set.try_add(&["a.ir".into(), "b.ir".into()]);
+        let _ = set.try_add(&["a.ir".into(), "b.ir".into()]);
         set.remove(&["a.ir".into()]);
         assert!(!set.contains("a.ir"));
         assert!(set.contains("b.ir"));

@@ -143,8 +143,6 @@ impl Node {
         });
 
         tracing::info!(table = table_name, "coordinator started");
-        self.token.clone().drop_guard(); // Keep token alive
-
         Ok(())
     }
 

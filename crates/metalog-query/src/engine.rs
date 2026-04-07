@@ -211,6 +211,7 @@ impl SplitQueryEngine {
 
 /// Escapes a value for safe SQL embedding in keyset WHERE clauses.
 /// Wraps in single quotes with backslash/quote escaping.
+/// Escapes a value for safe SQL embedding. Handles all MySQL-special characters.
 fn escape_sql_value(val: &str) -> String {
     let mut escaped = String::with_capacity(val.len() + 2);
     escaped.push('\'');
@@ -218,6 +219,10 @@ fn escape_sql_value(val: &str) -> String {
         match c {
             '\'' => escaped.push_str("\\'"),
             '\\' => escaped.push_str("\\\\"),
+            '\0' => escaped.push_str("\\0"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\x1a' => escaped.push_str("\\Z"),
             _ => escaped.push(c),
         }
     }

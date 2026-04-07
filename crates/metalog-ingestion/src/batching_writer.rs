@@ -184,27 +184,23 @@ async fn table_writer_loop(mut ctx: WriterContext, mut rx: mpsc::Receiver<FileRe
                 if n == 0 {
                     // Channel closed — flush remaining and exit.
                     if !batch.is_empty() {
-                        do_flush(&mut ctx, &mut batch).await;
+                        flush_batch(&mut ctx, &mut batch).await;
                     }
                     break;
                 }
                 if batch.len() >= ctx.batch_size {
-                    do_flush(&mut ctx, &mut batch).await;
+                    flush_batch(&mut ctx, &mut batch).await;
                 }
             }
             _ = tick.tick() => {
                 if !batch.is_empty() {
-                    do_flush(&mut ctx, &mut batch).await;
+                    flush_batch(&mut ctx, &mut batch).await;
                 }
             }
         }
     }
 
     tracing::info!(table = %ctx.table_name, "table writer stopped");
-}
-
-async fn do_flush(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
-    flush_batch(ctx, batch).await;
 }
 
 /// Maximum rows per INSERT statement. Matches Go's MaxMultiRowInsert = 1000.
@@ -254,15 +250,20 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
             }
         }
     }
-    let dim_mappings: Vec<(String, String)> = ctx
-        .dim_cache
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
     // Build or reuse SQL template (only rebuilds when dim columns change).
-    if ctx.sql_prefix.is_none() || ctx.dim_cache.len() != dim_mappings.len() {
-        let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_mappings);
+
+    if ctx.sql_prefix.is_none()
+        || ctx
+            .sql_suffix
+            .as_ref()
+            .is_none_or(|_| ctx.sql_prefix.is_none())
+    {
+        let dim_cols: Vec<(&str, &str)> = ctx
+            .dim_cache
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_cols);
         ctx.sql_prefix = Some(prefix);
         ctx.sql_suffix = Some(suffix);
     }
@@ -270,13 +271,16 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
     let sql_suffix = ctx.sql_suffix.as_ref().unwrap();
     let t_resolve = t0.elapsed();
 
+    // Collect dim keys for value lookup (references only, no cloning).
+    let dim_keys: Vec<&str> = ctx.dim_cache.keys().map(|k| k.as_str()).collect();
+
     // Build and execute INSERT in chunks.
     for chunk in batch.chunks(MAX_ROWS_PER_INSERT) {
         if let Err(e) = execute_upsert(
             &ctx.db,
             &ctx.mysql_pool,
             chunk,
-            &dim_mappings,
+            &dim_keys,
             sql_prefix,
             sql_suffix,
         )
@@ -304,7 +308,7 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
 /// (native text protocol, single round-trip). Falls back to sqlx otherwise.
 /// Builds the SQL template (prefix + suffix) for UPSERT.
 /// Only needs to be rebuilt when dim columns change.
-fn build_sql_template(table_name: &str, dim_mappings: &[(String, String)]) -> (String, String) {
+fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (String, String) {
     let mut col_names: Vec<&str> = vec![
         "min_timestamp",
         "max_timestamp",
@@ -324,9 +328,9 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(String, String)]) -> (S
         "expires_at",
     ];
 
-    let dim_col_strings: Vec<String> = dim_mappings.iter().map(|(_, col)| col.clone()).collect();
+    let dim_col_strings: Vec<&str> = dim_mappings.iter().map(|(_, col)| *col).collect();
     for col in &dim_col_strings {
-        col_names.push(col);
+        col_names.push(*col);
     }
 
     let cols_sql = col_names
@@ -382,7 +386,7 @@ async fn execute_upsert(
     db: &MySqlPool,
     mysql_pool: &Option<mysql_async::Pool>,
     records: &[FileRecord],
-    dim_mappings: &[(String, String)],
+    dim_keys: &[&str],
     sql_prefix: &str,
     sql_suffix: &str,
 ) -> Result<(), sqlx::Error> {
@@ -403,13 +407,13 @@ async fn execute_upsert(
         values_buf.push('(');
         write!(values_buf, "{},{}", rec.min_timestamp, rec.max_timestamp).unwrap();
         write_escaped(&mut values_buf, rec.state.as_db_str());
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_storage_backend);
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_bucket);
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_path);
+        write_escaped_opt(&mut values_buf, rec.clp_ir_storage_backend.as_deref());
+        write_escaped_opt(&mut values_buf, rec.clp_ir_bucket.as_deref());
+        write_escaped_opt(&mut values_buf, rec.clp_ir_path.as_deref());
         write!(values_buf, ",{}", rec.clp_ir_size_bytes).unwrap();
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_storage_backend);
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_bucket);
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_path);
+        write_escaped_opt(&mut values_buf, rec.clp_archive_storage_backend.as_deref());
+        write_escaped_opt(&mut values_buf, rec.clp_archive_bucket.as_deref());
+        write_escaped_opt(&mut values_buf, rec.clp_archive_path.as_deref());
         write!(
             values_buf,
             ",{},{},{},{},{},{}",
@@ -421,8 +425,8 @@ async fn execute_upsert(
             rec.expires_at,
         )
         .unwrap();
-        for (logical_key, _) in dim_mappings {
-            match rec.dims.get(logical_key) {
+        for logical_key in dim_keys {
+            match rec.dims.get(*logical_key) {
                 Some(serde_json::Value::String(s)) => write_escaped(&mut values_buf, s),
                 Some(serde_json::Value::Number(n)) => write!(values_buf, ",{n}").unwrap(),
                 Some(serde_json::Value::Bool(b)) => {
@@ -467,12 +471,17 @@ async fn execute_upsert(
 }
 
 /// Writes `,'{escaped_value}'` into the buffer.
+/// Escapes all MySQL-special characters per the MySQL C API `mysql_real_escape_string`.
 fn write_escaped(buf: &mut String, s: &str) {
     buf.push_str(",'");
     for c in s.chars() {
         match c {
             '\'' => buf.push_str("\\'"),
             '\\' => buf.push_str("\\\\"),
+            '\0' => buf.push_str("\\0"),
+            '\n' => buf.push_str("\\n"),
+            '\r' => buf.push_str("\\r"),
+            '\x1a' => buf.push_str("\\Z"), // Control-Z / EOF
             _ => buf.push(c),
         }
     }
@@ -480,7 +489,7 @@ fn write_escaped(buf: &mut String, s: &str) {
 }
 
 /// Writes `,'{escaped}'` or `,NULL` for an optional string.
-fn write_escaped_opt(buf: &mut String, opt: &Option<String>) {
+fn write_escaped_opt(buf: &mut String, opt: Option<&str>) {
     match opt {
         Some(s) if !s.is_empty() => write_escaped(buf, s),
         _ => buf.push_str(",NULL"),
