@@ -11,4 +11,6 @@ metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }
 metalog-timeutil = { workspace = true }
 sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
