@@ -19,7 +19,7 @@ impl InFlightSet {
     /// Returns false (and adds nothing) if any path is already in-flight.
     #[must_use]
     pub fn try_add(&self, paths: &[String]) -> bool {
-        let mut set = self.paths.write().unwrap();
+        let mut set = self.paths.write().unwrap_or_else(|e| e.into_inner());
         for path in paths {
             if set.contains(path) {
                 return false;
@@ -33,7 +33,7 @@ impl InFlightSet {
 
     /// Removes paths from the in-flight set.
     pub fn remove(&self, paths: &[String]) {
-        let mut set = self.paths.write().unwrap();
+        let mut set = self.paths.write().unwrap_or_else(|e| e.into_inner());
         for path in paths {
             set.remove(path);
         }
@@ -41,13 +41,13 @@ impl InFlightSet {
 
     /// Returns true if the path is currently in-flight.
     pub fn contains(&self, path: &str) -> bool {
-        let set = self.paths.read().unwrap();
+        let set = self.paths.read().unwrap_or_else(|e| e.into_inner());
         set.contains(path)
     }
 
     /// Returns the number of in-flight paths.
     pub fn size(&self) -> usize {
-        let set = self.paths.read().unwrap();
+        let set = self.paths.read().unwrap_or_else(|e| e.into_inner());
         set.len()
     }
 }
