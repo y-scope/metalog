@@ -20,12 +20,21 @@ pub fn validate_sql_identifier(name: &str) -> Result<(), IdentError> {
 ///
 /// # Panics
 ///
-/// Panics if `name` is not a valid SQL identifier.
+/// Panics if `name` is not a valid SQL identifier. All caller-facing APIs
+/// must validate identifiers at the boundary (gRPC handler) before reaching
+/// this function.
 pub fn quote_identifier(name: &str) -> String {
     validate_sql_identifier(name).unwrap_or_else(|_| {
-        panic!("invalid SQL identifier: {name:?}");
+        panic!("invalid SQL identifier: {name:?} — validate at the API boundary");
     });
     format!("`{name}`")
+}
+
+/// Like `quote_identifier` but returns `Result` instead of panicking.
+/// Use this when the identifier comes from user input.
+pub fn try_quote_identifier(name: &str) -> Result<String, IdentError> {
+    validate_sql_identifier(name)?;
+    Ok(format!("`{name}`"))
 }
 
 #[derive(Debug, thiserror::Error)]

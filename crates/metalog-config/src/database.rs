@@ -50,7 +50,7 @@ fn default_pool_min_idle() -> u32 {
 }
 
 impl DatabaseConfig {
-    /// Builds a MySQL DSN for sqlx.
+    /// Builds a MySQL DSN for sqlx. Contains plaintext password — do not log.
     ///
     /// Format: `mysql://user:password@host:port/database`
     pub fn dsn(&self) -> String {

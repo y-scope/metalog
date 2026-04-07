@@ -17,6 +17,6 @@ pub use errors::{
     mysql_error_code,
 };
 pub use pool::new_pool;
-pub use sqlident::{quote_identifier, validate_sql_identifier};
+pub use sqlident::{quote_identifier, try_quote_identifier, validate_sql_identifier};
 pub use tx::{with_deadlock_retry, with_tx, DEFAULT_MAX_RETRIES};
 pub use upsert::{on_duplicate_key_update_alias, on_duplicate_key_update_values};

@@ -29,7 +29,10 @@ pub fn datetime_to_nanos(dt: DateTime<Utc>) -> i64 {
 /// Returns the start of the UTC day (00:00:00) for the given epoch nanoseconds.
 pub fn day_boundary_nanos(nanos: i64) -> i64 {
     let dt = nanos_to_datetime(nanos);
-    let midnight = dt.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let midnight = dt
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is always valid for any date");
     Utc.from_utc_datetime(&midnight)
         .timestamp_nanos_opt()
         .unwrap_or(0)

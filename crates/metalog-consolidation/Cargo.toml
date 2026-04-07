@@ -12,6 +12,7 @@ metalog-metastore = { workspace = true }
 metalog-storage = { workspace = true }
 metalog-timeutil = { workspace = true }
 metalog-logutil = { workspace = true }
+async-channel = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

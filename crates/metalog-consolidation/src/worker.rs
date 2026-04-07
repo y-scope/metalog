@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::task_queue::{
@@ -41,7 +41,7 @@ impl Prefetcher {
     }
 
     /// Runs the prefetch loop, sending tasks to `tx` until cancelled.
-    pub async fn run(&self, token: CancellationToken, tx: mpsc::Sender<Task>) {
+    pub async fn run(&self, token: CancellationToken, tx: async_channel::Sender<Task>) {
         let mut backoff = POLL_INTERVAL;
 
         tracing::info!(table = %self.table_name, "prefetcher started");
@@ -112,7 +112,8 @@ impl WorkerUnit {
     /// Starts the worker unit: prefetcher + N worker tasks.
     /// Returns when the token is cancelled and all tasks drain.
     pub async fn run(&self, token: CancellationToken) {
-        let (tx, rx) = mpsc::channel::<Task>(self.concurrency * 2);
+        // async-channel supports multiple receivers without Mutex.
+        let (tx, rx) = async_channel::bounded::<Task>(self.concurrency * 2);
 
         // Start prefetcher.
         let pf_token = token.clone();
@@ -127,22 +128,14 @@ impl WorkerUnit {
             })
         };
 
-        // Start N worker tasks.
+        // Start N worker tasks (each gets its own rx clone — MPMC).
         let mut workers = JoinSet::new();
-        let rx = Arc::new(tokio::sync::Mutex::new(rx));
         for _ in 0..self.concurrency {
             let rx = rx.clone();
             let queue = self.queue.clone();
             workers.spawn(async move {
-                loop {
-                    let task = {
-                        let mut rx = rx.lock().await;
-                        rx.recv().await
-                    };
-                    match task {
-                        Some(task) => execute_task(&queue, task).await,
-                        None => break, // Channel closed.
-                    }
+                while let Ok(task) = rx.recv().await {
+                    execute_task(&queue, task).await;
                 }
             });
         }

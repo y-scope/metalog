@@ -174,21 +174,19 @@ impl SplitQueryEngine {
             let ob = &order_by[i];
             let col = quote_identifier(&ob.column);
             let op = if ob.desc { "<" } else { ">" };
-            let val = &cursor_values[i];
+            let val = escape_sql_value(&cursor_values[i]);
 
             if i == 0 {
-                // First column: simple comparison.
-                conditions.push(format!("({col} {op} '{val}')"));
+                conditions.push(format!("({col} {op} {val})"));
             } else {
-                // Subsequent columns: equality prefix + comparison.
                 let mut prefix_parts = Vec::new();
                 for j in 0..i {
                     let prev_col = quote_identifier(&order_by[j].column);
-                    let prev_val = &cursor_values[j];
-                    prefix_parts.push(format!("{prev_col} = '{prev_val}'"));
+                    let prev_val = escape_sql_value(&cursor_values[j]);
+                    prefix_parts.push(format!("{prev_col} = {prev_val}"));
                 }
                 let prefix = prefix_parts.join(" AND ");
-                conditions.push(format!("({prefix} AND {col} {op} '{val}')"));
+                conditions.push(format!("({prefix} AND {col} {op} {val})"));
             }
         }
 
@@ -201,14 +199,30 @@ impl SplitQueryEngine {
         let mut id_prefix_parts = Vec::new();
         for (j, ob) in order_by.iter().enumerate() {
             let col = quote_identifier(&ob.column);
-            let val = &cursor_values[j];
-            id_prefix_parts.push(format!("{col} = '{val}'"));
+            let val = escape_sql_value(&cursor_values[j]);
+            id_prefix_parts.push(format!("{col} = {val}"));
         }
         let id_prefix = id_prefix_parts.join(" AND ");
         conditions.push(format!("({id_prefix} AND `id` {id_op} {cursor_id})"));
 
         conditions.join(" OR ")
     }
+}
+
+/// Escapes a value for safe SQL embedding in keyset WHERE clauses.
+/// Wraps in single quotes with backslash/quote escaping.
+fn escape_sql_value(val: &str) -> String {
+    let mut escaped = String::with_capacity(val.len() + 2);
+    escaped.push('\'');
+    for c in val.chars() {
+        match c {
+            '\'' => escaped.push_str("\\'"),
+            '\\' => escaped.push_str("\\\\"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped.push('\'');
+    escaped
 }
 
 #[derive(Debug, thiserror::Error)]
