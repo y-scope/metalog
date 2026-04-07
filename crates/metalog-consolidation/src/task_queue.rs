@@ -92,7 +92,10 @@ impl Queue {
         Self { db }
     }
 
-    /// Creates tasks in batch (all pending).
+    /// Maximum rows per multi-row INSERT to stay within `max_allowed_packet`.
+    const MAX_ROWS_PER_INSERT: usize = 100;
+
+    /// Creates tasks in batch (all pending) using multi-row INSERT.
     pub async fn create_tasks(
         &self,
         table_name: &str,
@@ -104,19 +107,26 @@ impl Queue {
         }
         let now = epoch_nanos();
         let mut total = 0u64;
-        for input in inputs {
-            let result = sqlx::query(
+
+        for chunk in inputs.chunks(Self::MAX_ROWS_PER_INSERT) {
+            let placeholders: String = chunk
+                .iter()
+                .map(|_| "(?, 'pending', ?, ?, ?)")
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
                 "INSERT INTO _task_queue (table_name, state, version, input, created_at) VALUES \
-                 (?, 'pending', ?, ?, ?)",
-            )
-            .bind(table_name)
-            .bind(version)
-            .bind(input)
-            .bind(now)
-            .execute(&self.db)
-            .await?;
+                 {placeholders}"
+            );
+
+            let mut query = sqlx::query(&sql);
+            for input in chunk {
+                query = query.bind(table_name).bind(version).bind(input).bind(now);
+            }
+            let result = query.execute(&self.db).await?;
             total += result.rows_affected();
         }
+
         Ok(total)
     }
 
