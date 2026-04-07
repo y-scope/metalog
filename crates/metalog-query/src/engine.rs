@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use metalog_db::quote_identifier;
-use sqlx::MySqlPool;
+use sqlx::{Column, MySqlPool};
 
 /// Indexed sort columns that support efficient keyset pagination.
 const INDEXED_SORT_COLUMNS: &[&str] = &["min_timestamp", "max_timestamp"];
@@ -33,12 +33,82 @@ pub type SplitRow = HashMap<String, sqlx::types::JsonValue>;
 /// and caches rewritten filter expressions. Each page is fetched with a keyset
 /// WHERE clause built from the previous page's last row.
 pub struct SplitQueryEngine {
-    _db: MySqlPool,
+    db: MySqlPool,
 }
 
 impl SplitQueryEngine {
     pub fn new(db: MySqlPool) -> Self {
-        Self { _db: db }
+        Self { db }
+    }
+
+    /// Executes a single page of results with keyset pagination.
+    pub async fn execute_page(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        filter_expr: &str,
+        order_clauses: &[String],
+        keyset_where: &str,
+        limit: i32,
+    ) -> Result<Vec<SplitRow>, EngineError> {
+        let cols_sql = if columns.is_empty() {
+            "*".to_string()
+        } else {
+            columns
+                .iter()
+                .map(|c| quote_identifier(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let mut sql = format!("SELECT {cols_sql} FROM `{table_name}`");
+
+        // WHERE clauses.
+        let mut conditions = Vec::new();
+        if !filter_expr.is_empty() {
+            conditions.push(filter_expr.to_string());
+        }
+        if !keyset_where.is_empty() {
+            conditions.push(format!("({keyset_where})"));
+        }
+        if !conditions.is_empty() {
+            sql.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
+        }
+
+        // ORDER BY.
+        if !order_clauses.is_empty() {
+            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
+        }
+
+        // LIMIT (fetch limit+1 for truncation detection).
+        let fetch_limit = if limit > 0 { limit + 1 } else { 10000 };
+        sql.push_str(&format!(" LIMIT {fetch_limit}"));
+
+        tracing::info!(sql = %sql, "executing split query");
+
+        let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in &rows {
+            use sqlx::Row;
+            let mut split_row = SplitRow::new();
+            for col in row.columns() {
+                let name = col.name().to_string();
+                // Try to extract as various types.
+                if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
+                    split_row.insert(name, serde_json::json!(v));
+                } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
+                    split_row.insert(name, serde_json::json!(v));
+                } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
+                    split_row.insert(name, serde_json::json!(v));
+                } else {
+                    split_row.insert(name, serde_json::Value::Null);
+                }
+            }
+            results.push(split_row);
+        }
+
+        Ok(results)
     }
 
     /// Validates that all ORDER BY columns are indexed (unless `allow_unindexed` is set).

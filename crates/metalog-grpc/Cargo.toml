@@ -12,5 +12,6 @@ metalog-coordinator = { workspace = true }
 metalog-query = { workspace = true }
 metalog-metastore = { workspace = true }
 tonic = { workspace = true }
-tracing = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
