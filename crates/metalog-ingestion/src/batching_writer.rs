@@ -141,8 +141,10 @@ impl BatchingWriter {
             mysql_pool: self.mysql_pool.clone(),
             registries: self.registries.clone(),
             dim_cache: HashMap::new(),
+            dim_keys: Vec::new(),
             sql_prefix: None,
             sql_suffix: None,
+            sql_buf: String::new(),
             batch_size: self.batch_size,
             flush_interval: self.flush_interval,
         };
@@ -161,10 +163,14 @@ struct WriterContext {
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     /// Cached dim key → physical column mappings (persists across flushes).
     dim_cache: HashMap<String, String>,
+    /// Cached ordered dim keys (rebuilt when dim_cache changes).
+    dim_keys: Vec<String>,
     /// Cached SQL template: INSERT prefix + ON DUPLICATE KEY UPDATE suffix.
     /// Rebuilt only when dim columns change.
     sql_prefix: Option<String>,
     sql_suffix: Option<String>,
+    /// Reusable buffer for building the full SQL statement across flushes.
+    sql_buf: String,
     batch_size: usize,
     flush_interval: Duration,
 }
@@ -217,6 +223,7 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
 
     // Resolve NEW dim keys only (check first record for new keys).
     // After warmup, the cache hit rate is 100% and this loop is skipped.
+    let mut dims_changed = false;
     if let Some(first) = batch.first() {
         let has_new_keys = first
             .dim_meta
@@ -228,8 +235,6 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
                 regs.get(&ctx.table_name).cloned()
             };
             if let Some(reg) = &registry {
-                // Only check the first record's keys (all records in a table
-                // have the same dim schema).
                 for meta in &first.dim_meta {
                     if !ctx.dim_cache.contains_key(&meta.key) {
                         match reg
@@ -238,6 +243,7 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
                         {
                             Ok(col) => {
                                 ctx.dim_cache.insert(meta.key.clone(), col);
+                                dims_changed = true;
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -250,14 +256,9 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
             }
         }
     }
-    // Build or reuse SQL template (only rebuilds when dim columns change).
 
-    if ctx.sql_prefix.is_none()
-        || ctx
-            .sql_suffix
-            .as_ref()
-            .is_none_or(|_| ctx.sql_prefix.is_none())
-    {
+    // Rebuild SQL template and dim_keys only when dim columns change.
+    if dims_changed || ctx.sql_prefix.is_none() {
         let dim_cols: Vec<(&str, &str)> = ctx
             .dim_cache
             .iter()
@@ -266,23 +267,22 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
         let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_cols);
         ctx.sql_prefix = Some(prefix);
         ctx.sql_suffix = Some(suffix);
+        ctx.dim_keys = ctx.dim_cache.keys().cloned().collect();
     }
-    let sql_prefix = ctx.sql_prefix.as_ref().unwrap();
-    let sql_suffix = ctx.sql_suffix.as_ref().unwrap();
+    let sql_prefix = ctx.sql_prefix.as_deref().unwrap();
+    let sql_suffix = ctx.sql_suffix.as_deref().unwrap();
     let t_resolve = t0.elapsed();
 
-    // Collect dim keys for value lookup (references only, no cloning).
-    let dim_keys: Vec<&str> = ctx.dim_cache.keys().map(|k| k.as_str()).collect();
-
-    // Build and execute INSERT in chunks.
+    // Build and execute INSERT in chunks, reusing sql_buf across calls.
     for chunk in batch.chunks(MAX_ROWS_PER_INSERT) {
-        if let Err(e) = execute_upsert(
+        if let Err(e) = execute_upsert_into(
             &ctx.db,
             &ctx.mysql_pool,
             chunk,
-            &dim_keys,
+            &ctx.dim_keys,
             sql_prefix,
             sql_suffix,
+            &mut ctx.sql_buf,
         )
         .await
         {
@@ -382,13 +382,18 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
     (prefix, suffix)
 }
 
-async fn execute_upsert(
+/// Builds and executes a multi-row INSERT, reusing `sql_buf` across calls.
+///
+/// Builds directly into one buffer: prefix → VALUES rows → suffix.
+/// No intermediate allocation. The buffer is `.clear()`ed but retains capacity.
+async fn execute_upsert_into(
     db: &MySqlPool,
     mysql_pool: &Option<mysql_async::Pool>,
     records: &[FileRecord],
-    dim_keys: &[&str],
+    dim_keys: &[String],
     sql_prefix: &str,
     sql_suffix: &str,
+    sql_buf: &mut String,
 ) -> Result<(), sqlx::Error> {
     if records.is_empty() {
         return Ok(());
@@ -396,52 +401,76 @@ async fn execute_upsert(
 
     let build_start = std::time::Instant::now();
 
-    // Build VALUES rows into pre-allocated buffer.
-    use std::fmt::Write;
-    let estimated_size = records.len() * 200;
-    let mut values_buf = String::with_capacity(estimated_size);
-    for (i, rec) in records.iter().enumerate() {
-        if i > 0 {
-            values_buf.push(',');
-        }
-        values_buf.push('(');
-        write!(values_buf, "{},{}", rec.min_timestamp, rec.max_timestamp).unwrap();
-        write_escaped(&mut values_buf, rec.state.as_db_str());
-        write_escaped_opt(&mut values_buf, rec.clp_ir_storage_backend.as_deref());
-        write_escaped_opt(&mut values_buf, rec.clp_ir_bucket.as_deref());
-        write_escaped_opt(&mut values_buf, rec.clp_ir_path.as_deref());
-        write!(values_buf, ",{}", rec.clp_ir_size_bytes).unwrap();
-        write_escaped_opt(&mut values_buf, rec.clp_archive_storage_backend.as_deref());
-        write_escaped_opt(&mut values_buf, rec.clp_archive_bucket.as_deref());
-        write_escaped_opt(&mut values_buf, rec.clp_archive_path.as_deref());
-        write!(
-            values_buf,
-            ",{},{},{},{},{},{}",
-            rec.clp_archive_size_bytes,
-            rec.clp_archive_created_at,
-            rec.raw_size_bytes,
-            rec.record_count,
-            rec.retention_days,
-            rec.expires_at,
-        )
-        .unwrap();
-        for logical_key in dim_keys {
-            match rec.dims.get(*logical_key) {
-                Some(serde_json::Value::String(s)) => write_escaped(&mut values_buf, s),
-                Some(serde_json::Value::Number(n)) => write!(values_buf, ",{n}").unwrap(),
-                Some(serde_json::Value::Bool(b)) => {
-                    write!(values_buf, ",{}", if *b { 1 } else { 0 }).unwrap();
-                }
-                _ => values_buf.push_str(",NULL"),
-            }
-        }
-        values_buf.push(')');
+    // Clear but keep allocated capacity from previous flush.
+    sql_buf.clear();
+
+    // Reserve: prefix + ~200 bytes/row + suffix.
+    let estimated = sql_prefix.len() + records.len() * 200 + sql_suffix.len();
+    if sql_buf.capacity() < estimated {
+        sql_buf.reserve(estimated - sql_buf.capacity());
     }
 
-    // Combine: prefix + values + suffix (prefix/suffix are cached).
-    let sql = format!("{sql_prefix}{values_buf}{sql_suffix}");
+    // Push prefix directly (no format! allocation).
+    sql_buf.push_str(sql_prefix);
 
-    let sql_len = sql.len();
+    // Build VALUES rows with itoa for integers.
+    let mut itoa_buf = itoa::Buffer::new();
+    for (i, rec) in records.iter().enumerate() {
+        if i > 0 {
+            sql_buf.push(',');
+        }
+        sql_buf.push('(');
+        sql_buf.push_str(itoa_buf.format(rec.min_timestamp));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.max_timestamp));
+        write_escaped(sql_buf, rec.state.as_db_str());
+        write_escaped_opt(sql_buf, rec.clp_ir_storage_backend.as_deref());
+        write_escaped_opt(sql_buf, rec.clp_ir_bucket.as_deref());
+        write_escaped_opt(sql_buf, rec.clp_ir_path.as_deref());
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.clp_ir_size_bytes));
+        write_escaped_opt(sql_buf, rec.clp_archive_storage_backend.as_deref());
+        write_escaped_opt(sql_buf, rec.clp_archive_bucket.as_deref());
+        write_escaped_opt(sql_buf, rec.clp_archive_path.as_deref());
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.clp_archive_size_bytes));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.clp_archive_created_at));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.raw_size_bytes));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.record_count));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.retention_days));
+        sql_buf.push(',');
+        sql_buf.push_str(itoa_buf.format(rec.expires_at));
+        for logical_key in dim_keys {
+            match rec.dims.get(logical_key.as_str()) {
+                Some(serde_json::Value::String(s)) => write_escaped(sql_buf, s),
+                Some(serde_json::Value::Number(n)) => {
+                    sql_buf.push(',');
+                    // itoa for integers, fallback to Display for floats.
+                    if let Some(v) = n.as_i64() {
+                        sql_buf.push_str(itoa_buf.format(v));
+                    } else {
+                        use std::fmt::Write;
+                        write!(sql_buf, "{n}").unwrap();
+                    }
+                }
+                Some(serde_json::Value::Bool(b)) => {
+                    sql_buf.push(',');
+                    sql_buf.push(if *b { '1' } else { '0' });
+                }
+                _ => sql_buf.push_str(",NULL"),
+            }
+        }
+        sql_buf.push(')');
+    }
+
+    // Push suffix directly.
+    sql_buf.push_str(sql_suffix);
+
+    let sql_len = sql_buf.len();
     let build_elapsed = build_start.elapsed();
     let exec_start = std::time::Instant::now();
 
@@ -451,12 +480,11 @@ async fn execute_upsert(
             .get_conn()
             .await
             .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-        conn.query_drop(&sql)
+        conn.query_drop(sql_buf.as_str())
             .await
             .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     } else {
-        // Fallback: sqlx text protocol (no bind params → COM_QUERY).
-        sqlx::query(&sql).execute(db).await?;
+        sqlx::query(sql_buf.as_str()).execute(db).await?;
     }
 
     let exec_elapsed = exec_start.elapsed();
@@ -472,17 +500,28 @@ async fn execute_upsert(
 
 /// Writes `,'{escaped_value}'` into the buffer.
 /// Escapes all MySQL-special characters per the MySQL C API `mysql_real_escape_string`.
+///
+/// Fast path: if the string contains no special characters (common for hostnames,
+/// service names, paths), copies it in bulk without per-byte branching.
 fn write_escaped(buf: &mut String, s: &str) {
     buf.push_str(",'");
-    for c in s.chars() {
-        match c {
-            '\'' => buf.push_str("\\'"),
-            '\\' => buf.push_str("\\\\"),
-            '\0' => buf.push_str("\\0"),
-            '\n' => buf.push_str("\\n"),
-            '\r' => buf.push_str("\\r"),
-            '\x1a' => buf.push_str("\\Z"), // Control-Z / EOF
-            _ => buf.push(c),
+    // Fast path: scan for special bytes. Most metadata strings are clean ASCII.
+    let needs_escape = s
+        .bytes()
+        .any(|b| matches!(b, b'\'' | b'\\' | b'\0' | b'\n' | b'\r' | 0x1a));
+    if !needs_escape {
+        buf.push_str(s);
+    } else {
+        for c in s.chars() {
+            match c {
+                '\'' => buf.push_str("\\'"),
+                '\\' => buf.push_str("\\\\"),
+                '\0' => buf.push_str("\\0"),
+                '\n' => buf.push_str("\\n"),
+                '\r' => buf.push_str("\\r"),
+                '\x1a' => buf.push_str("\\Z"),
+                _ => buf.push(c),
+            }
         }
     }
     buf.push('\'');
@@ -519,5 +558,52 @@ mod tests {
     #[test]
     fn channel_capacity() {
         assert_eq!(CHANNEL_CAPACITY, 5000);
+    }
+
+    #[test]
+    fn write_escaped_fast_path() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "hello-world_123");
+        assert_eq!(buf, ",'hello-world_123'");
+    }
+
+    #[test]
+    fn write_escaped_special_chars() {
+        let mut buf = String::new();
+        write_escaped(&mut buf, "it's a \"test\"\nwith\\stuff");
+        assert_eq!(buf, ",'it\\'s a \"test\"\\nwith\\\\stuff'");
+    }
+
+    #[test]
+    fn write_escaped_opt_null() {
+        let mut buf = String::new();
+        write_escaped_opt(&mut buf, None);
+        assert_eq!(buf, ",NULL");
+
+        let mut buf2 = String::new();
+        write_escaped_opt(&mut buf2, Some(""));
+        assert_eq!(buf2, ",NULL");
+    }
+
+    #[test]
+    fn sql_buffer_reuse() {
+        let mut buf = String::with_capacity(1024);
+        buf.push_str("first use");
+        assert!(buf.capacity() >= 1024);
+        buf.clear();
+        // Capacity is retained after clear.
+        assert!(buf.capacity() >= 1024);
+        buf.push_str("second use");
+        assert_eq!(buf, "second use");
+    }
+
+    #[test]
+    fn build_template_with_dims() {
+        let dims = vec![("host", "dim_f01"), ("zone", "dim_f02")];
+        let (prefix, suffix) = build_sql_template("test_table", &dims);
+        assert!(prefix.contains("INSERT INTO `test_table`"));
+        assert!(prefix.contains("`dim_f01`"));
+        assert!(prefix.contains("`dim_f02`"));
+        assert!(suffix.contains("ON DUPLICATE KEY UPDATE"));
     }
 }

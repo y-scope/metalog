@@ -54,12 +54,12 @@ struct Args {
     #[arg(long, default_value = "clp_spark")]
     table: String,
 
-    /// Number of independent connections.
-    #[arg(long, default_value_t = 10)]
+    /// Number of independent gRPC connections (Go benchmark uses 1).
+    #[arg(long, default_value_t = 1)]
     clients: usize,
 
-    /// Concurrent in-flight RPCs per connection.
-    #[arg(long, default_value_t = 500)]
+    /// Concurrent in-flight RPCs per connection (Go benchmark uses 5000 on 1 conn).
+    #[arg(long, default_value_t = 5000)]
     concurrency_per_client: usize,
 
     /// Use a real MariaDB via testcontainers.
@@ -113,7 +113,11 @@ async fn run_with_db(args: &Args) {
     let dsn = format!("mysql://root@127.0.0.1:{port}/test");
     println!("MariaDB ready on port {port}");
 
-    let pool = MySqlPool::connect(&dsn).await.unwrap();
+    let pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(5) // Match Go benchmark's PoolSize: 5
+        .connect(&dsn)
+        .await
+        .unwrap();
 
     // Create schema and table.
     println!("Creating schema...");
