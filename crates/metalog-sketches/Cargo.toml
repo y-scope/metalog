@@ -10,4 +10,11 @@ metalog-encoding = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }
+metalog-timeutil = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
