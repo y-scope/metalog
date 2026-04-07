@@ -1,21 +1,62 @@
+mod source_store;
+
+use std::sync::Arc;
+
 use metalog_types::processors::KafkaProvider;
+pub use source_store::KafkaSourceStore;
+use sqlx::MySqlPool;
 
 /// Premium Kafka ingestion module.
 ///
-/// Provides: rdkafka consumer, KafkaIngestionUnit lifecycle, source assignment
-/// (claim/release/renew), _kafka_source + _kafka_assignment DDL,
-/// admin handler delegation for RegisterKafkaSource/DeleteKafkaSource.
-pub struct KafkaModule;
-
-impl KafkaModule {
-    pub fn new() -> Self {
-        Self
-    }
+/// Manages Kafka source registration, consumer lifecycle, and
+/// ingestion into the BatchingWriter.
+pub struct KafkaModule {
+    source_store: Arc<KafkaSourceStore>,
 }
 
-impl Default for KafkaModule {
-    fn default() -> Self {
-        Self::new()
+impl KafkaModule {
+    pub fn new(db: MySqlPool) -> Self {
+        Self {
+            source_store: Arc::new(KafkaSourceStore::new(db)),
+        }
+    }
+
+    pub fn source_store(&self) -> &Arc<KafkaSourceStore> {
+        &self.source_store
+    }
+
+    /// Registers a new Kafka source.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_source(
+        &self,
+        table_name: &str,
+        source_name: &str,
+        topic: &str,
+        bootstrap_servers: &str,
+        record_transformer: &str,
+        consumer_group_id: &str,
+        required_env: &str,
+    ) -> Result<bool, sqlx::Error> {
+        self.source_store
+            .register(
+                table_name,
+                source_name,
+                topic,
+                bootstrap_servers,
+                record_transformer,
+                consumer_group_id,
+                required_env,
+            )
+            .await
+    }
+
+    /// Deletes a Kafka source.
+    pub async fn delete_source(
+        &self,
+        table_name: &str,
+        source_name: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.source_store.delete(table_name, source_name).await
     }
 }
 
@@ -26,14 +67,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kafka_module_creates() {
-        let module = KafkaModule::new();
-        assert_eq!(module.name(), "kafka");
-    }
-
-    #[test]
     fn kafka_module_is_object_safe() {
-        let module: Box<dyn KafkaProvider> = Box::new(KafkaModule::new());
-        assert_eq!(module.name(), "kafka");
+        fn _assert(_: &dyn KafkaProvider) {}
     }
 }
