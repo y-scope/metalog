@@ -14,6 +14,9 @@ pub mod query {
 pub use coordinator::{
     metadata_ingestion_service_client::MetadataIngestionServiceClient,
     metadata_ingestion_service_server::{MetadataIngestionService, MetadataIngestionServiceServer},
+    BatchIngestRequest,
+    BatchIngestResponse,
+    FailedRecord,
     IngestRequest,
     IngestResponse,
     MetadataRecord,

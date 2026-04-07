@@ -127,6 +127,24 @@ message IngestResponse {
   string error    = 2;
 }
 
+message BatchIngestRequest {
+  string                  table_name = 1;
+  repeated MetadataRecord records    = 2;
+}
+
+// Per-record failure detail. Only failed records are included in the response.
+message FailedRecord {
+  int32  index = 1;  // zero-based position in the input batch
+  string error = 2;
+}
+
+message BatchIngestResponse {
+  int32                 accepted_count = 1;
+  int32                 rejected_count = 2;
+  repeated FailedRecord failures       = 3;
+}
+
 service MetadataIngestionService {
   rpc Ingest(IngestRequest) returns (IngestResponse);
+  rpc BatchIngest(BatchIngestRequest) returns (BatchIngestResponse);
 }

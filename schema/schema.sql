@@ -346,7 +346,7 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- LIFECYCLE STATE
     -- ========================================================================
 
-    -- Three lifecycle chains — a file enters ONE chain at creation:
+    -- Four lifecycle chains — a file enters ONE chain at creation:
     --
     --   IR-only chain (no consolidation):
     --     IR_BUFFERING → IR_CLOSED → IR_PURGING
@@ -354,29 +354,40 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     --   Archive-only chain (pre-built archives, no IR stage):
     --     ARCHIVE_CLOSED → ARCHIVE_PURGING
     --
-    --   Hybrid chain (IR ingested, then consolidated into archive):
+    --   IR→Archive chain (searchable IR, then consolidated into archive):
     --     IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
     --
-    -- The hybrid and archive-only chains share the ARCHIVE_CLOSED →
-    -- ARCHIVE_PURGING tail. The starting state is chosen by the producer
-    -- at file creation time. There is NO transition between the IR-only
-    -- chain and the other chains (e.g., IR_BUFFERING cannot become
-    -- IR_ARCHIVE_BUFFERING or ARCHIVE_CLOSED).
+    --   File→Archive chain (opaque file, then consolidated into archive):
+    --     FILE_ARCHIVE_BUFFERING → FILE_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
+    --
+    -- The IR→Archive and File→Archive chains differ in that IR files are
+    -- searchable (CLP-encoded) while plain files are opaque blobs. Both
+    -- converge at ARCHIVE_CLOSED after consolidation and share the
+    -- ARCHIVE_CLOSED → ARCHIVE_PURGING tail with the archive-only chain.
+    --
+    -- The starting state is chosen by the producer at file creation time.
+    -- There is NO transition between chains (e.g., IR_BUFFERING cannot
+    -- become IR_ARCHIVE_BUFFERING, FILE_ARCHIVE_BUFFERING, or ARCHIVE_CLOSED).
     state ENUM(
         -- IR-only chain (ordinals 1-3, lifecycle order)
-        'IR_BUFFERING',                      -- IR file still being written (entry point)
-        'IR_CLOSED',                         -- IR file closed, queryable
-        'IR_PURGING',                        -- IR file scheduled for deletion
+        'IR_BUFFERING',                       -- IR file still being written (entry point)
+        'IR_CLOSED',                          -- IR file closed, queryable
+        'IR_PURGING',                         -- IR file scheduled for deletion
 
-        -- Hybrid chain (ordinals 4-5, lifecycle order)
+        -- IR→Archive chain (ordinals 4-5, lifecycle order)
         -- Continues into archive chain below after consolidation
-        'IR_ARCHIVE_BUFFERING',              -- IR file being written, will be consolidated (entry point)
-        'IR_ARCHIVE_CONSOLIDATION_PENDING',  -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
+        'IR_ARCHIVE_BUFFERING',               -- IR file being written, will be consolidated (entry point)
+        'IR_ARCHIVE_CONSOLIDATION_PENDING',   -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
 
-        -- Archive chain (ordinals 6-7, lifecycle order)
-        -- Shared tail for both archive-only and hybrid chains
-        'ARCHIVE_CLOSED',                    -- Archive created (entry point for archive-only, or post-consolidation)
-        'ARCHIVE_PURGING'                    -- Archive scheduled for deletion
+        -- File→Archive chain (ordinals 6-7, lifecycle order)
+        -- Continues into archive chain below after consolidation
+        'FILE_ARCHIVE_BUFFERING',             -- Opaque file being written, will be consolidated (entry point)
+        'FILE_ARCHIVE_CONSOLIDATION_PENDING', -- File closed, awaiting consolidation → ARCHIVE_CLOSED
+
+        -- Archive chain (ordinals 8-9, lifecycle order)
+        -- Shared tail for archive-only, IR→Archive, and File→Archive chains
+        'ARCHIVE_CLOSED',                     -- Archive created (entry point for archive-only, or post-consolidation)
+        'ARCHIVE_PURGING'                     -- Archive scheduled for deletion
     ) NOT NULL,
 
     -- ========================================================================

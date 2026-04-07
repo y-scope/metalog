@@ -3,9 +3,10 @@ mod tests {
     use metalog_it::helpers::setup_db_with_table;
     use metalog_metastore::FileRecords;
     use metalog_timeutil::epoch_nanos;
+    use metalog_types::file_state::FileState;
 
     #[tokio::test]
-    async fn promote_stuck_buffering() {
+    async fn promote_stuck_ir_archive_buffering() {
         let (pool, _container) = setup_db_with_table("test_promote").await;
 
         // Insert a file in IR_ARCHIVE_BUFFERING with old timestamp.
@@ -24,7 +25,14 @@ mod tests {
 
         // Promote stuck files.
         let stale_before = epoch_nanos() - 1_800_000_000_000; // 30 min threshold
-        let promoted = fr.promote_stuck_buffering(stale_before).await.unwrap();
+        let promoted = fr
+            .promote_stuck_buffering(
+                FileState::IrArchiveBuffering,
+                FileState::IrArchiveConsolidationPending,
+                stale_before,
+            )
+            .await
+            .unwrap();
         assert_eq!(promoted, 1);
 
         // Verify state changed.
@@ -34,6 +42,42 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(state, "IR_ARCHIVE_CONSOLIDATION_PENDING");
+    }
+
+    #[tokio::test]
+    async fn promote_stuck_file_archive_buffering() {
+        let (pool, _container) = setup_db_with_table("test_promote_file").await;
+
+        let old_ts = epoch_nanos() - 3_600_000_000_000; // 1 hour ago
+        sqlx::query(
+            "INSERT INTO `test_promote_file` (min_timestamp, max_timestamp, state, record_count, \
+             retention_days, expires_at) VALUES (?, ?, 'FILE_ARCHIVE_BUFFERING', 10, 30, 0)",
+        )
+        .bind(old_ts)
+        .bind(old_ts + 1000)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let fr = FileRecords::new(pool.clone(), "test_promote_file");
+
+        let stale_before = epoch_nanos() - 1_800_000_000_000;
+        let promoted = fr
+            .promote_stuck_buffering(
+                FileState::FileArchiveBuffering,
+                FileState::FileArchiveConsolidationPending,
+                stale_before,
+            )
+            .await
+            .unwrap();
+        assert_eq!(promoted, 1);
+
+        let state: String =
+            sqlx::query_scalar("SELECT CAST(state AS CHAR) FROM `test_promote_file` LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state, "FILE_ARCHIVE_CONSOLIDATION_PENDING");
     }
 
     #[tokio::test]
@@ -65,6 +109,37 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(state, "IR_PURGING");
+    }
+
+    #[tokio::test]
+    async fn transition_expired_file_archive_buffering_to_purging() {
+        let (pool, _container) = setup_db_with_table("test_expire_fab").await;
+
+        let now = epoch_nanos();
+        let expired_ts = now - 1_000_000_000;
+
+        // Insert an expired FILE_ARCHIVE_BUFFERING file.
+        sqlx::query(
+            "INSERT INTO `test_expire_fab` (min_timestamp, max_timestamp, state, record_count, \
+             retention_days, expires_at) VALUES (?, ?, 'FILE_ARCHIVE_BUFFERING', 10, 30, ?)",
+        )
+        .bind(expired_ts)
+        .bind(expired_ts + 1000)
+        .bind(expired_ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let fr = FileRecords::new(pool.clone(), "test_expire_fab");
+        let transitioned = fr.transition_expired_to_purging(now).await.unwrap();
+        assert_eq!(transitioned, 1);
+
+        let state: String =
+            sqlx::query_scalar("SELECT CAST(state AS CHAR) FROM `test_expire_fab` LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state, "ARCHIVE_PURGING");
     }
 
     #[tokio::test]
