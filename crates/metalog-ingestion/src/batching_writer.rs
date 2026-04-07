@@ -141,6 +141,8 @@ impl BatchingWriter {
             mysql_pool: self.mysql_pool.clone(),
             registries: self.registries.clone(),
             dim_cache: HashMap::new(),
+            sql_prefix: None,
+            sql_suffix: None,
             batch_size: self.batch_size,
             flush_interval: self.flush_interval,
         };
@@ -159,6 +161,10 @@ struct WriterContext {
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     /// Cached dim key → physical column mappings (persists across flushes).
     dim_cache: HashMap<String, String>,
+    /// Cached SQL template: INSERT prefix + ON DUPLICATE KEY UPDATE suffix.
+    /// Rebuilt only when dim columns change.
+    sql_prefix: Option<String>,
+    sql_suffix: Option<String>,
     batch_size: usize,
     flush_interval: Duration,
 }
@@ -174,20 +180,18 @@ async fn table_writer_loop(mut ctx: WriterContext, mut rx: mpsc::Receiver<FileRe
 
     loop {
         tokio::select! {
-            result = rx.recv() => match result {
-                Some(rec) => {
-                    batch.push(rec);
-                    if batch.len() >= ctx.batch_size {
-                        do_flush(&mut ctx, &mut batch).await;
-                    }
-                }
-                None => {
+            n = rx.recv_many(&mut batch, ctx.batch_size) => {
+                if n == 0 {
+                    // Channel closed — flush remaining and exit.
                     if !batch.is_empty() {
                         do_flush(&mut ctx, &mut batch).await;
                     }
                     break;
                 }
-            },
+                if batch.len() >= ctx.batch_size {
+                    do_flush(&mut ctx, &mut batch).await;
+                }
+            }
             _ = tick.tick() => {
                 if !batch.is_empty() {
                     do_flush(&mut ctx, &mut batch).await;
@@ -255,6 +259,15 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+
+    // Build or reuse SQL template (only rebuilds when dim columns change).
+    if ctx.sql_prefix.is_none() || ctx.dim_cache.len() != dim_mappings.len() {
+        let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_mappings);
+        ctx.sql_prefix = Some(prefix);
+        ctx.sql_suffix = Some(suffix);
+    }
+    let sql_prefix = ctx.sql_prefix.as_ref().unwrap();
+    let sql_suffix = ctx.sql_suffix.as_ref().unwrap();
     let t_resolve = t0.elapsed();
 
     // Build and execute INSERT in chunks.
@@ -262,9 +275,10 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
         if let Err(e) = execute_upsert(
             &ctx.db,
             &ctx.mysql_pool,
-            &ctx.table_name,
             chunk,
             &dim_mappings,
+            sql_prefix,
+            sql_suffix,
         )
         .await
         {
@@ -288,20 +302,9 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
 ///
 /// When a `mysql_async::Pool` is provided, uses it for optimal throughput
 /// (native text protocol, single round-trip). Falls back to sqlx otherwise.
-async fn execute_upsert(
-    db: &MySqlPool,
-    mysql_pool: &Option<mysql_async::Pool>,
-    table_name: &str,
-    records: &[FileRecord],
-    dim_mappings: &[(String, String)],
-) -> Result<(), sqlx::Error> {
-    if records.is_empty() {
-        return Ok(());
-    }
-
-    let build_start = std::time::Instant::now();
-
-    // Base columns always present in INSERT.
+/// Builds the SQL template (prefix + suffix) for UPSERT.
+/// Only needs to be rebuilt when dim columns change.
+fn build_sql_template(table_name: &str, dim_mappings: &[(String, String)]) -> (String, String) {
     let mut col_names: Vec<&str> = vec![
         "min_timestamp",
         "max_timestamp",
@@ -332,52 +335,9 @@ async fn execute_upsert(
         .collect::<Vec<_>>()
         .join(", ");
 
-    // Build VALUES rows directly into a pre-allocated buffer (avoids per-row
-    // Vec<String> allocations that caused ~4ms overhead per 1000-row INSERT).
-    use std::fmt::Write;
-    let estimated_size = records.len() * 200; // ~200 bytes per row
-    let mut values_buf = String::with_capacity(estimated_size);
-    for (i, rec) in records.iter().enumerate() {
-        if i > 0 {
-            values_buf.push(',');
-        }
-        values_buf.push('(');
-        // Base columns.
-        write!(values_buf, "{},{}", rec.min_timestamp, rec.max_timestamp).unwrap();
-        write_escaped(&mut values_buf, rec.state.as_db_str());
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_storage_backend);
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_bucket);
-        write_escaped_opt(&mut values_buf, &rec.clp_ir_path);
-        write!(values_buf, ",{}", rec.clp_ir_size_bytes).unwrap();
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_storage_backend);
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_bucket);
-        write_escaped_opt(&mut values_buf, &rec.clp_archive_path);
-        write!(
-            values_buf,
-            ",{},{},{},{},{},{}",
-            rec.clp_archive_size_bytes,
-            rec.clp_archive_created_at,
-            rec.raw_size_bytes,
-            rec.record_count,
-            rec.retention_days,
-            rec.expires_at,
-        )
-        .unwrap();
-        // Dim columns.
-        for (logical_key, _) in dim_mappings {
-            match rec.dims.get(logical_key) {
-                Some(serde_json::Value::String(s)) => write_escaped(&mut values_buf, s),
-                Some(serde_json::Value::Number(n)) => write!(values_buf, ",{n}").unwrap(),
-                Some(serde_json::Value::Bool(b)) => {
-                    write!(values_buf, ",{}", if *b { 1 } else { 0 }).unwrap();
-                }
-                _ => values_buf.push_str(",NULL"),
-            }
-        }
-        values_buf.push(')');
-    }
+    let prefix = format!("INSERT INTO `{table_name}` ({cols_sql}) VALUES ");
 
-    // Guarded ON DUPLICATE KEY UPDATE (MariaDB VALUES() syntax).
+    // Guarded ON DUPLICATE KEY UPDATE.
     let guard_states = metalog_types::FileState::upsert_guard_states()
         .iter()
         .map(|s| format!("'{}'", s.as_db_str()))
@@ -413,10 +373,69 @@ async fn execute_upsert(
         ));
     }
 
-    let sql = format!(
-        "INSERT INTO `{table_name}` ({cols_sql}) VALUES {values_buf} ON DUPLICATE KEY UPDATE {}",
-        update_parts.join(", ")
-    );
+    let suffix = format!(" ON DUPLICATE KEY UPDATE {}", update_parts.join(", "));
+
+    (prefix, suffix)
+}
+
+async fn execute_upsert(
+    db: &MySqlPool,
+    mysql_pool: &Option<mysql_async::Pool>,
+    records: &[FileRecord],
+    dim_mappings: &[(String, String)],
+    sql_prefix: &str,
+    sql_suffix: &str,
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let build_start = std::time::Instant::now();
+
+    // Build VALUES rows into pre-allocated buffer.
+    use std::fmt::Write;
+    let estimated_size = records.len() * 200;
+    let mut values_buf = String::with_capacity(estimated_size);
+    for (i, rec) in records.iter().enumerate() {
+        if i > 0 {
+            values_buf.push(',');
+        }
+        values_buf.push('(');
+        write!(values_buf, "{},{}", rec.min_timestamp, rec.max_timestamp).unwrap();
+        write_escaped(&mut values_buf, rec.state.as_db_str());
+        write_escaped_opt(&mut values_buf, &rec.clp_ir_storage_backend);
+        write_escaped_opt(&mut values_buf, &rec.clp_ir_bucket);
+        write_escaped_opt(&mut values_buf, &rec.clp_ir_path);
+        write!(values_buf, ",{}", rec.clp_ir_size_bytes).unwrap();
+        write_escaped_opt(&mut values_buf, &rec.clp_archive_storage_backend);
+        write_escaped_opt(&mut values_buf, &rec.clp_archive_bucket);
+        write_escaped_opt(&mut values_buf, &rec.clp_archive_path);
+        write!(
+            values_buf,
+            ",{},{},{},{},{},{}",
+            rec.clp_archive_size_bytes,
+            rec.clp_archive_created_at,
+            rec.raw_size_bytes,
+            rec.record_count,
+            rec.retention_days,
+            rec.expires_at,
+        )
+        .unwrap();
+        for (logical_key, _) in dim_mappings {
+            match rec.dims.get(logical_key) {
+                Some(serde_json::Value::String(s)) => write_escaped(&mut values_buf, s),
+                Some(serde_json::Value::Number(n)) => write!(values_buf, ",{n}").unwrap(),
+                Some(serde_json::Value::Bool(b)) => {
+                    write!(values_buf, ",{}", if *b { 1 } else { 0 }).unwrap();
+                }
+                _ => values_buf.push_str(",NULL"),
+            }
+        }
+        values_buf.push(')');
+    }
+
+    // Combine: prefix + values + suffix (prefix/suffix are cached).
+    let sql = format!("{sql_prefix}{values_buf}{sql_suffix}");
 
     let sql_len = sql.len();
     let build_elapsed = build_start.elapsed();
