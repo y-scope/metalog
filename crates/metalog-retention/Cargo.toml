@@ -1,0 +1,16 @@
+[package]
+name = "metalog-retention"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+metalog-types = { workspace = true }
+metalog-db = { workspace = true }
+metalog-metastore = { workspace = true }
+metalog-storage = { workspace = true }
+metalog-logutil = { workspace = true }
+metalog-timeutil = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }

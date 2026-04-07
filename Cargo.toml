@@ -18,6 +18,13 @@ members = [
     "crates/metalog-health",
     "crates/metalog-telemetry",
     "crates/metalog-node",
+    # Premium crates
+    "crates/metalog-aggs",
+    "crates/metalog-sketches",
+    "crates/metalog-kafka",
+    "crates/metalog-ha",
+    "crates/metalog-consolidation",
+    "crates/metalog-retention",
 ]
 
 [workspace.package]
