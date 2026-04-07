@@ -186,11 +186,14 @@ impl FileRecords {
         &self,
         current_nanos: i64,
     ) -> Result<DeletionResult, sqlx::Error> {
-        // Select paths before delete (for storage cleanup).
+        // Select paths before delete (CAST needed: ascii_bin → VARBINARY in sqlx).
         let select_sql = format!(
-            "SELECT clp_ir_storage_backend, clp_ir_bucket, clp_ir_path, \
-             clp_archive_storage_backend, clp_archive_bucket, clp_archive_path FROM `{}` WHERE \
-             state IN (?, ?) AND expires_at > 0 AND expires_at < ? LIMIT 1000",
+            "SELECT CAST(clp_ir_storage_backend AS CHAR) AS clp_ir_storage_backend, \
+             CAST(clp_ir_bucket AS CHAR) AS clp_ir_bucket, CAST(clp_ir_path AS CHAR) AS \
+             clp_ir_path, CAST(clp_archive_storage_backend AS CHAR) AS \
+             clp_archive_storage_backend, CAST(clp_archive_bucket AS CHAR) AS clp_archive_bucket, \
+             CAST(clp_archive_path AS CHAR) AS clp_archive_path FROM `{}` WHERE state IN (?, ?) \
+             AND expires_at > 0 AND expires_at < ? LIMIT 1000",
             self.table_name,
         );
         let rows = sqlx::query(&select_sql)

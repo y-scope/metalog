@@ -1,0 +1,26 @@
+[package]
+name = "metalog-integration-tests"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[lib]
+name = "metalog_it"
+path = "src/lib.rs"
+
+[dependencies]
+metalog-types = { workspace = true }
+metalog-config = { workspace = true }
+metalog-db = { workspace = true }
+metalog-metastore = { workspace = true }
+metalog-schema = { workspace = true }
+metalog-ingestion = { workspace = true }
+metalog-consolidation = { workspace = true }
+metalog-ha = { workspace = true }
+metalog-timeutil = { workspace = true }
+sqlx = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

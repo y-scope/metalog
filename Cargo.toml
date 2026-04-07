@@ -28,6 +28,8 @@ members = [
     "crates/metalog-retention",
     # Benchmarks
     "benches/ingestion",
+    # Integration tests
+    "tests/integration",
 ]
 
 [workspace.package]
