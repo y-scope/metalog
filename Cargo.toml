@@ -18,6 +18,7 @@ members = [
     "crates/metalog-health",
     "crates/metalog-telemetry",
     "crates/metalog-node",
+    "crates/metalog-bin",
     # Premium crates
     "crates/metalog-aggs",
     "crates/metalog-sketches",
@@ -107,6 +108,15 @@ metalog-grpc = { path = "crates/metalog-grpc" }
 metalog-health = { path = "crates/metalog-health" }
 metalog-telemetry = { path = "crates/metalog-telemetry" }
 metalog-node = { path = "crates/metalog-node" }
+metalog-aggs = { path = "crates/metalog-aggs" }
+metalog-sketches = { path = "crates/metalog-sketches" }
+metalog-kafka = { path = "crates/metalog-kafka" }
+metalog-ha = { path = "crates/metalog-ha" }
+metalog-consolidation = { path = "crates/metalog-consolidation" }
+metalog-retention = { path = "crates/metalog-retention" }
+
+# Tracing subscriber
+tracing-subscriber = "0.3"
 metalog-metastore = { path = "crates/metalog-metastore" }
 metalog-timeutil = { path = "crates/metalog-timeutil" }
 metalog-logutil = { path = "crates/metalog-logutil" }
