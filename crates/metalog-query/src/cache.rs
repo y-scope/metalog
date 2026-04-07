@@ -1,14 +1,19 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 
-/// TTL + LRU cache for query filter rewriting results.
+/// TTL cache with O(1) eviction for query filter rewriting results.
 ///
-/// Entries expire after `ttl` and are evicted when `max_size` is exceeded.
+/// Entries expire after `ttl` and the oldest entry is evicted when `max_size`
+/// is exceeded. Insertion order is tracked via a `VecDeque` for O(1) eviction
+/// without scanning the entire map.
+///
 /// Thread-safe via external locking (the caller wraps in `RwLock`).
 pub struct Cache {
     entries: HashMap<String, CacheEntry>,
+    /// Insertion-order queue for O(1) oldest-entry eviction.
+    order: VecDeque<String>,
     ttl: Duration,
     max_size: usize,
 }
@@ -29,6 +34,7 @@ impl Cache {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            order: VecDeque::new(),
             ttl: DEFAULT_TTL,
             max_size: DEFAULT_MAX_SIZE,
         }
@@ -38,6 +44,7 @@ impl Cache {
     pub fn with_config(ttl: Duration, max_size: usize) -> Self {
         Self {
             entries: HashMap::new(),
+            order: VecDeque::new(),
             ttl,
             max_size,
         }
@@ -54,9 +61,24 @@ impl Cache {
 
     /// Inserts or updates a cache entry.
     pub fn set(&mut self, key: String, value: String) {
-        if self.entries.len() >= self.max_size && !self.entries.contains_key(&key) {
+        if self.entries.contains_key(&key) {
+            // Update existing — no order change needed.
+            self.entries.insert(
+                key,
+                CacheEntry {
+                    value,
+                    inserted_at: Instant::now(),
+                },
+            );
+            return;
+        }
+
+        // Evict oldest if at capacity.
+        if self.entries.len() >= self.max_size {
             self.evict_oldest();
         }
+
+        self.order.push_back(key.clone());
         self.entries.insert(
             key,
             CacheEntry {
@@ -82,17 +104,16 @@ impl Cache {
     pub fn evict_expired(&mut self) {
         self.entries
             .retain(|_, entry| entry.inserted_at.elapsed() <= self.ttl);
+        self.order.retain(|key| self.entries.contains_key(key));
     }
 
-    /// Removes the oldest entry.
+    /// Removes the oldest entry. O(1) amortized via VecDeque.
     fn evict_oldest(&mut self) {
-        if let Some(oldest_key) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.inserted_at)
-            .map(|(key, _)| key.clone())
-        {
-            self.entries.remove(&oldest_key);
+        // Pop from front, skipping keys already removed (by update or expiry).
+        while let Some(key) = self.order.pop_front() {
+            if self.entries.remove(&key).is_some() {
+                return;
+            }
         }
     }
 
@@ -109,6 +130,7 @@ impl Cache {
     /// Clears all entries.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.order.clear();
     }
 }
 
@@ -151,6 +173,17 @@ mod tests {
         cache.set("c".into(), "3".into()); // Should evict "a".
         assert_eq!(cache.len(), 2);
         assert_eq!(cache.get("a"), None);
+    }
+
+    #[test]
+    fn update_existing_does_not_evict() {
+        let mut cache = Cache::with_config(Duration::from_secs(60), 2);
+        cache.set("a".into(), "1".into());
+        cache.set("b".into(), "2".into());
+        cache.set("a".into(), "updated".into()); // Update, not insert.
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get("a"), Some("updated"));
+        assert_eq!(cache.get("b"), Some("2"));
     }
 
     #[test]
