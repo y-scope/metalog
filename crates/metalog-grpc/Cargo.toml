@@ -1,0 +1,16 @@
+[package]
+name = "metalog-grpc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+metalog-types = { workspace = true }
+metalog-proto = { workspace = true }
+metalog-ingestion = { workspace = true }
+metalog-coordinator = { workspace = true }
+metalog-query = { workspace = true }
+metalog-metastore = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
