@@ -80,7 +80,7 @@ impl Planner {
         }
     }
 
-    async fn plan_once(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn plan_once(&self) -> Result<(), PlannerError> {
         // Step 1: Reclaim stale tasks.
         let stale_tasks = self
             .queue
@@ -200,6 +200,16 @@ impl Planner {
 
         Ok(())
     }
+}
+
+/// Errors from the planner loop.
+#[derive(Debug, thiserror::Error)]
+pub enum PlannerError {
+    #[error("sql: {0}")]
+    Sql(#[from] sqlx::Error),
+
+    #[error("codec: {0}")]
+    Codec(#[from] metalog_encoding::CodecError),
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ mod worker;
 
 pub use inflight::InFlightSet;
 use metalog_types::processors::ConsolidationProvider;
-pub use planner::{Planner, PlannerConfig};
+pub use planner::{Planner, PlannerConfig, PlannerError};
 pub use policy::{FileGroup, Policy, TimeWindowPolicy};
 pub use task_queue::{
     marshal_payload,

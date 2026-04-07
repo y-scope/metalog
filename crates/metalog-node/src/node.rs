@@ -73,7 +73,7 @@ impl Node {
     ///
     /// In community edition, all tables are started directly. In enterprise
     /// (with HAProvider), the reconciliation loop manages table ownership.
-    pub async fn start(&mut self, tables: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start(&mut self, tables: &[String]) -> Result<(), NodeError> {
         // Ensure system tables exist.
         execute_ddl_statements(&self.shared.db, SCHEMA_SQL).await?;
         tracing::info!("schema ready");
@@ -88,10 +88,7 @@ impl Node {
     }
 
     /// Starts a coordinator for a single table.
-    async fn start_coordinator(
-        &mut self,
-        table_name: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn start_coordinator(&mut self, table_name: &str) -> Result<(), NodeError> {
         // Ensure the table is provisioned.
         ensure_table(&self.shared.db, table_name, None).await?;
 
@@ -161,6 +158,19 @@ impl Node {
 
         tracing::info!("node stopped");
     }
+}
+
+/// Errors from node lifecycle operations.
+#[derive(Debug, thiserror::Error)]
+pub enum NodeError {
+    #[error("sql: {0}")]
+    Sql(#[from] sqlx::Error),
+
+    #[error("schema: {0}")]
+    Schema(#[from] metalog_schema::EnsureTableError),
+
+    #[error("registry: {0}")]
+    Registry(#[from] metalog_schema::RegistryError),
 }
 
 #[cfg(test)]

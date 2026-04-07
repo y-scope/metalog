@@ -13,4 +13,5 @@ metalog-logutil = { workspace = true }
 metalog-timeutil = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+sqlx = { workspace = true }
 tracing = { workspace = true }

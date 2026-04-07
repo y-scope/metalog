@@ -8,5 +8,5 @@ pub use coordinator_unit::{
     ALIAS_REFRESH_INTERVAL,
     PARTITION_MAINTENANCE_INTERVAL,
 };
-pub use node::{Node, NodeBuilder};
+pub use node::{Node, NodeBuilder, NodeError};
 pub use resources::Resources;

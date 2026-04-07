@@ -63,10 +63,7 @@ impl RetentionModule {
         }
     }
 
-    async fn run_once(
-        &self,
-        file_recs: &FileRecords,
-    ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn run_once(&self, file_recs: &FileRecords) -> Result<i64, sqlx::Error> {
         let now = epoch_nanos();
 
         // Phase 1: transition expired → PURGING.

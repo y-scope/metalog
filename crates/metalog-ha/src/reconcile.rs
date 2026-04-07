@@ -66,10 +66,7 @@ impl ReconciliationLoop {
         }
     }
 
-    async fn reconcile_once(
-        &self,
-        running: &mut HashSet<String>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn reconcile_once(&self, running: &mut HashSet<String>) -> Result<(), sqlx::Error> {
         let dead_threshold =
             Duration::from_secs(self.config.dead_node_threshold_secs).as_nanos() as i64;
 
