@@ -67,9 +67,9 @@ impl Cache {
     }
 
     /// Gets a cached value, or computes and caches it.
-    pub fn get_or_compute<F>(&mut self, key: &str, compute: F) -> Result<String, String>
+    pub fn get_or_compute<F, E>(&mut self, key: &str, compute: F) -> Result<String, E>
     where
-        F: FnOnce() -> Result<String, String>, {
+        F: FnOnce() -> Result<String, E>, {
         if let Some(val) = self.get(key) {
             return Ok(val.to_string());
         }
@@ -157,14 +157,13 @@ mod tests {
     fn get_or_compute() {
         let mut cache = Cache::new();
         let val = cache
-            .get_or_compute("key", || Ok("computed".into()))
+            .get_or_compute("key", || Ok::<_, String>("computed".into()))
             .unwrap();
         assert_eq!(val, "computed");
         // Second call should return cached value.
-        let val2 = cache
-            .get_or_compute("key", || panic!("should not be called"))
-            .unwrap();
-        assert_eq!(val2, "computed");
+        let val2: Result<String, String> =
+            cache.get_or_compute("key", || panic!("should not be called"));
+        assert_eq!(val2.unwrap(), "computed");
     }
 
     #[test]
