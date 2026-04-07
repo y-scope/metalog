@@ -142,9 +142,19 @@ async fn run_with_db(args: &Args) {
         );
     }
 
+    // Create mysql_async pool for high-throughput UPSERT.
+    let mysql_dsn = format!("mysql://root@127.0.0.1:{port}/test");
+    let mysql_pool = mysql_async::Pool::new(mysql_dsn.as_str());
+
     // Start server with real DB.
-    let (addr, writer) =
-        start_server_with_db(pool.clone(), registry.clone(), &args.table, args.batch_size).await;
+    let (addr, writer) = start_server_with_db(
+        pool.clone(),
+        mysql_pool,
+        registry.clone(),
+        &args.table,
+        args.batch_size,
+    )
+    .await;
 
     // Run benchmark.
     let (accepted, rejected, elapsed) = run_grpc(
@@ -216,12 +226,14 @@ fn print_results(
 /// Starts gRPC server backed by real MariaDB.
 async fn start_server_with_db(
     pool: MySqlPool,
+    mysql_pool: mysql_async::Pool,
     registry: Arc<metalog_schema::ColumnRegistry>,
     table_name: &str,
     batch_size: usize,
 ) -> (SocketAddr, Arc<BatchingWriter>) {
     let writer = Arc::new(
         BatchingWriter::new(pool, true)
+            .with_mysql_pool(mysql_pool)
             .with_batch_size(batch_size)
             .with_flush_interval(Duration::from_secs(1)),
     );

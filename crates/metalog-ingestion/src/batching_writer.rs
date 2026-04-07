@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use metalog_schema::ColumnRegistry;
 use metalog_types::FileRecord;
+use mysql_async::prelude::Queryable;
 use sqlx::MySqlPool;
 use tokio::{
     sync::{mpsc, RwLock},
@@ -33,7 +34,9 @@ pub struct ChannelFullError(pub String);
 /// and called during the flush pipeline if present.
 pub struct BatchingWriter {
     db: MySqlPool,
-    is_mariadb: bool,
+    /// mysql_async pool for high-throughput UPSERT (text protocol, single RT).
+    mysql_pool: Option<mysql_async::Pool>,
+    _is_mariadb: bool,
     writers: Arc<RwLock<HashMap<String, mpsc::Sender<FileRecord>>>>,
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     join_set: Arc<tokio::sync::Mutex<JoinSet<()>>>,
@@ -46,13 +49,20 @@ impl BatchingWriter {
     pub fn new(db: MySqlPool, is_mariadb: bool) -> Self {
         Self {
             db,
-            is_mariadb,
+            mysql_pool: None,
+            _is_mariadb: is_mariadb,
             writers: Arc::new(RwLock::new(HashMap::new())),
             registries: Arc::new(RwLock::new(HashMap::new())),
             join_set: Arc::new(tokio::sync::Mutex::new(JoinSet::new())),
             batch_size: DEFAULT_BATCH_SIZE,
             flush_interval: DEFAULT_FLUSH_INTERVAL,
         }
+    }
+
+    /// Sets a mysql_async pool for high-throughput UPSERT via text protocol.
+    pub fn with_mysql_pool(mut self, pool: mysql_async::Pool) -> Self {
+        self.mysql_pool = Some(pool);
+        self
     }
 
     /// Sets the batch size.
@@ -125,72 +135,76 @@ impl BatchingWriter {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         writers.insert(table_name.to_string(), tx.clone());
 
-        let table = table_name.to_string();
-        let db = self.db.clone();
-        let batch_size = self.batch_size;
-        let flush_interval = self.flush_interval;
-        let is_mariadb = self.is_mariadb;
-        let registries = self.registries.clone();
+        let ctx = WriterContext {
+            table_name: table_name.to_string(),
+            db: self.db.clone(),
+            mysql_pool: self.mysql_pool.clone(),
+            registries: self.registries.clone(),
+            batch_size: self.batch_size,
+            flush_interval: self.flush_interval,
+        };
 
         let mut js = self.join_set.lock().await;
-        js.spawn(table_writer_loop(
-            table,
-            db,
-            rx,
-            registries,
-            batch_size,
-            flush_interval,
-            is_mariadb,
-        ));
+        js.spawn(table_writer_loop(ctx, rx));
 
         tx
     }
 }
 
-/// Per-table writer loop: batches records and flushes to DB.
-async fn table_writer_loop(
+struct WriterContext {
     table_name: String,
     db: MySqlPool,
-    mut rx: mpsc::Receiver<FileRecord>,
+    mysql_pool: Option<mysql_async::Pool>,
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     batch_size: usize,
     flush_interval: Duration,
-    _is_mariadb: bool,
-) {
-    let mut batch: Vec<FileRecord> = Vec::with_capacity(batch_size);
-    let mut interval = tokio::time::interval(flush_interval);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+}
 
-    tracing::info!(table = %table_name, "table writer started");
+/// Per-table writer loop: batches records and flushes to DB.
+#[allow(clippy::too_many_arguments)]
+async fn table_writer_loop(ctx: WriterContext, mut rx: mpsc::Receiver<FileRecord>) {
+    let mut batch = Vec::with_capacity(ctx.batch_size);
+    let mut tick = tokio::time::interval(ctx.flush_interval);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    tracing::info!(table = %ctx.table_name, "table writer started");
 
     loop {
         tokio::select! {
-            result = rx.recv() => {
-                match result {
-                    Some(rec) => {
-                        batch.push(rec);
-                        if batch.len() >= batch_size {
-                            flush_batch(&table_name, &db, &registries, &mut batch).await;
-                        }
-                    }
-                    None => {
-                        // Channel closed — drain remaining records and exit.
-                        if !batch.is_empty() {
-                            flush_batch(&table_name, &db, &registries, &mut batch).await;
-                        }
-                        break;
+            result = rx.recv() => match result {
+                Some(rec) => {
+                    batch.push(rec);
+                    if batch.len() >= ctx.batch_size {
+                        do_flush(&ctx, &mut batch).await;
                     }
                 }
-            }
-            _ = interval.tick() => {
+                None => {
+                    if !batch.is_empty() {
+                        do_flush(&ctx, &mut batch).await;
+                    }
+                    break;
+                }
+            },
+            _ = tick.tick() => {
                 if !batch.is_empty() {
-                    flush_batch(&table_name, &db, &registries, &mut batch).await;
+                    do_flush(&ctx, &mut batch).await;
                 }
             }
         }
     }
 
-    tracing::info!(table = %table_name, "table writer stopped");
+    tracing::info!(table = %ctx.table_name, "table writer stopped");
+}
+
+async fn do_flush(ctx: &WriterContext, batch: &mut Vec<FileRecord>) {
+    flush_batch(
+        &ctx.table_name,
+        &ctx.db,
+        &ctx.mysql_pool,
+        &ctx.registries,
+        batch,
+    )
+    .await;
 }
 
 /// Maximum rows per INSERT statement. Matches Go's MaxMultiRowInsert = 1000.
@@ -204,6 +218,7 @@ const MAX_ROWS_PER_INSERT: usize = 1000;
 async fn flush_batch(
     table_name: &str,
     db: &MySqlPool,
+    mysql_pool: &Option<mysql_async::Pool>,
     registries: &Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     batch: &mut Vec<FileRecord>,
 ) {
@@ -239,7 +254,7 @@ async fn flush_batch(
 
     // Build and execute INSERT in chunks.
     for chunk in batch.chunks(MAX_ROWS_PER_INSERT) {
-        if let Err(e) = execute_upsert(db, table_name, chunk, &dim_mappings).await {
+        if let Err(e) = execute_upsert(db, mysql_pool, table_name, chunk, &dim_mappings).await {
             tracing::error!(table = table_name, error = %e, "upsert failed");
         }
     }
@@ -249,12 +264,11 @@ async fn flush_batch(
 
 /// Builds and executes a multi-row INSERT using text protocol (COM_QUERY).
 ///
-/// Values are embedded directly in the SQL string instead of using bind
-/// parameters. This triggers sqlx's text protocol path (single COM_QUERY
-/// round-trip) instead of the binary protocol path (PREPARE + EXECUTE =
-/// 2 round-trips). This is equivalent to Go's `interpolateParams=true`.
+/// When a `mysql_async::Pool` is provided, uses it for optimal throughput
+/// (native text protocol, single round-trip). Falls back to sqlx otherwise.
 async fn execute_upsert(
     db: &MySqlPool,
+    mysql_pool: &Option<mysql_async::Pool>,
     table_name: &str,
     records: &[FileRecord],
     dim_mappings: &[(String, String)],
@@ -371,8 +385,31 @@ async fn execute_upsert(
         update_parts.join(", ")
     );
 
-    // No bind params → sqlx uses COM_QUERY (text protocol, single round-trip).
-    sqlx::query(&sql).execute(db).await?;
+    let sql_len = sql.len();
+    let exec_start = std::time::Instant::now();
+
+    // Use mysql_async for native text protocol if available, else sqlx.
+    if let Some(pool) = mysql_pool {
+        let mut conn = pool
+            .get_conn()
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        conn.query_drop(&sql)
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    } else {
+        // Fallback: sqlx text protocol (no bind params → COM_QUERY).
+        sqlx::query(&sql).execute(db).await?;
+    }
+
+    let exec_elapsed = exec_start.elapsed();
+    tracing::debug!(
+        table = table_name,
+        rows = records.len(),
+        sql_kb = sql_len / 1024,
+        exec_ms = exec_elapsed.as_millis(),
+        "upsert executed"
+    );
     Ok(())
 }
 

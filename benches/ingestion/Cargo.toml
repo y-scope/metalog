@@ -20,6 +20,7 @@ metalog-metastore = { workspace = true }
 
 async-channel = { workspace = true }
 clap = { workspace = true }
+mysql_async = { workspace = true }
 sqlx = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
