@@ -193,7 +193,7 @@ async fn table_writer_loop(
     tracing::info!(table = %table_name, "table writer stopped");
 }
 
-/// Maximum rows per INSERT statement (MySQL parameter limit).
+/// Maximum rows per INSERT statement. Matches Go's MaxMultiRowInsert = 1000.
 const MAX_ROWS_PER_INSERT: usize = 1000;
 
 /// Flushes a batch of records to the database via multi-row guarded UPSERT.
@@ -247,7 +247,12 @@ async fn flush_batch(
     batch.clear();
 }
 
-/// Builds and executes a multi-row INSERT with guarded ON DUPLICATE KEY UPDATE.
+/// Builds and executes a multi-row INSERT using text protocol (COM_QUERY).
+///
+/// Values are embedded directly in the SQL string instead of using bind
+/// parameters. This triggers sqlx's text protocol path (single COM_QUERY
+/// round-trip) instead of the binary protocol path (PREPARE + EXECUTE =
+/// 2 round-trips). This is equivalent to Go's `interpolateParams=true`.
 async fn execute_upsert(
     db: &MySqlPool,
     table_name: &str,
@@ -278,7 +283,6 @@ async fn execute_upsert(
         "expires_at",
     ];
 
-    // Add dim columns.
     let dim_col_strings: Vec<String> = dim_mappings.iter().map(|(_, col)| col.clone()).collect();
     for col in &dim_col_strings {
         col_names.push(col);
@@ -290,21 +294,49 @@ async fn execute_upsert(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let params_per_row = col_names.len();
-    let placeholders_row = format!(
-        "({})",
-        (0..params_per_row)
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    let all_placeholders = (0..records.len())
-        .map(|_| placeholders_row.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Build VALUES rows with inline values (text protocol).
+    let mut value_rows: Vec<String> = Vec::with_capacity(records.len());
+    for rec in records {
+        let mut vals: Vec<String> = vec![
+            rec.min_timestamp.to_string(),
+            rec.max_timestamp.to_string(),
+            escape_str(rec.state.as_db_str()),
+            escape_opt(&rec.clp_ir_storage_backend),
+            escape_opt(&rec.clp_ir_bucket),
+            escape_opt(&rec.clp_ir_path),
+            rec.clp_ir_size_bytes.to_string(),
+            escape_opt(&rec.clp_archive_storage_backend),
+            escape_opt(&rec.clp_archive_bucket),
+            escape_opt(&rec.clp_archive_path),
+            rec.clp_archive_size_bytes.to_string(),
+            rec.clp_archive_created_at.to_string(),
+            rec.raw_size_bytes.to_string(),
+            rec.record_count.to_string(),
+            rec.retention_days.to_string(),
+            rec.expires_at.to_string(),
+        ];
+
+        for (logical_key, _) in dim_mappings {
+            let val = rec.dims.get(logical_key);
+            vals.push(match val {
+                Some(serde_json::Value::String(s)) => escape_str(s),
+                Some(serde_json::Value::Number(n)) => n.to_string(),
+                Some(serde_json::Value::Bool(b)) => if *b { "1" } else { "0" }.to_string(),
+                _ => "NULL".to_string(),
+            });
+        }
+
+        value_rows.push(format!("({})", vals.join(",")));
+    }
 
     // Guarded ON DUPLICATE KEY UPDATE (MariaDB VALUES() syntax).
-    let update_cols: Vec<&str> = vec![
+    let guard_states = metalog_types::FileState::upsert_guard_states()
+        .iter()
+        .map(|s| format!("'{}'", s.as_db_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let update_cols: &[&str] = &[
         "max_timestamp",
         "state",
         "clp_ir_storage_backend",
@@ -319,20 +351,13 @@ async fn execute_upsert(
         "record_count",
     ];
 
-    let guard_states = metalog_types::FileState::upsert_guard_states()
-        .iter()
-        .map(|s| format!("'{}'", s.as_db_str()))
-        .collect::<Vec<_>>()
-        .join(",");
-
     let mut update_parts: Vec<String> = Vec::new();
-    for col in &update_cols {
+    for col in update_cols {
         update_parts.push(format!(
             "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
              `max_timestamp`, VALUES(`{col}`), `{col}`)"
         ));
     }
-    // Dim columns also guarded.
     for col in &dim_col_strings {
         update_parts.push(format!(
             "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
@@ -341,48 +366,29 @@ async fn execute_upsert(
     }
 
     let sql = format!(
-        "INSERT INTO `{table_name}` ({cols_sql}) VALUES {all_placeholders} ON DUPLICATE KEY \
-         UPDATE {}",
+        "INSERT INTO `{table_name}` ({cols_sql}) VALUES {} ON DUPLICATE KEY UPDATE {}",
+        value_rows.join(","),
         update_parts.join(", ")
     );
 
-    // Bind parameters.
-    let mut query = sqlx::query(&sql);
-    for rec in records {
-        query = query
-            .bind(rec.min_timestamp)
-            .bind(rec.max_timestamp)
-            .bind(rec.state.as_db_str())
-            .bind(&rec.clp_ir_storage_backend)
-            .bind(&rec.clp_ir_bucket)
-            .bind(&rec.clp_ir_path)
-            .bind(rec.clp_ir_size_bytes)
-            .bind(&rec.clp_archive_storage_backend)
-            .bind(&rec.clp_archive_bucket)
-            .bind(&rec.clp_archive_path)
-            .bind(rec.clp_archive_size_bytes)
-            .bind(rec.clp_archive_created_at)
-            .bind(rec.raw_size_bytes)
-            .bind(rec.record_count)
-            .bind(rec.retention_days)
-            .bind(rec.expires_at);
-
-        // Bind dim values in the same order as dim_mappings.
-        for (logical_key, _) in dim_mappings {
-            let val = rec.dims.get(logical_key);
-            match val {
-                Some(serde_json::Value::String(s)) => query = query.bind(Some(s.as_str())),
-                Some(serde_json::Value::Number(n)) => {
-                    query = query.bind(n.as_i64());
-                }
-                Some(serde_json::Value::Bool(b)) => query = query.bind(Some(*b)),
-                _ => query = query.bind(Option::<String>::None),
-            }
-        }
-    }
-
-    query.execute(db).await?;
+    // No bind params → sqlx uses COM_QUERY (text protocol, single round-trip).
+    sqlx::query(&sql).execute(db).await?;
     Ok(())
+}
+
+/// Escapes a string value for safe SQL embedding. Handles single quotes and
+/// backslashes.
+fn escape_str(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
+/// Escapes an optional string. Returns `NULL` if None or empty.
+fn escape_opt(opt: &Option<String>) -> String {
+    match opt {
+        Some(s) if !s.is_empty() => escape_str(s),
+        _ => "NULL".to_string(),
+    }
 }
 
 #[cfg(test)]
