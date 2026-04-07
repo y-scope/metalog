@@ -7,6 +7,7 @@ members = [
     "crates/metalog-logutil",
     "crates/metalog-config",
     "crates/metalog-db",
+    "crates/metalog-metastore",
 ]
 
 [workspace.package]
@@ -56,3 +57,5 @@ which = "7"
 # Internal crates
 metalog-types = { path = "crates/metalog-types" }
 metalog-config = { path = "crates/metalog-config" }
+metalog-db = { path = "crates/metalog-db" }
+metalog-timeutil = { path = "crates/metalog-timeutil" }
