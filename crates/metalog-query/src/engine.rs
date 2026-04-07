@@ -61,6 +61,7 @@ impl SplitQueryEngine {
                 .join(", ")
         };
 
+        use std::fmt::Write;
         let mut sql = format!("SELECT {cols_sql} FROM `{table_name}`");
 
         // WHERE clauses.
@@ -72,17 +73,17 @@ impl SplitQueryEngine {
             conditions.push(format!("({keyset_where})"));
         }
         if !conditions.is_empty() {
-            sql.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
+            write!(sql, " WHERE {}", conditions.join(" AND ")).unwrap();
         }
 
         // ORDER BY.
         if !order_clauses.is_empty() {
-            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
+            write!(sql, " ORDER BY {}", order_clauses.join(", ")).unwrap();
         }
 
         // LIMIT (fetch limit+1 for truncation detection).
         let fetch_limit = if limit > 0 { limit + 1 } else { 10000 };
-        sql.push_str(&format!(" LIMIT {fetch_limit}"));
+        write!(sql, " LIMIT {fetch_limit}").unwrap();
 
         tracing::info!(sql = %sql, "executing split query");
 
