@@ -33,11 +33,9 @@ use metalog_proto::{
         StringDimension,
     },
     IngestRequest,
-    MetadataIngestionServiceClient,
     MetadataIngestionServiceServer,
 };
 use tokio::task::JoinSet;
-use tonic::transport::Channel;
 
 #[derive(Parser)]
 #[command(name = "bench-ingestion", about = "Metalog ingestion benchmark")]
@@ -140,7 +138,7 @@ async fn start_server(blocking: bool) -> (SocketAddr, Arc<BatchingWriter>) {
     (addr, writer)
 }
 
-/// Runs the gRPC benchmark with multiple HTTP/2 connections.
+/// Runs the gRPC benchmark using IngestionClientPool.
 async fn run_grpc(
     addr: SocketAddr,
     table: &str,
@@ -152,48 +150,37 @@ async fn run_grpc(
     let accepted = Arc::new(AtomicI64::new(0));
     let rejected = Arc::new(AtomicI64::new(0));
 
-    // Create multiple HTTP/2 connections for parallelism.
     let endpoint = format!("http://{addr}");
-    let mut channels = Vec::with_capacity(num_connections);
-    for _ in 0..num_connections {
-        let channel = Channel::from_shared(endpoint.clone())
-            .unwrap()
-            .connect()
+    let pool = Arc::new(
+        metalog_grpc::IngestionClientPool::connect(&endpoint, num_connections)
             .await
-            .unwrap();
-        channels.push(channel);
-    }
+            .unwrap(),
+    );
 
     let (tx, rx) = async_channel::bounded::<usize>(concurrency);
 
     let start = Instant::now();
 
-    // Spawn worker tasks, round-robin across connections.
+    // Spawn worker tasks sharing the pool.
     let mut join_set = JoinSet::new();
-    for worker_id in 0..concurrency {
+    for _ in 0..concurrency {
         let rx = rx.clone();
-        let channel = channels[worker_id % num_connections].clone();
+        let pool = pool.clone();
         let accepted = accepted.clone();
         let rejected = rejected.clone();
         let table = table.to_string();
 
         join_set.spawn(async move {
-            let mut client = MetadataIngestionServiceClient::new(channel);
-
             while let Ok(idx) = rx.recv().await {
                 let req = build_ingest_request(&table, idx, apps);
 
-                match client.ingest(tonic::Request::new(req)).await {
+                match pool.ingest(req).await {
                     Ok(resp) => {
                         if resp.into_inner().accepted {
                             accepted.fetch_add(1, Ordering::Relaxed);
                         } else {
                             rejected.fetch_add(1, Ordering::Relaxed);
                         }
-                    }
-                    Err(status) if status.code() == tonic::Code::ResourceExhausted => {
-                        // Channel full — count as rejected (non-blocking mode).
-                        rejected.fetch_add(1, Ordering::Relaxed);
                     }
                     Err(_) => {
                         rejected.fetch_add(1, Ordering::Relaxed);
