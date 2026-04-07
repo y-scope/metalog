@@ -54,9 +54,13 @@ struct Args {
     #[arg(long, default_value = "clp_spark")]
     table: String,
 
-    /// Number of independent clients (each opens its own connection).
-    #[arg(long, default_value_t = 100)]
+    /// Number of independent connections.
+    #[arg(long, default_value_t = 10)]
     clients: usize,
+
+    /// Concurrent in-flight RPCs per connection.
+    #[arg(long, default_value_t = 500)]
+    concurrency_per_client: usize,
 
     /// Use a real MariaDB via testcontainers.
     #[arg(long)]
@@ -79,6 +83,11 @@ async fn main() {
     println!("  Records     : {}", args.records);
     println!("  Apps        : {}", args.apps);
     println!("  Clients     : {}", args.clients);
+    println!("  Per-client  : {}", args.concurrency_per_client);
+    println!(
+        "  Total conc. : {}",
+        args.clients * args.concurrency_per_client
+    );
     println!("  Batch size  : {}", args.batch_size);
     println!("  With DB     : {}", args.with_db);
     println!("  Table       : {}", args.table);
@@ -152,8 +161,15 @@ async fn run_with_db(args: &Args) {
     .await;
 
     // Run benchmark.
-    let (accepted, rejected, elapsed) =
-        run_grpc(addr, &args.table, args.records, args.apps, args.clients).await;
+    let (accepted, rejected, elapsed) = run_grpc(
+        addr,
+        &args.table,
+        args.records,
+        args.apps,
+        args.clients,
+        args.concurrency_per_client,
+    )
+    .await;
 
     // Wait for BatchingWriter to flush remaining records.
     println!("Stopping writer (flushing remaining batches)...");
@@ -172,8 +188,15 @@ async fn run_with_db(args: &Args) {
 async fn run_channel_only(args: &Args) {
     let (addr, _writer) = start_server_no_db(args.batch_size).await;
 
-    let (accepted, rejected, elapsed) =
-        run_grpc(addr, &args.table, args.records, args.apps, args.clients).await;
+    let (accepted, rejected, elapsed) = run_grpc(
+        addr,
+        &args.table,
+        args.records,
+        args.apps,
+        args.clients,
+        args.concurrency_per_client,
+    )
+    .await;
 
     print_results(args, accepted, rejected, elapsed, None);
 }
@@ -262,62 +285,65 @@ async fn start_server_no_db(batch_size: usize) -> (SocketAddr, Arc<BatchingWrite
     (addr, writer)
 }
 
-/// Runs the gRPC benchmark simulating independent clients.
+/// Runs the gRPC benchmark: N independent connections × M concurrent RPCs each.
 ///
-/// Each worker creates its own HTTP/2 connection (separate `Channel`),
-/// simulating the production pattern where many SDK clients connect
-/// independently. This avoids the single-connection h2 bottleneck entirely.
+/// Simulates production: multiple SDK clients, each with many in-flight
+/// requests (HTTP/2 stream multiplexing within each connection).
 async fn run_grpc(
     addr: SocketAddr,
     table: &str,
     records: usize,
     apps: usize,
     num_clients: usize,
+    concurrency_per_client: usize,
 ) -> (i64, i64, Duration) {
     let accepted = Arc::new(AtomicI64::new(0));
     let rejected = Arc::new(AtomicI64::new(0));
 
     let endpoint = format!("http://{addr}");
-    let (tx, rx) = async_channel::bounded::<usize>(num_clients);
+    let total_workers = num_clients * concurrency_per_client;
+    let (tx, rx) = async_channel::bounded::<usize>(total_workers);
 
     let start = Instant::now();
 
-    // Each worker = one independent client with its own connection.
+    // Create N independent connections, each shared by M worker tasks.
     let mut join_set = JoinSet::new();
-    for _ in 0..num_clients {
-        let rx = rx.clone();
-        let accepted = accepted.clone();
-        let rejected = rejected.clone();
-        let table = table.to_string();
-        let endpoint = endpoint.clone();
+    for _client_id in 0..num_clients {
+        let channel = tonic::transport::Channel::from_shared(endpoint.clone())
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
 
-        join_set.spawn(async move {
-            // Each worker opens its own HTTP/2 connection — simulates
-            // independent SDK clients in production.
-            let channel = tonic::transport::Channel::from_shared(endpoint)
-                .unwrap()
-                .connect()
-                .await
-                .unwrap();
-            let mut client = metalog_proto::MetadataIngestionServiceClient::new(channel);
+        // M concurrent tasks per connection (HTTP/2 stream multiplexing).
+        for _ in 0..concurrency_per_client {
+            let rx = rx.clone();
+            let channel = channel.clone();
+            let accepted = accepted.clone();
+            let rejected = rejected.clone();
+            let table = table.to_string();
 
-            while let Ok(idx) = rx.recv().await {
-                let req = build_ingest_request(&table, idx, apps);
+            join_set.spawn(async move {
+                let mut client = metalog_proto::MetadataIngestionServiceClient::new(channel);
 
-                match client.ingest(tonic::Request::new(req)).await {
-                    Ok(resp) => {
-                        if resp.into_inner().accepted {
-                            accepted.fetch_add(1, Ordering::Relaxed);
-                        } else {
+                while let Ok(idx) = rx.recv().await {
+                    let req = build_ingest_request(&table, idx, apps);
+
+                    match client.ingest(tonic::Request::new(req)).await {
+                        Ok(resp) => {
+                            if resp.into_inner().accepted {
+                                accepted.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                rejected.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Err(_) => {
                             rejected.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    Err(_) => {
-                        rejected.fetch_add(1, Ordering::Relaxed);
-                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     for i in 0..records {
