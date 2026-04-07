@@ -142,7 +142,7 @@ async fn run_with_db(args: &Args) {
             .unwrap();
         println!(
             "  allocated dim: {key} → {}",
-            registry.resolve_dim(key).await.unwrap()
+            registry.resolve_dim(key).unwrap()
         );
     }
 

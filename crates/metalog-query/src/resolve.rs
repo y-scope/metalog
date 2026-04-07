@@ -8,7 +8,7 @@ use metalog_schema::ColumnRegistry;
 /// - Unprefixed → passed through as-is (for base column names)
 ///
 /// Premium prefixes (`__AGG.*`) are handled by the AggProcessor if present.
-pub async fn resolve_column_ref(
+pub fn resolve_column_ref(
     raw: &str,
     registry: Option<&ColumnRegistry>,
 ) -> Result<String, ResolveError> {
@@ -24,7 +24,7 @@ pub async fn resolve_column_ref(
         let reg = registry.ok_or_else(|| {
             ResolveError::InvalidColumn("no registry available for __DIM resolution".into())
         })?;
-        let col = reg.resolve_dim(dim_key).await.ok_or_else(|| {
+        let col = reg.resolve_dim(dim_key).ok_or_else(|| {
             ResolveError::UnknownColumn(format!("dimension {dim_key} not found in registry"))
         })?;
         return Ok(col);
@@ -44,13 +44,13 @@ pub async fn resolve_column_ref(
 }
 
 /// Resolves a list of projection columns, expanding virtual namespace prefixes.
-pub async fn resolve_projection_columns(
+pub fn resolve_projection_columns(
     columns: &[String],
     registry: Option<&ColumnRegistry>,
 ) -> Result<Vec<String>, ResolveError> {
     let mut resolved = Vec::with_capacity(columns.len());
     for col in columns {
-        resolved.push(resolve_column_ref(col, registry).await?);
+        resolved.push(resolve_column_ref(col, registry)?);
     }
     Ok(resolved)
 }
@@ -59,7 +59,7 @@ pub async fn resolve_projection_columns(
 ///
 /// Replaces `__FILE.xxx` and `__DIM.xxx` prefixes with physical column names.
 /// This is a simple string-based rewrite — the filter has already been validated.
-pub async fn rewrite_filter_columns(
+pub fn rewrite_filter_columns(
     filter: &str,
     registry: Option<&ColumnRegistry>,
 ) -> Result<String, ResolveError> {
@@ -86,7 +86,7 @@ pub async fn rewrite_filter_columns(
         let dim_key = &rest[..end];
 
         let physical = if let Some(reg) = registry {
-            reg.resolve_dim(dim_key).await.ok_or_else(|| {
+            reg.resolve_dim(dim_key).ok_or_else(|| {
                 ResolveError::UnknownColumn(format!("dimension {dim_key} not found"))
             })?
         } else {
@@ -117,55 +117,47 @@ pub enum ResolveError {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn resolve_file_column() {
-        let col = resolve_column_ref("__FILE.min_timestamp", None)
-            .await
-            .unwrap();
+    #[test]
+    fn resolve_file_column() {
+        let col = resolve_column_ref("__FILE.min_timestamp", None).unwrap();
         assert_eq!(col, "min_timestamp");
     }
 
-    #[tokio::test]
-    async fn resolve_unprefixed() {
-        let col = resolve_column_ref("state", None).await.unwrap();
+    #[test]
+    fn resolve_unprefixed() {
+        let col = resolve_column_ref("state", None).unwrap();
         assert_eq!(col, "state");
     }
 
-    #[tokio::test]
-    async fn resolve_dim_no_registry() {
-        let result = resolve_column_ref("__DIM.hostname", None).await;
-        assert!(result.is_err());
+    #[test]
+    fn resolve_dim_no_registry() {
+        assert!(resolve_column_ref("__DIM.hostname", None).is_err());
     }
 
-    #[tokio::test]
-    async fn resolve_agg_premium() {
-        let result = resolve_column_ref("__AGG.level.error", None).await;
+    #[test]
+    fn resolve_agg_premium() {
+        let result = resolve_column_ref("__AGG.level.error", None);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("premium"));
+        assert!(result.unwrap_err().to_string().contains("premium"));
     }
 
-    #[tokio::test]
-    async fn resolve_invalid_identifier() {
-        let result = resolve_column_ref("DROP TABLE", None).await;
-        assert!(result.is_err());
+    #[test]
+    fn resolve_invalid_identifier() {
+        assert!(resolve_column_ref("DROP TABLE", None).is_err());
     }
 
-    #[tokio::test]
-    async fn rewrite_file_prefix() {
-        let result = rewrite_filter_columns("__FILE.min_timestamp > 1000", None)
-            .await
-            .unwrap();
+    #[test]
+    fn rewrite_file_prefix() {
+        let result = rewrite_filter_columns("__FILE.min_timestamp > 1000", None).unwrap();
         assert_eq!(result, "min_timestamp > 1000");
     }
 
-    #[tokio::test]
-    async fn rewrite_multiple_prefixes() {
+    #[test]
+    fn rewrite_multiple_prefixes() {
         let result = rewrite_filter_columns(
             "__FILE.min_timestamp > 1000 AND __FILE.max_timestamp < 2000",
             None,
         )
-        .await
         .unwrap();
         assert_eq!(result, "min_timestamp > 1000 AND max_timestamp < 2000");
     }

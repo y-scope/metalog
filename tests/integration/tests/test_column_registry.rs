@@ -57,7 +57,7 @@ mod tests {
             .await
             .unwrap();
 
-        let snap = reg.snapshot().await;
+        let snap = reg.snapshot();
         assert_eq!(snap.resolve_dim("app"), Some("dim_f01"));
         assert_eq!(snap.resolve_dim("missing"), None);
     }
@@ -67,10 +67,10 @@ mod tests {
         let (pool, _container) = setup_db_with_table("test_count").await;
 
         let reg = ColumnRegistry::new(pool, "test_count").await.unwrap();
-        assert_eq!(reg.entry_count().await, 0);
+        assert_eq!(reg.entry_count(), 0);
 
         reg.resolve_or_allocate_dim("a", "str", 128).await.unwrap();
         reg.resolve_or_allocate_dim("b", "int", 0).await.unwrap();
-        assert_eq!(reg.entry_count().await, 2);
+        assert_eq!(reg.entry_count(), 2);
     }
 }

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use metalog_metastore::AdvisoryLock;
 use metalog_types::column::{
@@ -8,24 +11,23 @@ use metalog_types::column::{
     MIN_VARCHAR_WIDTH,
 };
 use sqlx::MySqlPool;
-use tokio::sync::RwLock;
 
 /// Maps physical `dim_fNN` columns to logical dimension keys.
 ///
-/// Thread-safe via [`RwLock`]: reads (resolve) take a read lock, allocation
-/// (resolve-or-allocate) takes a write lock + cross-node advisory lock.
+/// Uses `std::sync::RwLock` for the cache (sync reads, no await needed) and
+/// `tokio::sync::Mutex` for allocation serialization (async DDL operations).
 pub struct ColumnRegistry {
     db: MySqlPool,
     table_name: String,
-    inner: Arc<RwLock<RegistryInner>>,
+    /// Cache for fast-path sync reads. Never held across .await.
+    cache: Arc<RwLock<RegistryCache>>,
+    /// Serializes slow-path allocation (advisory lock + ALTER TABLE).
+    alloc_lock: tokio::sync::Mutex<()>,
 }
 
-struct RegistryInner {
-    /// dim_key → physical column name (e.g., "hostname" → "dim_f01").
+struct RegistryCache {
     dim_cache: HashMap<String, String>,
-    /// All active dim entries loaded from DB.
     dim_entries: Vec<DimRegistryEntry>,
-    /// Next slot number to allocate (1-based, max 99).
     next_dim_slot: u32,
 }
 
@@ -101,42 +103,43 @@ impl ColumnRegistry {
         Ok(Self {
             db,
             table_name: table_name.to_string(),
-            inner: Arc::new(RwLock::new(RegistryInner {
+            cache: Arc::new(RwLock::new(RegistryCache {
                 dim_cache,
                 dim_entries: entries,
                 next_dim_slot: max_slot + 1,
             })),
+            alloc_lock: tokio::sync::Mutex::new(()),
         })
     }
 
-    /// Fast-path dimension lookup (read lock only).
-    pub async fn resolve_dim(&self, dim_key: &str) -> Option<String> {
-        let inner = self.inner.read().await;
-        inner.dim_cache.get(dim_key).cloned()
+    /// Fast-path dimension lookup. **Sync** — no await, no async overhead.
+    pub fn resolve_dim(&self, dim_key: &str) -> Option<String> {
+        let cache = self.cache.read().expect("cache lock poisoned");
+        cache.dim_cache.get(dim_key).cloned()
     }
 
     /// Returns a lock-free snapshot of the current registry state.
-    pub async fn snapshot(&self) -> RegistrySnapshot {
-        let inner = self.inner.read().await;
+    pub fn snapshot(&self) -> RegistrySnapshot {
+        let cache = self.cache.read().expect("cache lock poisoned");
         RegistrySnapshot {
-            dim_map: inner.dim_cache.clone(),
+            dim_map: cache.dim_cache.clone(),
         }
     }
 
     /// Returns all active dim entries.
-    pub async fn all_dim_entries(&self) -> Vec<DimRegistryEntry> {
-        let inner = self.inner.read().await;
-        inner.dim_entries.clone()
+    pub fn all_dim_entries(&self) -> Vec<DimRegistryEntry> {
+        let cache = self.cache.read().expect("cache lock poisoned");
+        cache.dim_entries.clone()
     }
 
-    /// Returns the number of active entries (used as a cache-busting version token).
-    pub async fn entry_count(&self) -> usize {
-        let inner = self.inner.read().await;
-        inner.dim_entries.len()
+    /// Returns the number of active entries (cache-busting version token).
+    pub fn entry_count(&self) -> usize {
+        let cache = self.cache.read().expect("cache lock poisoned");
+        cache.dim_entries.len()
     }
 
-    /// Resolves or allocates a dimension column. Fast-path checks the cache;
-    /// slow-path acquires advisory lock and allocates a new slot.
+    /// Resolves or allocates a dimension column. Fast-path is sync (cache lookup);
+    /// slow-path is async (advisory lock + ALTER TABLE).
     pub async fn resolve_or_allocate_dim(
         &self,
         dim_key: &str,
@@ -145,15 +148,12 @@ impl ColumnRegistry {
     ) -> Result<String, RegistryError> {
         validate_dim_base_type(base_type)?;
 
-        // Fast path: read lock.
-        {
-            let inner = self.inner.read().await;
-            if let Some(col) = inner.dim_cache.get(dim_key) {
-                return Ok(col.clone());
-            }
+        // Fast path: sync read lock.
+        if let Some(col) = self.resolve_dim(dim_key) {
+            return Ok(col);
         }
 
-        // Slow path: write lock + advisory lock.
+        // Slow path: async allocation.
         self.allocate_dim_slot(dim_key, base_type, width).await
     }
 
@@ -163,28 +163,40 @@ impl ColumnRegistry {
         base_type: &str,
         width: i32,
     ) -> Result<String, RegistryError> {
+        // Serialize allocation within this process.
+        let _alloc_guard = self.alloc_lock.lock().await;
+
+        // Re-check cache (another task may have allocated while we waited).
+        if let Some(col) = self.resolve_dim(dim_key) {
+            return Ok(col);
+        }
+
         let lock_name = format!("metalog_dim_alloc_{}", self.table_name);
         let mut advisory = AdvisoryLock::acquire(&self.db, &lock_name, 10).await?;
 
-        // Re-check under advisory lock (another node may have allocated).
+        // Re-check DB (another node may have allocated).
         let fresh_entries = load_dim_entries(&self.db, &self.table_name).await?;
         let found = fresh_entries
             .iter()
             .find(|e| e.dim_key == dim_key)
             .map(|e| e.column_name.clone());
         if let Some(col_name) = found {
-            let mut inner = self.inner.write().await;
-            inner
-                .dim_cache
-                .insert(dim_key.to_string(), col_name.clone());
-            inner.dim_entries = fresh_entries;
+            {
+                let mut cache = self.cache.write().expect("cache lock poisoned");
+                cache
+                    .dim_cache
+                    .insert(dim_key.to_string(), col_name.clone());
+                cache.dim_entries = fresh_entries;
+            } // write guard dropped before await
             advisory.release().await?;
             return Ok(col_name);
         }
 
         // Allocate new slot.
-        let mut inner = self.inner.write().await;
-        let slot = inner.next_dim_slot;
+        let slot = {
+            let cache = self.cache.read().expect("cache lock poisoned");
+            cache.next_dim_slot
+        };
         if slot > MAX_DIM_SLOTS {
             advisory.release().await?;
             return Err(RegistryError::SlotExhausted);
@@ -201,9 +213,7 @@ impl ColumnRegistry {
         );
         match sqlx::query(&alter).execute(&self.db).await {
             Ok(_) => {}
-            Err(e) if metalog_db::is_duplicate_column(&e) => {
-                // Column already exists (concurrent allocation) — proceed with INSERT.
-            }
+            Err(e) if metalog_db::is_duplicate_column(&e) => {}
             Err(e) => {
                 advisory.release().await?;
                 return Err(RegistryError::Sql(e));
@@ -225,13 +235,16 @@ impl ColumnRegistry {
         .execute(&self.db)
         .await?;
 
-        inner
-            .dim_cache
-            .insert(dim_key.to_string(), col_name.clone());
-        inner.next_dim_slot = slot + 1;
-
-        // Refresh entries.
-        inner.dim_entries = load_dim_entries(&self.db, &self.table_name).await?;
+        // Load fresh entries BEFORE acquiring write lock (no await under lock).
+        let updated_entries = load_dim_entries(&self.db, &self.table_name).await?;
+        {
+            let mut cache = self.cache.write().expect("cache lock poisoned");
+            cache
+                .dim_cache
+                .insert(dim_key.to_string(), col_name.clone());
+            cache.next_dim_slot = slot + 1;
+            cache.dim_entries = updated_entries;
+        }
 
         advisory.release().await?;
 
@@ -248,16 +261,14 @@ impl ColumnRegistry {
     /// Re-reads alias columns from the database, evicts invalidated entries.
     pub async fn refresh_aliases(&self) -> Result<(), RegistryError> {
         let fresh = load_dim_entries(&self.db, &self.table_name).await?;
-        let mut inner = self.inner.write().await;
-
-        inner.dim_cache.clear();
+        let mut cache = self.cache.write().expect("cache lock poisoned");
+        cache.dim_cache.clear();
         for entry in &fresh {
-            inner
+            cache
                 .dim_cache
                 .insert(entry.dim_key.clone(), entry.column_name.clone());
         }
-        inner.dim_entries = fresh;
-
+        cache.dim_entries = fresh;
         Ok(())
     }
 }
