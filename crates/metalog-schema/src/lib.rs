@@ -12,4 +12,4 @@ pub use column_registry::{
 };
 pub use ddl::{execute_ddl_statements, split_sql_statements, SCHEMA_SQL};
 pub use partition_manager::{IndexManager, PartitionError, PartitionManager};
-pub use provisioner::{ensure_kafka_tables, ensure_table};
+pub use provisioner::{ensure_kafka_tables, ensure_table, EnsureTableError};

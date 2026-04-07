@@ -11,6 +11,7 @@ members = [
     "crates/metalog-schema",
     "crates/metalog-proto",
     "crates/metalog-ingestion",
+    "crates/metalog-coordinator",
 ]
 
 [workspace.package]

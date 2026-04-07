@@ -1,0 +1,15 @@
+[package]
+name = "metalog-coordinator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+metalog-db = { workspace = true }
+metalog-metastore = { workspace = true }
+metalog-schema = { workspace = true }
+metalog-timeutil = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
