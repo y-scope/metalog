@@ -40,7 +40,7 @@ pub struct DimRegistryEntry {
     pub alias_col: Option<String>,
     #[sqlx(rename = "state")]
     pub status: String,
-    pub width: Option<i32>,
+    pub width: Option<u16>,
 }
 
 /// Immutable snapshot of the registry for lock-free reads.

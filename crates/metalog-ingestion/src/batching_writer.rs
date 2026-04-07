@@ -193,27 +193,196 @@ async fn table_writer_loop(
     tracing::info!(table = %table_name, "table writer stopped");
 }
 
-/// Flushes a batch of records to the database.
+/// Maximum rows per INSERT statement (MySQL parameter limit).
+const MAX_ROWS_PER_INSERT: usize = 1000;
+
+/// Flushes a batch of records to the database via multi-row guarded UPSERT.
 ///
-/// In a full implementation, this would:
-/// 1. Resolve dim keys → physical columns via ColumnRegistry
-/// 2. Call premium AggProcessor/SketchProcessor if present
-/// 3. Build multi-row guarded INSERT
-/// 4. Execute and notify each record via its flushed channel
-///
-/// Currently a placeholder that logs the batch size.
+/// 1. Resolves dim keys → physical columns via ColumnRegistry (if available)
+/// 2. Builds multi-row INSERT with guarded ON DUPLICATE KEY UPDATE
+/// 3. Executes in chunks of 1000 rows
 async fn flush_batch(
     table_name: &str,
-    _db: &MySqlPool,
-    _registries: &Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
+    db: &MySqlPool,
+    registries: &Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     batch: &mut Vec<FileRecord>,
 ) {
     let count = batch.len();
     tracing::debug!(table = table_name, count, "flushing batch");
 
-    // TODO: implement full UPSERT pipeline (commit 12+ will build this out)
+    // Resolve dim columns if registry is available.
+    let registry = {
+        let regs = registries.read().await;
+        regs.get(table_name).cloned()
+    };
+
+    // Collect unique dim keys and resolve to physical columns.
+    let mut dim_mappings: Vec<(String, String)> = Vec::new(); // (logical_key, physical_col)
+    if let Some(reg) = &registry {
+        let mut seen_keys = std::collections::HashSet::new();
+        for rec in batch.iter() {
+            for meta in &rec.dim_meta {
+                if seen_keys.insert(meta.key.clone()) {
+                    match reg
+                        .resolve_or_allocate_dim(&meta.key, &meta.base_type, meta.width)
+                        .await
+                    {
+                        Ok(col) => dim_mappings.push((meta.key.clone(), col)),
+                        Err(e) => {
+                            tracing::warn!(dim_key = %meta.key, error = %e, "dim allocation failed");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Build and execute INSERT in chunks.
+    for chunk in batch.chunks(MAX_ROWS_PER_INSERT) {
+        if let Err(e) = execute_upsert(db, table_name, chunk, &dim_mappings).await {
+            tracing::error!(table = table_name, error = %e, "upsert failed");
+        }
+    }
 
     batch.clear();
+}
+
+/// Builds and executes a multi-row INSERT with guarded ON DUPLICATE KEY UPDATE.
+async fn execute_upsert(
+    db: &MySqlPool,
+    table_name: &str,
+    records: &[FileRecord],
+    dim_mappings: &[(String, String)],
+) -> Result<(), sqlx::Error> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    // Base columns always present in INSERT.
+    let mut col_names: Vec<&str> = vec![
+        "min_timestamp",
+        "max_timestamp",
+        "state",
+        "clp_ir_storage_backend",
+        "clp_ir_bucket",
+        "clp_ir_path",
+        "clp_ir_size_bytes",
+        "clp_archive_storage_backend",
+        "clp_archive_bucket",
+        "clp_archive_path",
+        "clp_archive_size_bytes",
+        "clp_archive_created_at",
+        "raw_size_bytes",
+        "record_count",
+        "retention_days",
+        "expires_at",
+    ];
+
+    // Add dim columns.
+    let dim_col_strings: Vec<String> = dim_mappings.iter().map(|(_, col)| col.clone()).collect();
+    for col in &dim_col_strings {
+        col_names.push(col);
+    }
+
+    let cols_sql = col_names
+        .iter()
+        .map(|c| format!("`{c}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let params_per_row = col_names.len();
+    let placeholders_row = format!(
+        "({})",
+        (0..params_per_row)
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let all_placeholders = (0..records.len())
+        .map(|_| placeholders_row.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Guarded ON DUPLICATE KEY UPDATE (MariaDB VALUES() syntax).
+    let update_cols: Vec<&str> = vec![
+        "max_timestamp",
+        "state",
+        "clp_ir_storage_backend",
+        "clp_ir_bucket",
+        "clp_ir_size_bytes",
+        "clp_archive_storage_backend",
+        "clp_archive_bucket",
+        "clp_archive_path",
+        "clp_archive_size_bytes",
+        "clp_archive_created_at",
+        "raw_size_bytes",
+        "record_count",
+    ];
+
+    let guard_states = metalog_types::FileState::upsert_guard_states()
+        .iter()
+        .map(|s| format!("'{}'", s.as_db_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let mut update_parts: Vec<String> = Vec::new();
+    for col in &update_cols {
+        update_parts.push(format!(
+            "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
+             `max_timestamp`, VALUES(`{col}`), `{col}`)"
+        ));
+    }
+    // Dim columns also guarded.
+    for col in &dim_col_strings {
+        update_parts.push(format!(
+            "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
+             `max_timestamp`, VALUES(`{col}`), `{col}`)"
+        ));
+    }
+
+    let sql = format!(
+        "INSERT INTO `{table_name}` ({cols_sql}) VALUES {all_placeholders} ON DUPLICATE KEY \
+         UPDATE {}",
+        update_parts.join(", ")
+    );
+
+    // Bind parameters.
+    let mut query = sqlx::query(&sql);
+    for rec in records {
+        query = query
+            .bind(rec.min_timestamp)
+            .bind(rec.max_timestamp)
+            .bind(rec.state.as_db_str())
+            .bind(&rec.clp_ir_storage_backend)
+            .bind(&rec.clp_ir_bucket)
+            .bind(&rec.clp_ir_path)
+            .bind(rec.clp_ir_size_bytes)
+            .bind(&rec.clp_archive_storage_backend)
+            .bind(&rec.clp_archive_bucket)
+            .bind(&rec.clp_archive_path)
+            .bind(rec.clp_archive_size_bytes)
+            .bind(rec.clp_archive_created_at)
+            .bind(rec.raw_size_bytes)
+            .bind(rec.record_count)
+            .bind(rec.retention_days)
+            .bind(rec.expires_at);
+
+        // Bind dim values in the same order as dim_mappings.
+        for (logical_key, _) in dim_mappings {
+            let val = rec.dims.get(logical_key);
+            match val {
+                Some(serde_json::Value::String(s)) => query = query.bind(Some(s.as_str())),
+                Some(serde_json::Value::Number(n)) => {
+                    query = query.bind(n.as_i64());
+                }
+                Some(serde_json::Value::Bool(b)) => query = query.bind(Some(*b)),
+                _ => query = query.bind(Option::<String>::None),
+            }
+        }
+    }
+
+    query.execute(db).await?;
+    Ok(())
 }
 
 #[cfg(test)]

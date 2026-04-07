@@ -20,15 +20,26 @@ pub fn split_sql_statements(sql: &str) -> Vec<String> {
     for line in sql.lines() {
         let trimmed = line.trim();
 
-        // Skip empty lines and comments.
+        // Skip empty lines and full-line comments.
         if trimmed.is_empty() || trimmed.starts_with("--") {
             continue;
         }
 
-        current.push(' ');
-        current.push_str(trimmed);
+        // Strip inline comments (e.g., "INDEX foo (bar),  -- explanation").
+        let without_comment = if let Some(pos) = trimmed.find("  --") {
+            trimmed[..pos].trim()
+        } else {
+            trimmed
+        };
 
-        if trimmed.ends_with(';') {
+        if without_comment.is_empty() {
+            continue;
+        }
+
+        current.push(' ');
+        current.push_str(without_comment);
+
+        if without_comment.ends_with(';') {
             let stmt = current.trim().to_string();
             if !stmt.is_empty() && stmt != ";" {
                 statements.push(stmt);
@@ -63,7 +74,17 @@ pub async fn execute_ddl_statements(pool: &MySqlPool, sql: &str) -> Result<(), s
             Err(e) if metalog_db::is_duplicate_column(&e) => {
                 tracing::debug!("column already exists, skipping");
             }
-            Err(e) => return Err(e),
+            Err(e) if metalog_db::is_cant_drop_key(&e) => {
+                tracing::debug!("column/key does not exist, skipping");
+            }
+            Err(e) => {
+                tracing::error!(
+                    stmt = %stmt.chars().take(120).collect::<String>(),
+                    error = %e,
+                    "DDL execution failed"
+                );
+                return Err(e);
+            }
         }
     }
     Ok(())

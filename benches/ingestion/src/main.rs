@@ -1,12 +1,13 @@
 //! Ingestion benchmark for metalog.
 //!
-//! Measures gRPC ingestion throughput by sending records via concurrent
-//! tonic clients to an in-process metalog gRPC server.
+//! Measures gRPC ingestion throughput with optional MariaDB backend.
 //!
 //! Usage:
-//!   cargo run -p metalog-bench-ingestion --release -- [OPTIONS]
+//!   # Channel-only (no DB):
+//!   cargo run -p metalog-bench-ingestion --release
 //!
-//! Equivalent to Go's `test/benchmarks/ingestion/main.go`.
+//!   # Full pipeline with MariaDB (testcontainers):
+//!   cargo run -p metalog-bench-ingestion --release -- --with-db
 
 use std::{
     net::SocketAddr,
@@ -35,6 +36,7 @@ use metalog_proto::{
     IngestRequest,
     MetadataIngestionServiceServer,
 };
+use sqlx::MySqlPool;
 use tokio::task::JoinSet;
 
 #[derive(Parser)]
@@ -56,13 +58,17 @@ struct Args {
     #[arg(long, default_value_t = 5_000)]
     concurrency: usize,
 
-    /// Use blocking ingestion (higher throughput).
-    #[arg(long, default_value_t = true)]
-    blocking: bool,
-
     /// Number of HTTP/2 connections to the server.
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 8)]
     connections: usize,
+
+    /// Use a real MariaDB via testcontainers.
+    #[arg(long)]
+    with_db: bool,
+
+    /// Batch size for the BatchingWriter.
+    #[arg(long, default_value_t = 5_000)]
+    batch_size: usize,
 }
 
 #[tokio::main]
@@ -78,13 +84,67 @@ async fn main() {
     println!("  Apps        : {}", args.apps);
     println!("  Concurrency : {}", args.concurrency);
     println!("  Connections : {}", args.connections);
-    println!("  Blocking    : {}", args.blocking);
+    println!("  Batch size  : {}", args.batch_size);
+    println!("  With DB     : {}", args.with_db);
     println!("  Table       : {}", args.table);
     println!("========================================");
     println!();
 
-    // Start in-process gRPC server with BatchingWriter.
-    let (addr, _writer) = start_server(args.blocking).await;
+    if args.with_db {
+        run_with_db(&args).await;
+    } else {
+        run_channel_only(&args).await;
+    }
+}
+
+/// Runs benchmark with real MariaDB via testcontainers.
+async fn run_with_db(args: &Args) {
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::mariadb::Mariadb;
+
+    println!("Starting MariaDB container...");
+    let container = Mariadb::default().start().await.unwrap();
+
+    let port = container.get_host_port_ipv4(3306).await.unwrap();
+    let dsn = format!("mysql://root@127.0.0.1:{port}/test");
+    println!("MariaDB ready on port {port}");
+
+    let pool = MySqlPool::connect(&dsn).await.unwrap();
+
+    // Create schema and table.
+    println!("Creating schema...");
+    metalog_schema::execute_ddl_statements(&pool, metalog_schema::SCHEMA_SQL)
+        .await
+        .unwrap();
+    metalog_schema::ensure_table(&pool, &args.table, None)
+        .await
+        .unwrap();
+    println!("Table '{}' provisioned", args.table);
+
+    // Create column registry and pre-allocate dim columns.
+    let registry = Arc::new(
+        metalog_schema::ColumnRegistry::new(pool.clone(), &args.table)
+            .await
+            .unwrap(),
+    );
+    for (key, base_type, width) in [
+        ("service", "str", 128),
+        ("host", "str", 256),
+        ("zone", "str", 128),
+    ] {
+        registry
+            .resolve_or_allocate_dim(key, base_type, width)
+            .await
+            .unwrap();
+        println!(
+            "  allocated dim: {key} → {}",
+            registry.resolve_dim(key).await.unwrap()
+        );
+    }
+
+    // Start server with real DB.
+    let (addr, writer) =
+        start_server_with_db(pool.clone(), registry.clone(), &args.table, args.batch_size).await;
 
     // Run benchmark.
     let (accepted, rejected, elapsed) = run_grpc(
@@ -97,7 +157,43 @@ async fn main() {
     )
     .await;
 
-    // Print results.
+    // Wait for BatchingWriter to flush remaining records.
+    println!("Stopping writer (flushing remaining batches)...");
+    writer.stop().await;
+
+    // Check DB row count.
+    let row_count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM `{}`", args.table))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    print_results(args, accepted, rejected, elapsed, Some(row_count.0));
+}
+
+/// Runs benchmark without DB (channel throughput only).
+async fn run_channel_only(args: &Args) {
+    let (addr, _writer) = start_server_no_db(args.batch_size).await;
+
+    let (accepted, rejected, elapsed) = run_grpc(
+        addr,
+        &args.table,
+        args.records,
+        args.apps,
+        args.concurrency,
+        args.connections,
+    )
+    .await;
+
+    print_results(args, accepted, rejected, elapsed, None);
+}
+
+fn print_results(
+    args: &Args,
+    accepted: i64,
+    rejected: i64,
+    elapsed: Duration,
+    db_rows: Option<i64>,
+) {
     println!();
     println!("========================================");
     println!("  RESULTS");
@@ -106,6 +202,9 @@ async fn main() {
         "  Records     : {} sent, {} accepted, {} rejected",
         args.records, accepted, rejected
     );
+    if let Some(rows) = db_rows {
+        println!("  DB rows     : {rows}");
+    }
     println!("  Duration    : {:.1}s", elapsed.as_secs_f64());
     println!(
         "  Throughput  : {:.0} rec/s",
@@ -114,12 +213,44 @@ async fn main() {
     println!("========================================");
 }
 
-/// Starts an in-process gRPC server with the ingestion handler.
-async fn start_server(blocking: bool) -> (SocketAddr, Arc<BatchingWriter>) {
-    let pool = sqlx::MySqlPool::connect_lazy("mysql://root@localhost/test").unwrap();
-    let writer = Arc::new(BatchingWriter::new(pool, true));
-    let service = Arc::new(IngestionService::new(writer.clone(), blocking));
+/// Starts gRPC server backed by real MariaDB.
+async fn start_server_with_db(
+    pool: MySqlPool,
+    registry: Arc<metalog_schema::ColumnRegistry>,
+    table_name: &str,
+    batch_size: usize,
+) -> (SocketAddr, Arc<BatchingWriter>) {
+    let writer = Arc::new(
+        BatchingWriter::new(pool, true)
+            .with_batch_size(batch_size)
+            .with_flush_interval(Duration::from_secs(1)),
+    );
+    writer.set_registry(table_name, registry).await;
 
+    let service = Arc::new(IngestionService::new(writer.clone(), true));
+    let handler = metalog_grpc::IngestionHandler::new(service);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        tonic::transport::Server::builder()
+            .add_service(MetadataIngestionServiceServer::new(handler))
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    (addr, writer)
+}
+
+/// Starts gRPC server without DB (channel throughput only).
+async fn start_server_no_db(batch_size: usize) -> (SocketAddr, Arc<BatchingWriter>) {
+    let pool = MySqlPool::connect_lazy("mysql://root@localhost/test").unwrap();
+    let writer = Arc::new(BatchingWriter::new(pool, true).with_batch_size(batch_size));
+    let service = Arc::new(IngestionService::new(writer.clone(), true));
     let handler = metalog_grpc::IngestionHandler::new(service);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -161,7 +292,6 @@ async fn run_grpc(
 
     let start = Instant::now();
 
-    // Spawn worker tasks sharing the pool.
     let mut join_set = JoinSet::new();
     for _ in 0..concurrency {
         let rx = rx.clone();
@@ -190,7 +320,6 @@ async fn run_grpc(
         });
     }
 
-    // Feed work.
     for i in 0..records {
         tx.send(i).await.unwrap();
     }
@@ -199,10 +328,11 @@ async fn run_grpc(
     while join_set.join_next().await.is_some() {}
 
     let elapsed = start.elapsed();
-    let acc = accepted.load(Ordering::Relaxed);
-    let rej = rejected.load(Ordering::Relaxed);
-
-    (acc, rej, elapsed)
+    (
+        accepted.load(Ordering::Relaxed),
+        rejected.load(Ordering::Relaxed),
+        elapsed,
+    )
 }
 
 /// Builds an IngestRequest matching the Go benchmark's record format.

@@ -15,10 +15,14 @@ metalog-grpc = { workspace = true }
 metalog-node = { workspace = true }
 metalog-config = { workspace = true }
 metalog-db = { workspace = true }
+metalog-schema = { workspace = true }
+metalog-metastore = { workspace = true }
 
 async-channel = { workspace = true }
 clap = { workspace = true }
 sqlx = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
