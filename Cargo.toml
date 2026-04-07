@@ -9,6 +9,7 @@ members = [
     "crates/metalog-db",
     "crates/metalog-metastore",
     "crates/metalog-schema",
+    "crates/metalog-proto",
 ]
 
 [workspace.package]
@@ -30,6 +31,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 # Logging
 tracing = "0.1"
+
+# gRPC / Proto
+tonic = "0.12"
+tonic-build = "0.12"
+prost = "0.13"
 
 # Error handling
 thiserror = "2"
