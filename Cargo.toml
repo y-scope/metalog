@@ -26,6 +26,8 @@ members = [
     "crates/metalog-ha",
     "crates/metalog-consolidation",
     "crates/metalog-retention",
+    # Benchmarks
+    "benches/ingestion",
 ]
 
 [workspace.package]
@@ -76,6 +78,10 @@ once_cell = "1"
 
 # Random
 rand = "0.8"
+
+# Channels
+async-channel = "2"
+tokio-stream = "0.1"
 
 # HTTP
 axum = "0.8"

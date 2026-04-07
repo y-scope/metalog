@@ -1,0 +1,26 @@
+[package]
+name = "metalog-bench-ingestion"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "bench-ingestion"
+path = "src/main.rs"
+
+[dependencies]
+metalog-proto = { workspace = true }
+metalog-ingestion = { workspace = true }
+metalog-grpc = { workspace = true }
+metalog-node = { workspace = true }
+metalog-config = { workspace = true }
+metalog-db = { workspace = true }
+
+async-channel = { workspace = true }
+clap = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
