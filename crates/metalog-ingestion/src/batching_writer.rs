@@ -243,6 +243,7 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
                         {
                             Ok(col) => {
                                 ctx.dim_cache.insert(meta.key.clone(), col);
+                                ctx.dim_keys.push(meta.key.clone());
                                 dims_changed = true;
                             }
                             Err(e) => {
@@ -257,7 +258,8 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
         }
     }
 
-    // Rebuild SQL template and dim_keys only when dim columns change.
+    // Rebuild SQL template only when dim columns change.
+    // dim_keys is maintained incrementally above (pushed on each new dim).
     if dims_changed || ctx.sql_prefix.is_none() {
         let dim_cols: Vec<(&str, &str)> = ctx
             .dim_cache
@@ -267,7 +269,6 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
         let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_cols);
         ctx.sql_prefix = Some(prefix);
         ctx.sql_suffix = Some(suffix);
-        ctx.dim_keys = ctx.dim_cache.keys().cloned().collect();
     }
     let sql_prefix = ctx.sql_prefix.as_deref().unwrap();
     let sql_suffix = ctx.sql_suffix.as_deref().unwrap();
