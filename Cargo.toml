@@ -6,6 +6,7 @@ members = [
     "crates/metalog-timeutil",
     "crates/metalog-logutil",
     "crates/metalog-config",
+    "crates/metalog-db",
 ]
 
 [workspace.package]
@@ -35,9 +36,23 @@ anyhow = "1"
 # YAML
 serde_yaml = "0.9"
 
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
+
+# Regex
+regex = "1"
+once_cell = "1"
+
+# Random
+rand = "0.8"
+
 # System
 hostname = "0.4"
 which = "7"
 
 # Internal crates
 metalog-types = { path = "crates/metalog-types" }
+metalog-config = { path = "crates/metalog-config" }
