@@ -1,7 +1,6 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
+
+use parking_lot::RwLock;
 
 use metalog_metastore::AdvisoryLock;
 use metalog_types::column::{
@@ -116,14 +115,14 @@ impl ColumnRegistry {
 
     /// Fast-path dimension lookup. **Sync** — no await, no async overhead.
     pub fn resolve_dim(&self, dim_key: &str) -> Option<String> {
-        let cache = self.cache.read().expect("cache lock poisoned");
+        let cache = self.cache.read();
         cache.dim_cache.get(dim_key).cloned()
     }
 
     /// Returns a lock-free snapshot of the current registry state.
     /// O(1) — clones the Arc pointer, not the map data.
     pub fn snapshot(&self) -> RegistrySnapshot {
-        let cache = self.cache.read().expect("cache lock poisoned");
+        let cache = self.cache.read();
         RegistrySnapshot {
             dim_map: Arc::clone(&cache.dim_cache),
         }
@@ -131,13 +130,13 @@ impl ColumnRegistry {
 
     /// Returns all active dim entries.
     pub fn all_dim_entries(&self) -> Vec<DimRegistryEntry> {
-        let cache = self.cache.read().expect("cache lock poisoned");
+        let cache = self.cache.read();
         cache.dim_entries.clone()
     }
 
     /// Returns the number of active entries (cache-busting version token).
     pub fn entry_count(&self) -> usize {
-        let cache = self.cache.read().expect("cache lock poisoned");
+        let cache = self.cache.read();
         cache.dim_entries.len()
     }
 
@@ -185,7 +184,7 @@ impl ColumnRegistry {
             .map(|e| e.column_name.clone());
         if let Some(col_name) = found {
             {
-                let mut cache = self.cache.write().expect("cache lock poisoned");
+                let mut cache = self.cache.write();
                 Arc::make_mut(&mut cache.dim_cache)
                     .insert(dim_key.to_string(), col_name.clone());
                 cache.dim_entries = fresh_entries;
@@ -196,7 +195,7 @@ impl ColumnRegistry {
 
         // Allocate new slot.
         let slot = {
-            let cache = self.cache.read().expect("cache lock poisoned");
+            let cache = self.cache.read();
             cache.next_dim_slot
         };
         if slot > MAX_DIM_SLOTS {
@@ -240,7 +239,7 @@ impl ColumnRegistry {
         // Load fresh entries BEFORE acquiring write lock (no await under lock).
         let updated_entries = load_dim_entries(&self.db, &self.table_name).await?;
         {
-            let mut cache = self.cache.write().expect("cache lock poisoned");
+            let mut cache = self.cache.write();
             Arc::make_mut(&mut cache.dim_cache)
                 .insert(dim_key.to_string(), col_name.clone());
             cache.next_dim_slot = slot + 1;
@@ -266,7 +265,7 @@ impl ColumnRegistry {
         for entry in &fresh {
             new_map.insert(entry.dim_key.clone(), entry.column_name.clone());
         }
-        let mut cache = self.cache.write().expect("cache lock poisoned");
+        let mut cache = self.cache.write();
         cache.dim_cache = Arc::new(new_map);
         cache.dim_entries = fresh;
         Ok(())
