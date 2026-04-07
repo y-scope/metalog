@@ -313,15 +313,15 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
         "min_timestamp",
         "max_timestamp",
         "state",
-        "clp_ir_storage_backend",
-        "clp_ir_bucket",
-        "clp_ir_path",
-        "clp_ir_size_bytes",
-        "clp_archive_storage_backend",
-        "clp_archive_bucket",
-        "clp_archive_path",
-        "clp_archive_size_bytes",
-        "clp_archive_created_at",
+        "file_storage_backend",
+        "file_bucket",
+        "file_path",
+        "file_size_bytes",
+        "archive_storage_backend",
+        "archive_bucket",
+        "archive_path",
+        "archive_size_bytes",
+        "archive_created_at",
         "raw_size_bytes",
         "record_count",
         "retention_days",
@@ -351,14 +351,14 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
     let update_cols: &[&str] = &[
         "max_timestamp",
         "state",
-        "clp_ir_storage_backend",
-        "clp_ir_bucket",
-        "clp_ir_size_bytes",
-        "clp_archive_storage_backend",
-        "clp_archive_bucket",
-        "clp_archive_path",
-        "clp_archive_size_bytes",
-        "clp_archive_created_at",
+        "file_storage_backend",
+        "file_bucket",
+        "file_size_bytes",
+        "archive_storage_backend",
+        "archive_bucket",
+        "archive_path",
+        "archive_size_bytes",
+        "archive_created_at",
         "raw_size_bytes",
         "record_count",
     ];
@@ -424,18 +424,18 @@ async fn execute_upsert_into(
         sql_buf.push(',');
         sql_buf.push_str(itoa_buf.format(rec.max_timestamp));
         write_escaped(sql_buf, rec.state.as_db_str());
-        write_escaped_opt(sql_buf, rec.clp_ir_storage_backend.as_deref());
-        write_escaped_opt(sql_buf, rec.clp_ir_bucket.as_deref());
-        write_escaped_opt(sql_buf, rec.clp_ir_path.as_deref());
+        write_escaped_opt(sql_buf, rec.file_storage_backend.as_deref());
+        write_escaped_opt(sql_buf, rec.file_bucket.as_deref());
+        write_escaped_opt(sql_buf, rec.file_path.as_deref());
         sql_buf.push(',');
-        sql_buf.push_str(itoa_buf.format(rec.clp_ir_size_bytes));
-        write_escaped_opt(sql_buf, rec.clp_archive_storage_backend.as_deref());
-        write_escaped_opt(sql_buf, rec.clp_archive_bucket.as_deref());
-        write_escaped_opt(sql_buf, rec.clp_archive_path.as_deref());
+        sql_buf.push_str(itoa_buf.format(rec.file_size_bytes));
+        write_escaped_opt(sql_buf, rec.archive_storage_backend.as_deref());
+        write_escaped_opt(sql_buf, rec.archive_bucket.as_deref());
+        write_escaped_opt(sql_buf, rec.archive_path.as_deref());
         sql_buf.push(',');
-        sql_buf.push_str(itoa_buf.format(rec.clp_archive_size_bytes));
+        sql_buf.push_str(itoa_buf.format(rec.archive_size_bytes));
         sql_buf.push(',');
-        sql_buf.push_str(itoa_buf.format(rec.clp_archive_created_at));
+        sql_buf.push_str(itoa_buf.format(rec.archive_created_at));
         sql_buf.push(',');
         sql_buf.push_str(itoa_buf.format(rec.raw_size_bytes));
         sql_buf.push(',');

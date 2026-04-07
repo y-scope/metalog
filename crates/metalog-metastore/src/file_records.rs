@@ -51,9 +51,9 @@ impl FileRecords {
             "id".to_string(),
             "min_timestamp".to_string(),
             "max_timestamp".to_string(),
-            "clp_ir_storage_backend".to_string(),
-            "clp_ir_bucket".to_string(),
-            "clp_ir_path".to_string(),
+            "file_storage_backend".to_string(),
+            "file_bucket".to_string(),
+            "file_path".to_string(),
         ];
 
         for m in dim_mappings {
@@ -81,9 +81,9 @@ impl FileRecords {
                 id: row.get("id"),
                 min_timestamp: row.get("min_timestamp"),
                 max_timestamp: row.get("max_timestamp"),
-                clp_ir_storage_backend: row.get("clp_ir_storage_backend"),
-                clp_ir_bucket: row.get("clp_ir_bucket"),
-                clp_ir_path: row.get("clp_ir_path"),
+                file_storage_backend: row.get("file_storage_backend"),
+                file_bucket: row.get("file_bucket"),
+                file_path: row.get("file_path"),
             });
         }
         Ok(results)
@@ -126,9 +126,9 @@ impl FileRecords {
 
         let placeholders: Vec<&str> = ir_paths.iter().map(|_| "?").collect();
         let sql = format!(
-            "UPDATE `{}` SET state = ?, clp_archive_path = ?, clp_archive_storage_backend = ?, \
-             clp_archive_bucket = ?, clp_archive_size_bytes = ?, clp_archive_created_at = ? WHERE \
-             clp_ir_path IN ({}) AND state = ?",
+            "UPDATE `{}` SET state = ?, archive_path = ?, archive_storage_backend = ?, \
+             archive_bucket = ?, archive_size_bytes = ?, archive_created_at = ? WHERE file_path \
+             IN ({}) AND state = ?",
             self.table_name,
             placeholders.join(", "),
         );
@@ -188,12 +188,12 @@ impl FileRecords {
     ) -> Result<DeletionResult, sqlx::Error> {
         // Select paths before delete (CAST needed: ascii_bin → VARBINARY in sqlx).
         let select_sql = format!(
-            "SELECT CAST(clp_ir_storage_backend AS CHAR) AS clp_ir_storage_backend, \
-             CAST(clp_ir_bucket AS CHAR) AS clp_ir_bucket, CAST(clp_ir_path AS CHAR) AS \
-             clp_ir_path, CAST(clp_archive_storage_backend AS CHAR) AS \
-             clp_archive_storage_backend, CAST(clp_archive_bucket AS CHAR) AS clp_archive_bucket, \
-             CAST(clp_archive_path AS CHAR) AS clp_archive_path FROM `{}` WHERE state IN (?, ?) \
-             AND expires_at > 0 AND expires_at < ? LIMIT 1000",
+            "SELECT CAST(file_storage_backend AS CHAR) AS file_storage_backend, CAST(file_bucket \
+             AS CHAR) AS file_bucket, CAST(file_path AS CHAR) AS file_path, \
+             CAST(archive_storage_backend AS CHAR) AS archive_storage_backend, \
+             CAST(archive_bucket AS CHAR) AS archive_bucket, CAST(archive_path AS CHAR) AS \
+             archive_path FROM `{}` WHERE state IN (?, ?) AND expires_at > 0 AND expires_at < ? \
+             LIMIT 1000",
             self.table_name,
         );
         let rows = sqlx::query(&select_sql)
@@ -206,9 +206,9 @@ impl FileRecords {
         let mut result = DeletionResult::default();
         for row in &rows {
             use sqlx::Row;
-            let ir_backend: Option<String> = row.get("clp_ir_storage_backend");
-            let ir_bucket: Option<String> = row.get("clp_ir_bucket");
-            let ir_path: Option<String> = row.get("clp_ir_path");
+            let ir_backend: Option<String> = row.get("file_storage_backend");
+            let ir_bucket: Option<String> = row.get("file_bucket");
+            let ir_path: Option<String> = row.get("file_path");
             if let (Some(backend), Some(bucket), Some(path)) = (ir_backend, ir_bucket, ir_path) {
                 if !path.is_empty() {
                     result.ir_paths.push(StoragePath {
@@ -219,9 +219,9 @@ impl FileRecords {
                 }
             }
 
-            let arch_backend: Option<String> = row.get("clp_archive_storage_backend");
-            let arch_bucket: Option<String> = row.get("clp_archive_bucket");
-            let arch_path: Option<String> = row.get("clp_archive_path");
+            let arch_backend: Option<String> = row.get("archive_storage_backend");
+            let arch_bucket: Option<String> = row.get("archive_bucket");
+            let arch_path: Option<String> = row.get("archive_path");
             if let (Some(backend), Some(bucket), Some(path)) =
                 (arch_backend, arch_bucket, arch_path)
             {
@@ -259,9 +259,9 @@ pub struct PendingFile {
     pub id: i64,
     pub min_timestamp: i64,
     pub max_timestamp: i64,
-    pub clp_ir_storage_backend: Option<String>,
-    pub clp_ir_bucket: Option<String>,
-    pub clp_ir_path: Option<String>,
+    pub file_storage_backend: Option<String>,
+    pub file_bucket: Option<String>,
+    pub file_path: Option<String>,
 }
 
 #[cfg(test)]
@@ -292,9 +292,9 @@ mod tests {
             id: 42,
             min_timestamp: 1000,
             max_timestamp: 2000,
-            clp_ir_storage_backend: Some("minio".into()),
-            clp_ir_bucket: Some("logs".into()),
-            clp_ir_path: Some("/data/test.ir".into()),
+            file_storage_backend: Some("minio".into()),
+            file_bucket: Some("logs".into()),
+            file_path: Some("/data/test.ir".into()),
         };
         assert_eq!(f.id, 42);
     }

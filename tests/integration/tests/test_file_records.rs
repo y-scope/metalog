@@ -77,7 +77,7 @@ mod tests {
         // Insert an IR_PURGING file.
         sqlx::query(
             "INSERT INTO `test_delete` (min_timestamp, max_timestamp, state, \
-             clp_ir_storage_backend, clp_ir_bucket, clp_ir_path, record_count, retention_days, \
+             file_storage_backend, file_bucket, file_path, record_count, retention_days, \
              expires_at) VALUES (?, ?, 'IR_PURGING', 's3', 'logs', '/data/test.ir', 10, 30, ?)",
         )
         .bind(expired_ts)

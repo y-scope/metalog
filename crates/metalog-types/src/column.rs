@@ -31,18 +31,18 @@ pub const COL_RAW_SIZE_BYTES: &str = "raw_size_bytes";
 pub const COL_RETENTION_DAYS: &str = "retention_days";
 pub const COL_EXPIRES_AT: &str = "expires_at";
 
-pub const COL_CLP_IR_STORAGE_BACKEND: &str = "clp_ir_storage_backend";
-pub const COL_CLP_IR_BUCKET: &str = "clp_ir_bucket";
-pub const COL_CLP_IR_PATH: &str = "clp_ir_path";
-pub const COL_CLP_IR_PATH_HASH: &str = "clp_ir_path_hash";
-pub const COL_CLP_IR_SIZE_BYTES: &str = "clp_ir_size_bytes";
+pub const COL_FILE_STORAGE_BACKEND: &str = "file_storage_backend";
+pub const COL_FILE_BUCKET: &str = "file_bucket";
+pub const COL_FILE_PATH: &str = "file_path";
+pub const COL_FILE_PATH_HASH: &str = "file_path_hash";
+pub const COL_FILE_SIZE_BYTES: &str = "file_size_bytes";
 
-pub const COL_CLP_ARCHIVE_STORAGE_BACKEND: &str = "clp_archive_storage_backend";
-pub const COL_CLP_ARCHIVE_BUCKET: &str = "clp_archive_bucket";
-pub const COL_CLP_ARCHIVE_PATH: &str = "clp_archive_path";
-pub const COL_CLP_ARCHIVE_PATH_HASH: &str = "clp_archive_path_hash";
-pub const COL_CLP_ARCHIVE_SIZE_BYTES: &str = "clp_archive_size_bytes";
-pub const COL_CLP_ARCHIVE_CREATED_AT: &str = "clp_archive_created_at";
+pub const COL_ARCHIVE_STORAGE_BACKEND: &str = "archive_storage_backend";
+pub const COL_ARCHIVE_BUCKET: &str = "archive_bucket";
+pub const COL_ARCHIVE_PATH: &str = "archive_path";
+pub const COL_ARCHIVE_PATH_HASH: &str = "archive_path_hash";
+pub const COL_ARCHIVE_SIZE_BYTES: &str = "archive_size_bytes";
+pub const COL_ARCHIVE_CREATED_AT: &str = "archive_created_at";
 
 pub const COL_SKETCHES: &str = "sketches";
 pub const COL_EXT: &str = "ext";

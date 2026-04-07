@@ -121,9 +121,9 @@ impl Planner {
                 id: pf.id,
                 min_timestamp: pf.min_timestamp,
                 max_timestamp: pf.max_timestamp,
-                clp_ir_storage_backend: pf.clp_ir_storage_backend.clone(),
-                clp_ir_bucket: pf.clp_ir_bucket.clone(),
-                clp_ir_path: pf.clp_ir_path.clone(),
+                file_storage_backend: pf.file_storage_backend.clone(),
+                file_bucket: pf.file_bucket.clone(),
+                file_path: pf.file_path.clone(),
                 ..metalog_types::FileRecord::default()
             })
             .collect();
@@ -136,7 +136,7 @@ impl Planner {
             let ir_paths: Vec<String> = group
                 .records
                 .iter()
-                .filter_map(|r| r.clp_ir_path.clone())
+                .filter_map(|r| r.file_path.clone())
                 .collect();
             if ir_paths.is_empty() || !self.in_flight.try_add(&ir_paths) {
                 continue;
@@ -148,13 +148,13 @@ impl Planner {
                     ir_backend: group
                         .records
                         .first()
-                        .and_then(|r| r.clp_ir_storage_backend.clone())
+                        .and_then(|r| r.file_storage_backend.clone())
                         .unwrap_or_default(),
                     ir_paths: ir_paths.clone(),
                     ir_buckets: group
                         .records
                         .iter()
-                        .map(|r| r.clp_ir_bucket.clone().unwrap_or_default())
+                        .map(|r| r.file_bucket.clone().unwrap_or_default())
                         .collect(),
                     archive_backend: if group.archive_backend.is_empty() {
                         self.archive_backend.clone()

@@ -101,7 +101,7 @@ mod tests {
         FileRecord {
             min_timestamp: min_ts,
             max_timestamp: min_ts + 1000,
-            clp_ir_path: Some(format!("/data/{min_ts}.ir")),
+            file_path: Some(format!("/data/{min_ts}.ir")),
             state: FileState::IrArchiveConsolidationPending,
             ..FileRecord::default()
         }

@@ -81,19 +81,19 @@ fn file_record_from_proto(file: &FileFields) -> Result<FileRecord, ConvertError>
         ..FileRecord::default()
     };
 
-    if let Some(ir) = &file.ir {
-        rec.clp_ir_storage_backend = Some(ir.clp_ir_storage_backend.clone());
-        rec.clp_ir_bucket = Some(ir.clp_ir_bucket.clone());
-        rec.clp_ir_path = Some(ir.clp_ir_path.clone());
-        rec.clp_ir_size_bytes = ir.clp_ir_size_bytes;
+    if let Some(file_info) = &file.file {
+        rec.file_storage_backend = Some(file_info.file_storage_backend.clone());
+        rec.file_bucket = Some(file_info.file_bucket.clone());
+        rec.file_path = Some(file_info.file_path.clone());
+        rec.file_size_bytes = file_info.file_size_bytes;
     }
 
     if let Some(archive) = &file.archive {
-        rec.clp_archive_storage_backend = Some(archive.clp_archive_storage_backend.clone());
-        rec.clp_archive_bucket = Some(archive.clp_archive_bucket.clone());
-        rec.clp_archive_path = Some(archive.clp_archive_path.clone());
-        rec.clp_archive_size_bytes = archive.clp_archive_size_bytes;
-        rec.clp_archive_created_at = archive.clp_archive_created_at;
+        rec.archive_storage_backend = Some(archive.archive_storage_backend.clone());
+        rec.archive_bucket = Some(archive.archive_bucket.clone());
+        rec.archive_path = Some(archive.archive_path.clone());
+        rec.archive_size_bytes = archive.archive_size_bytes;
+        rec.archive_created_at = archive.archive_created_at;
     }
 
     Ok(rec)
@@ -140,12 +140,7 @@ pub struct ConvertError(pub String);
 
 #[cfg(test)]
 mod tests {
-    use metalog_proto::coordinator::{
-        ArchiveFileInfo,
-        DimensionValue,
-        IrFileInfo,
-        StringDimension,
-    };
+    use metalog_proto::coordinator::{ArchiveInfo, DimensionValue, FileInfo, StringDimension};
 
     use super::*;
 
@@ -159,11 +154,11 @@ mod tests {
                 record_count: 10,
                 retention_days: 30,
                 expires_at: 0,
-                ir: Some(IrFileInfo {
-                    clp_ir_storage_backend: "s3".into(),
-                    clp_ir_bucket: "logs".into(),
-                    clp_ir_path: "/data/test.ir".into(),
-                    clp_ir_size_bytes: 100,
+                file: Some(FileInfo {
+                    file_storage_backend: "s3".into(),
+                    file_bucket: "logs".into(),
+                    file_path: "/data/test.ir".into(),
+                    file_size_bytes: 100,
                 }),
                 archive: None,
             }),
@@ -188,7 +183,7 @@ mod tests {
         assert_eq!(rec.state, FileState::IrBuffering);
         assert_eq!(rec.min_timestamp, 1000);
         assert_eq!(rec.max_timestamp, 2000);
-        assert_eq!(rec.clp_ir_path, Some("/data/test.ir".into()));
+        assert_eq!(rec.file_path, Some("/data/test.ir".into()));
         assert_eq!(rec.dims.len(), 1);
         assert_eq!(rec.dims["hostname"], "web-01");
         assert_eq!(rec.dim_meta.len(), 1);
@@ -211,16 +206,16 @@ mod tests {
     #[test]
     fn convert_with_archive() {
         let mut proto = test_proto_record();
-        proto.file.as_mut().unwrap().archive = Some(ArchiveFileInfo {
-            clp_archive_storage_backend: "s3".into(),
-            clp_archive_bucket: "archives".into(),
-            clp_archive_path: "/archives/test.clp".into(),
-            clp_archive_size_bytes: 50,
-            clp_archive_created_at: 3000,
+        proto.file.as_mut().unwrap().archive = Some(ArchiveInfo {
+            archive_storage_backend: "s3".into(),
+            archive_bucket: "archives".into(),
+            archive_path: "/archives/test.clp".into(),
+            archive_size_bytes: 50,
+            archive_created_at: 3000,
         });
         let rec = convert_record(&proto).unwrap();
-        assert_eq!(rec.clp_archive_path, Some("/archives/test.clp".into()));
-        assert_eq!(rec.clp_archive_created_at, 3000);
+        assert_eq!(rec.archive_path, Some("/archives/test.clp".into()));
+        assert_eq!(rec.archive_created_at, 3000);
     }
 
     #[test]

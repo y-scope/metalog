@@ -181,46 +181,46 @@ fn row_to_split(row: &metalog_query::SplitRow) -> Split {
             .get("raw_size_bytes")
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
-        clp_ir_path: row
-            .get("clp_ir_path")
+        file_path: row
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_ir_storage_backend: row
-            .get("clp_ir_storage_backend")
+        file_storage_backend: row
+            .get("file_storage_backend")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_ir_bucket: row
-            .get("clp_ir_bucket")
+        file_bucket: row
+            .get("file_bucket")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_ir_size_bytes: row
-            .get("clp_ir_size_bytes")
+        file_size_bytes: row
+            .get("file_size_bytes")
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
-        clp_archive_path: row
-            .get("clp_archive_path")
+        archive_path: row
+            .get("archive_path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_archive_storage_backend: row
-            .get("clp_archive_storage_backend")
+        archive_storage_backend: row
+            .get("archive_storage_backend")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_archive_bucket: row
-            .get("clp_archive_bucket")
+        archive_bucket: row
+            .get("archive_bucket")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        clp_archive_size_bytes: row
-            .get("clp_archive_size_bytes")
+        archive_size_bytes: row
+            .get("archive_size_bytes")
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
-        clp_archive_created_at: row
-            .get("clp_archive_created_at")
+        archive_created_at: row
+            .get("archive_created_at")
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
         retention_days: row

@@ -128,8 +128,8 @@ mod tests {
             "state IN ('IR_CLOSED', 'ARCHIVE_CLOSED')",
             "(min_timestamp > 1000) AND (state = 'IR_CLOSED')",
             "NOT state = 'IR_PURGING'",
-            "clp_ir_path IS NOT NULL",
-            "clp_archive_path IS NULL",
+            "file_path IS NOT NULL",
+            "archive_path IS NULL",
             "state LIKE 'IR_%'",
         ];
         for expr in cases {

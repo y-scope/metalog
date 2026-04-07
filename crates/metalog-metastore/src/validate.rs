@@ -15,11 +15,11 @@ pub fn validate_file_record(rec: &FileRecord) -> Result<(), ValidationError> {
             "max_timestamp must be >= min_timestamp".into(),
         ));
     }
-    let has_ir = rec.clp_ir_path.as_ref().is_some_and(|p| !p.is_empty());
-    let has_archive = rec.clp_archive_path.as_ref().is_some_and(|p| !p.is_empty());
+    let has_ir = rec.file_path.as_ref().is_some_and(|p| !p.is_empty());
+    let has_archive = rec.archive_path.as_ref().is_some_and(|p| !p.is_empty());
     if !has_ir && !has_archive {
         return Err(ValidationError(
-            "at least one of clp_ir_path or clp_archive_path must be set".into(),
+            "at least one of file_path or archive_path must be set".into(),
         ));
     }
     Ok(())
@@ -40,7 +40,7 @@ mod tests {
         FileRecord {
             min_timestamp: 1000,
             max_timestamp: 2000,
-            clp_ir_path: Some("/data/test.ir".into()),
+            file_path: Some("/data/test.ir".into()),
             state: FileState::IrBuffering,
             ..FileRecord::default()
         }
@@ -68,24 +68,24 @@ mod tests {
     #[test]
     fn no_paths() {
         let mut rec = valid_record();
-        rec.clp_ir_path = None;
-        rec.clp_archive_path = None;
+        rec.file_path = None;
+        rec.archive_path = None;
         assert!(validate_file_record(&rec).is_err());
     }
 
     #[test]
     fn archive_only() {
         let mut rec = valid_record();
-        rec.clp_ir_path = None;
-        rec.clp_archive_path = Some("/data/test.archive".into());
+        rec.file_path = None;
+        rec.archive_path = Some("/data/test.archive".into());
         assert!(validate_file_record(&rec).is_ok());
     }
 
     #[test]
     fn empty_paths_treated_as_missing() {
         let mut rec = valid_record();
-        rec.clp_ir_path = Some(String::new());
-        rec.clp_archive_path = Some(String::new());
+        rec.file_path = Some(String::new());
+        rec.archive_path = Some(String::new());
         assert!(validate_file_record(&rec).is_err());
     }
 }
