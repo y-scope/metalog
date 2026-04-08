@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use metalog_consolidation::{
         marshal_payload, unmarshal_payload, ConsolidationPayload, Queue, TaskPayload,
@@ -385,5 +385,108 @@ mod tests {
 
         let count = queue.count_active_tasks("test").await.unwrap();
         assert_eq!(count, 0);
+    }
+
+    // ── Throughput ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn throughput_batch_create() {
+        let (pool, _container) = setup_db_with_table("test").await;
+        let queue = Queue::new(pool);
+
+        let inputs: Vec<Vec<u8>> = (0..1000)
+            .map(|i| test_payload_with_consolidation(&format!("test_{i}")))
+            .collect();
+
+        let t0 = Instant::now();
+        let created = queue
+            .create_tasks("test", TASK_PAYLOAD_VERSION, &inputs)
+            .await
+            .unwrap();
+        let elapsed = t0.elapsed();
+
+        assert_eq!(created, 1000);
+        let rate = 1000.0 / elapsed.as_secs_f64();
+        println!(
+            "batch_create: 1000 tasks in {:.1}ms ({:.0} tasks/s)",
+            elapsed.as_millis(),
+            rate
+        );
+        // Sanity: should be at least 500 tasks/s on any reasonable DB.
+        assert!(rate > 500.0, "throughput too low: {rate:.0} tasks/s");
+    }
+
+    #[tokio::test]
+    async fn throughput_claim_cycle() {
+        let (pool, _container) = setup_db_with_table("test").await;
+        let queue = Queue::new(pool);
+
+        // Pre-populate 500 tasks.
+        let inputs: Vec<Vec<u8>> = (0..500).map(|_| test_payload("test")).collect();
+        queue
+            .create_tasks("test", TASK_PAYLOAD_VERSION, &inputs)
+            .await
+            .unwrap();
+
+        // Claim in batches of 10.
+        let t0 = Instant::now();
+        let mut total_claimed = 0;
+        loop {
+            let tasks = queue.claim_tasks("test", "bench-worker", 10).await.unwrap();
+            if tasks.is_empty() {
+                break;
+            }
+            total_claimed += tasks.len();
+        }
+        let elapsed = t0.elapsed();
+
+        assert_eq!(total_claimed, 500);
+        let rate = 500.0 / elapsed.as_secs_f64();
+        println!(
+            "claim_cycle: 500 tasks (batch=10) in {:.1}ms ({:.0} tasks/s)",
+            elapsed.as_millis(),
+            rate
+        );
+        assert!(rate > 200.0, "claim throughput too low: {rate:.0} tasks/s");
+    }
+
+    #[tokio::test]
+    async fn throughput_full_lifecycle() {
+        let (pool, _container) = setup_db_with_table("test").await;
+        let queue = Queue::new(pool);
+
+        let count = 200;
+        let inputs: Vec<Vec<u8>> = (0..count).map(|_| test_payload("test")).collect();
+
+        // Measure full create → claim → complete cycle.
+        let t0 = Instant::now();
+
+        queue
+            .create_tasks("test", TASK_PAYLOAD_VERSION, &inputs)
+            .await
+            .unwrap();
+
+        let tasks = queue
+            .claim_tasks("test", "lifecycle-worker", count as i32)
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), count);
+
+        for task in &tasks {
+            queue.complete_task(task.task_id, b"done").await.unwrap();
+        }
+
+        let elapsed = t0.elapsed();
+        let rate = count as f64 / elapsed.as_secs_f64();
+        println!(
+            "full_lifecycle: {count} tasks (create+claim+complete) in {:.1}ms ({:.0} tasks/s)",
+            elapsed.as_millis(),
+            rate
+        );
+        assert!(rate > 100.0, "lifecycle throughput too low: {rate:.0} tasks/s");
+
+        // Verify all completed.
+        let active = queue.count_active_tasks("test").await.unwrap();
+        assert_eq!(active, 0);
     }
 }
