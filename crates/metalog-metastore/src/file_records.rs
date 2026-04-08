@@ -168,6 +168,11 @@ impl FileRecords {
     }
 
     /// Transitions expired files to PURGING state (retention phase 1).
+    ///
+    /// Handles all non-terminal states:
+    /// - IR chain: IR_BUFFERING, IR_CLOSED → IR_PURGING
+    /// - Archive chain: ARCHIVE_CLOSED, IR_ARCHIVE_BUFFERING, FILE_ARCHIVE_BUFFERING,
+    ///   IR_ARCHIVE_CONSOLIDATION_PENDING, FILE_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_PURGING
     pub async fn transition_expired_to_purging(
         &self,
         current_nanos: i64,
@@ -175,10 +180,10 @@ impl FileRecords {
         let sql = format!(
             "UPDATE `{}` SET state = CASE \
              WHEN state IN (?, ?) THEN ? \
-             WHEN state IN (?, ?, ?) THEN ? \
+             WHEN state IN (?, ?, ?, ?, ?) THEN ? \
              ELSE state END \
              WHERE expires_at > 0 AND expires_at < ? \
-             AND state IN (?, ?, ?, ?, ?) \
+             AND state IN (?, ?, ?, ?, ?, ?, ?) \
              LIMIT 1000",
             self.table_name,
         );
@@ -187,10 +192,12 @@ impl FileRecords {
             .bind(FileState::IrBuffering.as_db_str())
             .bind(FileState::IrClosed.as_db_str())
             .bind(FileState::IrPurging.as_db_str())
-            // Archive chain: ARCHIVE_CLOSED, IR_ARCHIVE_BUFFERING, FILE_ARCHIVE_BUFFERING → ARCHIVE_PURGING
+            // Archive chain → ARCHIVE_PURGING
             .bind(FileState::ArchiveClosed.as_db_str())
             .bind(FileState::IrArchiveBuffering.as_db_str())
             .bind(FileState::FileArchiveBuffering.as_db_str())
+            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
+            .bind(FileState::FileArchiveConsolidationPending.as_db_str())
             .bind(FileState::ArchivePurging.as_db_str())
             // WHERE
             .bind(current_nanos)
@@ -199,6 +206,8 @@ impl FileRecords {
             .bind(FileState::ArchiveClosed.as_db_str())
             .bind(FileState::IrArchiveBuffering.as_db_str())
             .bind(FileState::FileArchiveBuffering.as_db_str())
+            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
+            .bind(FileState::FileArchiveConsolidationPending.as_db_str())
             .execute(&self.db)
             .await?;
         Ok(result.rows_affected())
