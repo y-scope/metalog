@@ -57,11 +57,11 @@ Each managed table is cloned from `_clp_template`. One row = one file in object 
 | Column Group | Columns | Purpose |
 |-------------|---------|---------|
 | **Identity & Time** | `id` (auto-increment), `min_timestamp`, `max_timestamp` | Row identity, partition key, time-range bounds |
-| **IR Storage** | `clp_ir_storage_backend`, `clp_ir_bucket`, `clp_ir_path` | IR file location (NULL for archive-only entries) |
-| **Archive Storage** | `clp_archive_storage_backend`, `clp_archive_bucket`, `clp_archive_path` | Archive location (NULL before consolidation) |
-| **Hash Indexes** | `clp_ir_path_hash`, `clp_archive_path_hash` | Virtual hash of path for indexed lookups (16 bytes, stored only in index) |
+| **IR Storage** | `file_storage_backend`, `file_bucket`, `file_path` | IR file location (NULL for archive-only entries) |
+| **Archive Storage** | `archive_storage_backend`, `archive_bucket`, `archive_path` | Archive location (NULL before consolidation) |
+| **Hash Indexes** | `file_path_hash`, `archive_path_hash` | Virtual hash of path for indexed lookups (16 bytes, stored only in index) |
 | **Lifecycle** | `state` (7-value enum), `retention_days`, `expires_at` | File state and retention policy |
-| **Metrics** | `record_count`, `raw_size_bytes`, `clp_ir_size_bytes`, `clp_archive_size_bytes` | File size and record count statistics |
+| **Metrics** | `record_count`, `raw_size_bytes`, `file_size_bytes`, `archive_size_bytes` | File size and record count statistics |
 | **Dimensions** | `dim_f01` .. `dim_f99` (added dynamically) | Per-file tags, mapped to logical names via `_dim_registry` |
 | **Aggregations** | `agg_f01` .. `agg_f99` (added dynamically) | Per-file pre-computed statistics, mapped via `_agg_registry` |
 | **Sketches** | `sketches` (SET bitmask), `ext` (MEDIUMBLOB) | `sketches`: which fields have bloom filters (mapped via `_sketch_registry`). `ext`: compressed bloom filter data |
@@ -72,8 +72,8 @@ Each managed table is cloned from `_clp_template`. One row = one file in object 
 |-------|---------|----------|
 | Primary key | `(min_timestamp, id)` | Partition pruning + row identity |
 | Auto-increment | `(id)` | Required by MySQL for partitioned tables |
-| IR path unique | `(clp_ir_path_hash, min_timestamp)` | UPSERT duplicate detection (per-partition) |
-| Archive path | `(clp_archive_path_hash)` | Archive lookup (non-unique: many IRs → one archive) |
+| IR path unique | `(file_path_hash, min_timestamp)` | UPSERT duplicate detection (per-partition) |
+| Archive path | `(archive_path_hash)` | Archive lookup (non-unique: many IRs → one archive) |
 | Consolidation | `(state, min_timestamp ASC)` | Pending files, oldest first |
 | Expiration | `(expires_at ASC)` | Retention scanner |
 | Time range | `(max_timestamp DESC)` | Queries sorted by recency |
@@ -121,7 +121,7 @@ timeline
 
 **Solution**: Store an MD5 hash as a virtual column — computed on-the-fly, never stored in the row, only materialized in the index:
 
-`BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL`
+`BINARY(16) AS (UNHEX(MD5(file_path))) VIRTUAL`
 
 | Property | Detail |
 |----------|--------|
@@ -137,7 +137,7 @@ timeline
 | 1 trillion | ~10⁻¹⁵ | Extreme scale |
 | SSD bit error | ~10⁻¹⁶ per bit | Hardware baseline |
 
-**Query pattern**: `WHERE clp_ir_path_hash = UNHEX(MD5(?)) AND min_timestamp = ?`
+**Query pattern**: `WHERE file_path_hash = UNHEX(MD5(?)) AND min_timestamp = ?`
 
 At 1 trillion paths, collision probability is below the SSD bit error rate. Well before this matters, the correct response is to shard across more tables.
 

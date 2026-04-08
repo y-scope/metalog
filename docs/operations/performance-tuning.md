@@ -199,8 +199,8 @@ The `drainFlushes()` pattern non-blockingly checks pending `Flushed chan error` 
 **Base indexes:**
 1. PRIMARY KEY (min_timestamp, id)
 2. idx_id (id) — required for AUTO_INCREMENT on partitioned tables
-3. idx_clp_ir_hash (clp_ir_path_hash, min_timestamp) — UNIQUE, virtual MD5 column
-4. idx_clp_archive_hash (clp_archive_path_hash) — virtual MD5 column
+3. idx_file_path_hash (file_path_hash, min_timestamp) — UNIQUE, virtual MD5 column
+4. idx_archive_path_hash (archive_path_hash) — virtual MD5 column
 5. idx_consolidation (state, min_timestamp) — Planner query
 6. idx_expiration (expires_at) — retention cleanup
 7. idx_max_timestamp (max_timestamp DESC) — time-range queries

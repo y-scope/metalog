@@ -68,14 +68,14 @@ The coordinator's Kafka poller consumes the message and the metadata writer batc
 
 ```bash
 docker compose -f docker/docker-compose.yml exec mariadb mariadb -uroot -ppassword metalog_metastore \
-  -e "SELECT id, clp_ir_path, state, record_count FROM clp_spark;"
+  -e "SELECT id, file_path, state, record_count FROM clp_spark;"
 ```
 
 Expected output:
 
 ```
 +----+---------------------------------------------------+----------------------+--------------+
-| id | clp_ir_path                                       | state                | record_count |
+| id | file_path                                       | state                | record_count |
 +----+---------------------------------------------------+----------------------+--------------+
 |  1 | s3://clp-ir/app-001/executor-0/file-001.clp.zst   | IR_ARCHIVE_BUFFERING |         1000 |
 +----+---------------------------------------------------+----------------------+--------------+
@@ -90,7 +90,7 @@ docker compose -f docker/docker-compose.yml exec mariadb mariadb -uroot -ppasswo
   -e "DESCRIBE clp_spark;" | head -20
 ```
 
-You'll see base columns (`id`, `clp_ir_path`, `state`, `min_timestamp`, ...) plus auto-added aggregation columns with opaque placeholder names (e.g., `agg_f01`, `agg_f02`). The logical mapping (which agg tracks `level=error`, etc.) is stored in `_agg_registry`.
+You'll see base columns (`id`, `file_path`, `state`, `min_timestamp`, ...) plus auto-added aggregation columns with opaque placeholder names (e.g., `agg_f01`, `agg_f02`). The logical mapping (which agg tracks `level=error`, etc.) is stored in `_agg_registry`.
 
 ## 5. Check coordinator logs
 

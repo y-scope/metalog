@@ -194,7 +194,7 @@ This applies to: `ColumnRegistry` (ADD COLUMN, MODIFY COLUMN), `Evolver` (ADD CO
 - Concurrent reads (SELECT)
 - Blocks concurrent writes (INSERT, UPDATE) for the duration of the ALTER
 
-**Why not `LOCK=NONE`?** MariaDB cannot use `LOCK=NONE` on tables with indexed virtual columns (which `clp_spark` has for the `clp_ir_path_hash` and `clp_archive_path_hash` hash-index columns). Attempting it yields:
+**Why not `LOCK=NONE`?** MariaDB cannot use `LOCK=NONE` on tables with indexed virtual columns (which `clp_spark` has for the `file_path_hash` and `archive_path_hash` hash-index columns). Attempting it yields:
 ```
 LOCK=NONE is not supported. Reason: online rebuild with indexed virtual columns. Try LOCK=SHARED
 ```

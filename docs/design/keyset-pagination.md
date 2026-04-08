@@ -80,7 +80,7 @@ Two columns have dedicated indexes that support efficient keyset pagination:
 | `min_timestamp` | ASC | PRIMARY KEY forward scan |
 | `max_timestamp` | DESC | `idx_max_timestamp` |
 
-All other columns — `record_count`, `clp_ir_size_bytes`, dimension columns (`dim_fXX`), aggregation columns (`agg_fXX`), etc. — are unindexed. Sorting on them causes a full table scan and requires `allow_unindexed_sort = true` in the request. The server rejects unindexed sort columns by default.
+All other columns — `record_count`, `file_size_bytes`, dimension columns (`dim_fXX`), aggregation columns (`agg_fXX`), etc. — are unindexed. Sorting on them causes a full table scan and requires `allow_unindexed_sort = true` in the request. The server rejects unindexed sort columns by default.
 
 ## Keyset WHERE Clause
 

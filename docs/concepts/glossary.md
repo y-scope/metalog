@@ -37,7 +37,7 @@ Metadata field extracted from logs for split pruning and filtering. Physical col
 Pre-computed aggregate stored at the file level. Supports threshold comparisons (EQ, GTE, GT, LTE, LT) for integer counts and summary statistics (SUM, AVG, MIN, MAX) for float values. Physical column names are opaque placeholders (`agg_f01`, `agg_f07`, ...) assigned by `ColumnRegistry`. The logical mapping (field, qualifier, aggregation type, value type) is stored in `_agg_registry`. Enables early termination and timeline visualization without scanning file contents. See [Naming Conventions](../reference/naming-conventions.md) and [Schema Evolution](../guides/evolve-schema.md).
 
 ### Hash Column (`*_hash`)
-Virtual column storing MD5 hash of a path. `clp_ir_path_hash` has a UNIQUE index (each IR path appears exactly once); `clp_archive_path_hash` has a non-unique index (one archive contains many IR files). Enables O(1) point lookups without indexing long path strings directly. See [Metadata Tables](../reference/metadata-tables.md).
+Virtual column storing MD5 hash of a path. `file_path_hash` has a UNIQUE index (each IR path appears exactly once); `archive_path_hash` has a non-unique index (one archive contains many IR files). Enables O(1) point lookups without indexing long path strings directly. See [Metadata Tables](../reference/metadata-tables.md).
 
 ### Sketch Column (`sketches` / `ext`)
 Probabilistic data structure stored per file. The `sketches` SET column declares which sketch slots contain data; the `ext` MEDIUMBLOB stores the filter data as LZ4-compressed msgpack. Bloom filters answer "definitely not" vs. "maybe" membership queries for high-cardinality values. Used in split pruning to eliminate files before opening them. See [Metadata Tables](../reference/metadata-tables.md).
@@ -132,7 +132,7 @@ Query optimization that stops scanning when enough results are found. Uses file-
 In early termination, the timestamp of the least-recent result in the current top-N accumulator. As newer files are scanned and better results accumulate, the watermark advances. Once a file's `max_timestamp` falls below the watermark, it can be skipped without scanning. See [Early Termination](../design/early-termination.md).
 
 ### Functional Index
-Index on a computed (virtual) column. Example: index on `UNHEX(MD5(clp_ir_path))` enables O(1) lookups by path without storing the path in the index. See [Query Execution](../concepts/query-execution.md).
+Index on a computed (virtual) column. Example: index on `UNHEX(MD5(file_path))` enables O(1) lookups by path without storing the path in the index. See [Query Execution](../concepts/query-execution.md).
 
 ### Composite Index
 Multi-column index for queries that filter on multiple dimensions together. Example: `(min_timestamp, dim_f01)` for time + dimension queries, where `dim_f01` is the physical column for a registered dimension field. See [Query Execution](../concepts/query-execution.md).

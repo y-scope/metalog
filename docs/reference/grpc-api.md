@@ -229,17 +229,17 @@ message FileInfo {
     int64  raw_size_bytes              = 5;
 
     // IR location
-    string clp_ir_path                 = 6;
-    string clp_ir_storage_backend      = 7;
-    string clp_ir_bucket               = 8;
-    int64  clp_ir_size_bytes           = 9;
+    string file_path                 = 6;
+    string file_storage_backend      = 7;
+    string file_bucket               = 8;
+    int64  file_size_bytes           = 9;
 
     // Archive location (empty/zero if not yet consolidated)
-    string clp_archive_path            = 10;
-    string clp_archive_storage_backend = 11;
-    string clp_archive_bucket          = 12;
-    int64  clp_archive_size_bytes      = 13;
-    int64  clp_archive_created_at      = 14;
+    string archive_path            = 10;
+    string archive_storage_backend = 11;
+    string archive_bucket          = 12;
+    int64  archive_size_bytes      = 13;
+    int64  archive_created_at      = 14;
 
     // Retention
     int32  retention_days              = 15;
@@ -318,15 +318,15 @@ If there is no dot, the whole thing is `key` with no value qualifier.
 | `max_timestamp` | int64 | Latest log timestamp in split |
 | `record_count` | int64 | Number of log records |
 | `raw_size_bytes` | int64 | Raw (uncompressed) size in bytes |
-| `clp_ir_size_bytes` | int64 | IR file size in bytes |
-| `clp_archive_size_bytes` | int64 | Archive file size in bytes |
-| `clp_archive_created_at` | int64 | Archive creation timestamp (epoch nanoseconds) |
-| `clp_ir_path` | string | IR file object key |
-| `clp_ir_bucket` | string | IR file bucket |
-| `clp_ir_storage_backend` | string | IR file storage type |
-| `clp_archive_path` | string | Archive object key |
-| `clp_archive_bucket` | string | Archive bucket |
-| `clp_archive_storage_backend` | string | Archive storage type |
+| `file_size_bytes` | int64 | IR file size in bytes |
+| `archive_size_bytes` | int64 | Archive file size in bytes |
+| `archive_created_at` | int64 | Archive creation timestamp (epoch nanoseconds) |
+| `file_path` | string | IR file object key |
+| `file_bucket` | string | IR file bucket |
+| `file_storage_backend` | string | IR file storage type |
+| `archive_path` | string | Archive object key |
+| `archive_bucket` | string | Archive bucket |
+| `archive_storage_backend` | string | Archive storage type |
 | `expires_at` | int64 | Retention expiry (epoch nanoseconds) |
 | `retention_days` | int32 | Retention policy in days |
 
