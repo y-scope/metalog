@@ -9,6 +9,7 @@ metalog-types = { workspace = true }
 metalog-proto = { workspace = true }
 metalog-ingestion = { workspace = true }
 metalog-coordinator = { workspace = true }
+metalog-db = { workspace = true }
 metalog-query = { workspace = true }
 metalog-metastore = { workspace = true }
 tonic = { workspace = true }

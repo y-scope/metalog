@@ -13,6 +13,7 @@ metalog-types = { workspace = true }
 metalog-config = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
+metalog-query = { workspace = true }
 metalog-schema = { workspace = true }
 metalog-ingestion = { workspace = true }
 metalog-consolidation = { workspace = true }

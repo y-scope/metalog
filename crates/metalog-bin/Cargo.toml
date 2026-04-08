@@ -14,6 +14,11 @@ metalog-config = { workspace = true }
 metalog-db = { workspace = true }
 metalog-node = { workspace = true }
 metalog-proto = { workspace = true }
+metalog-grpc = { workspace = true }
+metalog-ingestion = { workspace = true }
+metalog-coordinator = { workspace = true }
+metalog-metastore = { workspace = true }
+metalog-query = { workspace = true }
 
 # Premium crates (enterprise edition)
 metalog-aggs = { workspace = true }
@@ -26,5 +31,6 @@ metalog-retention = { workspace = true }
 # Runtime
 clap = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

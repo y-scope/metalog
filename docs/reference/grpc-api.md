@@ -80,11 +80,16 @@ All `MetadataService` responses use resolved logical names (e.g., `"service"`, `
 ```protobuf
 service MetadataIngestionService {
   rpc Ingest(IngestRequest) returns (IngestResponse);
+  rpc BatchIngest(BatchIngestRequest) returns (BatchIngestResponse);
 }
 ```
 
-Each `IngestRequest` carries a `MetadataRecord` with typed `DimEntry` and `AggEntry` fields, plus a
-`SelfDescribingEntry` escape hatch for producers that use the slash-delimited key format. See
+`Ingest` accepts a single `MetadataRecord`; `BatchIngest` accepts multiple records in one RPC call
+with per-record failure tracking (`accepted_count`, `rejected_count`, and `failures` array with
+index + error per rejected record).
+
+Each record carries typed `DimEntry` and `AggEntry` fields, plus a `SelfDescribingEntry` escape
+hatch for producers that use the slash-delimited key format. See
 [Naming Conventions](naming-conventions.md) for the key format specification.
 
 **`admin.proto` — runtime table and column management:**
@@ -126,6 +131,7 @@ rpc StreamSplits(StreamSplitsRequest) returns (stream StreamSplitsResponse)
 | `include_cursor` | bool | No | If true, each response message includes a continuation `cursor`. Default false. |
 | `stream_idle_timeout_ms` | int64 | No | Max milliseconds to wait when the client's receive buffer is full. `0` = server default (60 000 ms). |
 | `allow_unindexed_sort` | bool | No | If true, allow sorting on non-indexed columns (full table scan per page). Default false. |
+| `group_by` | repeated string | No | Columns to GROUP BY. When set, returns one row per unique group. Projection must be explicit and use aggregate functions for non-grouped columns (e.g., `MIN(min_timestamp)`, `SUM(record_count)`, `ANY_VALUE(archive_bucket)`). Currently mutually exclusive with `cursor` — grouped results use `limit` for pagination instead of keyset cursors (grouped rows lack the `id` tiebreaker needed for keyset pagination). |
 
 #### Response fields
 
@@ -138,6 +144,54 @@ Each streamed `StreamSplitsResponse` contains:
 | `stats` | QueryStats | Running totals (updated periodically) |
 | `done` | bool | True only on the final summary message (no `split` set) |
 | `cursor` | KeysetCursor | Resume token for this row. Only present when `include_cursor=true`. |
+
+---
+
+### GROUP BY (Archive-Level Queries)
+
+When `group_by` is set, the query returns aggregated results instead of individual file records.
+This is used by CLP's query scheduler to find distinct archives matching a time range.
+
+**Example: Find archives overlapping a time window**
+
+```
+StreamSplits {
+    table: "clp_archives",
+    projection: [
+        "archive_path",                         // grouped column
+        "MIN(min_timestamp)",                    // earliest timestamp across files
+        "MAX(max_timestamp)",                    // latest timestamp across files
+        "SUM(record_count)",                     // total records
+        "ANY_VALUE(archive_storage_backend)",    // same value for all files in archive
+        "ANY_VALUE(archive_bucket)",             // same value for all files in archive
+    ],
+    filter_expression: "state = 'ARCHIVE_CLOSED' AND max_timestamp >= 1000 AND min_timestamp <= 5000",
+    group_by: ["archive_path"],
+    order_by: [{column: "max_timestamp", order: DESC}],
+}
+```
+
+**Generated SQL:**
+
+```sql
+SELECT `archive_path`,
+       MIN(`min_timestamp`) AS `min_timestamp`,
+       MAX(`max_timestamp`) AS `max_timestamp`,
+       SUM(`record_count`) AS `record_count`,
+       ANY_VALUE(`archive_storage_backend`) AS `archive_storage_backend`,
+       ANY_VALUE(`archive_bucket`) AS `archive_bucket`
+FROM `clp_archives`
+WHERE state = 'ARCHIVE_CLOSED' AND max_timestamp >= 1000 AND min_timestamp <= 5000
+GROUP BY `archive_path`
+ORDER BY `max_timestamp` DESC
+```
+
+**Allowed aggregate functions:** `MIN`, `MAX`, `SUM`, `COUNT`, `AVG`, `ANY_VALUE`
+
+**Constraints:**
+- Projection must be explicit (no `SELECT *` with GROUP BY)
+- Every projected column must either be in `group_by` or wrapped in an aggregate function
+- `cursor` (keyset pagination) is not supported with `group_by`
 
 ---
 

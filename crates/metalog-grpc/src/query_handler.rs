@@ -8,6 +8,7 @@ use metalog_proto::query::{
     StreamSplitsRequest,
     StreamSplitsResponse,
 };
+use metalog_db::validate_sql_identifier;
 use metalog_query::{validate_filter_expression, OrderBySpec, SplitQueryEngine};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -48,6 +49,20 @@ impl SplitQueryService for QueryHandler {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
         }
 
+        // Extract and validate group_by columns.
+        let group_by = req.group_by.clone();
+        for col in &group_by {
+            validate_sql_identifier(col)
+                .map_err(|e| Status::invalid_argument(format!("invalid group_by column: {e}")))?;
+        }
+
+        // Cursor and group_by are mutually exclusive.
+        if !group_by.is_empty() && req.cursor.is_some() {
+            return Err(Status::invalid_argument(
+                "cursor and group_by are mutually exclusive",
+            ));
+        }
+
         // Build ORDER BY specs.
         let order_by: Vec<OrderBySpec> = req
             .order_by
@@ -62,21 +77,41 @@ impl SplitQueryService for QueryHandler {
         SplitQueryEngine::validate_sort_columns(&order_by, req.allow_unindexed_sort)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let order_clauses = SplitQueryEngine::build_order_clauses(&order_by);
-
-        // Build keyset WHERE from cursor.
-        let keyset_where = if let Some(ref cursor) = req.cursor {
-            let cursor_values: Vec<String> = cursor
-                .values
+        // Build ORDER BY clauses. Skip id tiebreaker when group_by is active
+        // since grouped results have no meaningful row id.
+        let order_clauses = if group_by.is_empty() {
+            SplitQueryEngine::build_order_clauses(&order_by)
+        } else {
+            order_by
                 .iter()
-                .map(|cv| match &cv.value {
-                    Some(metalog_proto::query::cursor_value::Value::IntVal(v)) => v.to_string(),
-                    Some(metalog_proto::query::cursor_value::Value::FloatVal(v)) => v.to_string(),
-                    Some(metalog_proto::query::cursor_value::Value::StrVal(v)) => v.clone(),
-                    None => String::new(),
+                .map(|ob| {
+                    let dir = if ob.desc { "DESC" } else { "ASC" };
+                    format!("{} {dir}", metalog_db::quote_identifier(&ob.column))
                 })
-                .collect();
-            SplitQueryEngine::build_keyset_where(&order_by, &cursor_values, cursor.id)
+                .collect()
+        };
+
+        // Build keyset WHERE from cursor (skipped when group_by is active).
+        let keyset_where = if group_by.is_empty() {
+            if let Some(ref cursor) = req.cursor {
+                let cursor_values: Vec<String> = cursor
+                    .values
+                    .iter()
+                    .map(|cv| match &cv.value {
+                        Some(metalog_proto::query::cursor_value::Value::IntVal(v)) => {
+                            v.to_string()
+                        }
+                        Some(metalog_proto::query::cursor_value::Value::FloatVal(v)) => {
+                            v.to_string()
+                        }
+                        Some(metalog_proto::query::cursor_value::Value::StrVal(v)) => v.clone(),
+                        None => String::new(),
+                    })
+                    .collect();
+                SplitQueryEngine::build_keyset_where(&order_by, &cursor_values, cursor.id)
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
@@ -104,6 +139,7 @@ impl SplitQueryService for QueryHandler {
                     &order_clauses,
                     &keyset_where,
                     limit,
+                    &group_by,
                 )
                 .await
             {

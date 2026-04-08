@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use metalog_db::quote_identifier;
+use metalog_db::{quote_identifier, validate_sql_identifier};
 use sqlx::{Column, MySqlPool};
 
 /// Indexed sort columns that support efficient keyset pagination.
@@ -42,6 +42,10 @@ impl SplitQueryEngine {
     }
 
     /// Executes a single page of results with keyset pagination.
+    ///
+    /// When `group_by` is non-empty, the query is rewritten as an aggregate
+    /// query: columns in `group_by` are selected as-is, while known numeric
+    /// columns get SUM/MIN/MAX wrappers and all others default to MAX.
     pub async fn execute_page(
         &self,
         table_name: &str,
@@ -50,8 +54,27 @@ impl SplitQueryEngine {
         order_clauses: &[String],
         keyset_where: &str,
         limit: i32,
+        group_by: &[String],
     ) -> Result<Vec<SplitRow>, EngineError> {
-        let cols_sql = if columns.is_empty() {
+        let cols_sql = if !group_by.is_empty() {
+            // GROUP BY mode: projection must be explicit and caller specifies aggregations.
+            // Projection expressions like "MIN(min_timestamp)", "archive_path", "SUM(record_count)"
+            // are passed through as-is. The group_by columns are validated as identifiers.
+            if columns.is_empty() {
+                return Err(EngineError::GroupByRequiresProjection);
+            }
+            for col in group_by {
+                validate_sql_identifier(col)
+                    .map_err(|_| EngineError::InvalidGroupByColumn(col.clone()))?;
+            }
+            // Validate projection expressions: each must be either a bare identifier or
+            // an aggregate function call (FUNC(identifier) or FUNC(identifier) AS identifier).
+            columns
+                .iter()
+                .map(|c| Self::validate_and_format_projection_expr(c))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
+        } else if columns.is_empty() {
             "*".to_string()
         } else {
             columns
@@ -74,6 +97,12 @@ impl SplitQueryEngine {
         }
         if !conditions.is_empty() {
             write!(sql, " WHERE {}", conditions.join(" AND ")).unwrap();
+        }
+
+        // GROUP BY.
+        if !group_by.is_empty() {
+            let gb_cols: Vec<String> = group_by.iter().map(|c| quote_identifier(c)).collect();
+            write!(sql, " GROUP BY {}", gb_cols.join(", ")).unwrap();
         }
 
         // ORDER BY.
@@ -105,6 +134,7 @@ impl SplitQueryEngine {
                 for col in row.columns() {
                     let name = col.name().to_string();
                     let (val, typ) = detect_column_value(row, col.ordinal());
+                    tracing::debug!(column = %name, ?typ, value = %val, "detected column");
                     col_types.push(typ);
                     split_row.insert(name, val);
                 }
@@ -121,6 +151,43 @@ impl SplitQueryEngine {
         }
 
         Ok(results)
+    }
+
+    /// Allowed aggregate functions in projection expressions.
+    const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
+
+    /// Validates and formats a projection expression for GROUP BY queries.
+    ///
+    /// Accepts:
+    /// - Bare identifiers: `"archive_path"` → `` `archive_path` ``
+    /// - Aggregate calls: `"MIN(min_timestamp)"` → `` MIN(`min_timestamp`) AS `min_timestamp` ``
+    /// - Allowed aggregates: MIN, MAX, SUM, COUNT, AVG
+    fn validate_and_format_projection_expr(expr: &str) -> Result<String, EngineError> {
+        // Check for aggregate function pattern: FUNC(column_name)
+        if let Some(paren_start) = expr.find('(') {
+            if !expr.ends_with(')') {
+                return Err(EngineError::InvalidProjection(expr.to_string()));
+            }
+            let func = &expr[..paren_start].trim().to_uppercase();
+            let col_name = &expr[paren_start + 1..expr.len() - 1].trim();
+
+            // Validate the column name inside the function.
+            validate_sql_identifier(col_name)
+                .map_err(|_| EngineError::InvalidProjection(expr.to_string()))?;
+            let quoted_col = quote_identifier(col_name);
+
+            // Validate function name.
+            if !Self::ALLOWED_AGGREGATES.contains(&func.as_str()) {
+                return Err(EngineError::InvalidProjection(expr.to_string()));
+            }
+
+            Ok(format!("{func}({quoted_col}) AS {quoted_col}"))
+        } else {
+            // Bare identifier.
+            validate_sql_identifier(expr)
+                .map_err(|_| EngineError::InvalidProjection(expr.to_string()))?;
+            Ok(quote_identifier(expr))
+        }
     }
 
     /// Validates that all ORDER BY columns are indexed (unless `allow_unindexed` is set).
@@ -227,23 +294,68 @@ enum ColType {
     Int,
     Str,
     Float,
+    Decimal,
     Null,
 }
 
-/// Detects the column type by trying i64, String, f64 in order.
+/// Detects the column type using the database column type metadata.
+///
+/// We use the column type name from the database rather than try-cast, because MySQL/MariaDB
+/// will silently cast VARCHAR values like "5075fd79-..." to integer 5075, giving wrong results.
 fn detect_column_value(
     row: &sqlx::mysql::MySqlRow,
     ordinal: usize,
 ) -> (serde_json::Value, ColType) {
-    use sqlx::Row;
-    if let Ok(v) = row.try_get::<i64, _>(ordinal) {
-        (serde_json::json!(v), ColType::Int)
-    } else if let Ok(v) = row.try_get::<String, _>(ordinal) {
-        (serde_json::json!(v), ColType::Str)
-    } else if let Ok(v) = row.try_get::<f64, _>(ordinal) {
-        (serde_json::json!(v), ColType::Float)
-    } else {
-        (serde_json::Value::Null, ColType::Null)
+    use sqlx::{Column, Row, TypeInfo};
+
+    let col = &row.columns()[ordinal];
+    let type_name = col.type_info().name();
+    match type_name {
+        // Integer types
+        "BIGINT" | "INT" | "MEDIUMINT" | "SMALLINT" | "TINYINT" | "BIGINT UNSIGNED"
+        | "INT UNSIGNED" | "MEDIUMINT UNSIGNED" | "SMALLINT UNSIGNED" | "TINYINT UNSIGNED" => {
+            if let Ok(v) = row.try_get::<i64, _>(ordinal) {
+                (serde_json::json!(v), ColType::Int)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        // DECIMAL is returned by SUM/AVG aggregates in MariaDB.
+        // Use rust_decimal to read natively, then convert to i64 or f64.
+        "DECIMAL" | "NEWDECIMAL" => {
+            if let Ok(v) = row.try_get::<rust_decimal::Decimal, _>(ordinal) {
+                use rust_decimal::prelude::ToPrimitive;
+                if let Some(n) = v.to_i64() {
+                    (serde_json::json!(n), ColType::Decimal)
+                } else if let Some(n) = v.to_f64() {
+                    (serde_json::json!(n), ColType::Decimal)
+                } else {
+                    (serde_json::json!(v.to_string()), ColType::Decimal)
+                }
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        "FLOAT" | "DOUBLE" => {
+            if let Ok(v) = row.try_get::<f64, _>(ordinal) {
+                (serde_json::json!(v), ColType::Float)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        // Everything else (VARCHAR, TEXT, ENUM, VARBINARY, etc.) -> String
+        _ => {
+            // For VARBINARY columns (utf8mb4_bin collation), try_get::<String> may fail.
+            // Fall back to reading raw bytes and converting to String.
+            if let Ok(v) = row.try_get::<String, _>(ordinal) {
+                (serde_json::json!(v), ColType::Str)
+            } else if let Ok(v) = row.try_get::<Vec<u8>, _>(ordinal) {
+                let s = String::from_utf8_lossy(&v).to_string();
+                (serde_json::json!(s), ColType::Str)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
     }
 }
 
@@ -261,11 +373,28 @@ fn extract_by_type(
             .unwrap_or(serde_json::Value::Null),
         ColType::Str => row
             .try_get::<String, _>(ordinal)
+            .or_else(|_| {
+                row.try_get::<Vec<u8>, _>(ordinal)
+                    .map(|v| String::from_utf8_lossy(&v).to_string())
+            })
             .map(|v| serde_json::json!(v))
             .unwrap_or(serde_json::Value::Null),
         ColType::Float => row
             .try_get::<f64, _>(ordinal)
             .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Decimal => row
+            .try_get::<rust_decimal::Decimal, _>(ordinal)
+            .map(|v| {
+                use rust_decimal::prelude::ToPrimitive;
+                if let Some(n) = v.to_i64() {
+                    serde_json::json!(n)
+                } else if let Some(n) = v.to_f64() {
+                    serde_json::json!(n)
+                } else {
+                    serde_json::json!(v.to_string())
+                }
+            })
             .unwrap_or(serde_json::Value::Null),
         ColType::Null => serde_json::Value::Null,
     }
@@ -299,6 +428,15 @@ pub enum EngineError {
          allow_unindexed_sort=true"
     )]
     UnindexedSort(String),
+
+    #[error("group_by requires an explicit projection (columns must not be empty)")]
+    GroupByRequiresProjection,
+
+    #[error("invalid group_by column: {0:?}")]
+    InvalidGroupByColumn(String),
+
+    #[error("invalid projection expression: {0:?} (use bare column names or FUNC(column))")]
+    InvalidProjection(String),
 
     #[error("sql: {0}")]
     Sql(#[from] sqlx::Error),
