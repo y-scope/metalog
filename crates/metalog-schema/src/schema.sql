@@ -382,7 +382,7 @@ CREATE TABLE IF NOT EXISTS _clp_template (
         -- File→Archive chain (ordinals 6-7, lifecycle order)
         -- Continues into archive chain below after consolidation
         'FILE_ARCHIVE_BUFFERING',             -- Opaque file being written, will be consolidated (entry point)
-        'FILE_ARCHIVE_CONSOLIDATION_PENDING', -- File closed, awaiting consolidation → ARCHIVE_CLOSED
+        'FILE_ARCHIVE_CONSOLIDATION_PENDING',  -- File closed, awaiting consolidation
 
         -- Archive chain (ordinals 8-9, lifecycle order)
         -- Shared tail for archive-only, IR→Archive, and File→Archive chains
