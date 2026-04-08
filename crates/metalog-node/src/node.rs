@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use metalog_config::{NodeConfig, DEFAULT_PROGRESS_STALL_TIMEOUT};
+use metalog_consolidation::{InFlightSet, Planner, PlannerConfig, Queue, TimeWindowPolicy};
 use metalog_ingestion::BatchingWriter;
+use metalog_metastore::FileRecords;
 use metalog_schema::{ensure_table, execute_ddl_statements, ColumnRegistry, SCHEMA_SQL};
+use metalog_types::file_state::FileState;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +16,12 @@ use crate::{
     ALIAS_REFRESH_INTERVAL,
     PARTITION_MAINTENANCE_INTERVAL,
 };
+
+/// Default planner interval (10 seconds).
+const DEFAULT_PLANNER_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Default stale buffering threshold (60 minutes).
+const DEFAULT_STALE_THRESHOLD: Duration = Duration::from_secs(3600);
 
 /// Top-level node orchestrator.
 ///
@@ -107,6 +116,7 @@ impl Node {
 
         // Create coordinator unit.
         let table_cfg = metalog_metastore::default_table_config();
+        let consolidation_cfg = table_cfg.consolidation.clone();
         let unit = CoordinatorUnit::new(
             table_name,
             table_cfg,
@@ -138,6 +148,54 @@ impl Node {
             })
             .await;
         });
+
+        // Spawn consolidation planner if enabled in table config.
+        if consolidation_cfg.enabled {
+            let archive_backend = self.config.storage.default_backend.clone();
+            let archive_bucket = self
+                .config
+                .storage
+                .backends
+                .get(&archive_backend)
+                .map(|b| b.bucket.clone())
+                .unwrap_or_default();
+
+            let stale_threshold = if consolidation_cfg.stale_buffering_mins > 0 {
+                Duration::from_secs(consolidation_cfg.stale_buffering_mins as u64 * 60)
+            } else if consolidation_cfg.stale_buffering_mins < 0 {
+                Duration::ZERO // disabled
+            } else {
+                DEFAULT_STALE_THRESHOLD
+            };
+
+            let file_recs = Arc::new(FileRecords::new(self.shared.db.clone(), table_name));
+            let queue = Arc::new(Queue::new(self.shared.db.clone()));
+            let in_flight = Arc::new(InFlightSet::new());
+            let policy: Arc<dyn metalog_consolidation::Policy> = Arc::new(
+                TimeWindowPolicy::new(Duration::from_secs(3600), 2, 100),
+            );
+
+            let planner = Planner::new(PlannerConfig {
+                file_recs,
+                queue,
+                policy,
+                in_flight,
+                table_name: table_name.to_string(),
+                archive_backend,
+                archive_bucket,
+                interval: DEFAULT_PLANNER_INTERVAL,
+                stale_threshold,
+                buffering_state: FileState::IrArchiveBuffering,
+                pending_state: FileState::IrArchiveConsolidationPending,
+            });
+
+            let planner_token = unit_token.clone();
+            self.join_set.spawn(async move {
+                planner.run(planner_token).await;
+            });
+
+            tracing::info!(table = table_name, "consolidation planner started");
+        }
 
         tracing::info!(table = table_name, "coordinator started");
         Ok(())
