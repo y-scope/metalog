@@ -39,6 +39,25 @@ impl CoordinatorUnit {
         }
     }
 
+    /// Creates a coordinator unit whose cancellation token is a child of `parent_token`.
+    ///
+    /// Cancelling `parent_token` (e.g. on node shutdown) automatically cancels this unit.
+    pub fn new_with_token(
+        table_name: &str,
+        table_cfg: TableConfig,
+        registry: Arc<ColumnRegistry>,
+        stall_timeout: Duration,
+        parent_token: &CancellationToken,
+    ) -> Self {
+        Self {
+            table_name: table_name.to_string(),
+            table_cfg,
+            _registry: registry,
+            progress: Arc::new(ProgressTracker::new(stall_timeout)),
+            token: parent_token.child_token(),
+        }
+    }
+
     /// Returns the table name.
     pub fn table_name(&self) -> &str {
         &self.table_name

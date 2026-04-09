@@ -6,7 +6,6 @@ use metalog_ingestion::BatchingWriter;
 use metalog_metastore::FileRecords;
 use metalog_schema::{ensure_table, execute_ddl_statements, ColumnRegistry, SCHEMA_SQL};
 use metalog_types::file_state::FileState;
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -26,14 +25,13 @@ const DEFAULT_STALE_THRESHOLD: Duration = Duration::from_secs(3600);
 /// Top-level node orchestrator.
 ///
 /// Community edition: starts coordinators for all configured tables directly.
-/// Enterprise (with HAProvider): coordinators managed by reconciliation loop.
+/// Enterprise (with HAProvider): coordinators managed by reconciliation loop via
+/// [`Node::ha_callbacks`].
 pub struct Node {
-    #[allow(dead_code)]
     config: NodeConfig,
     shared: Arc<Resources>,
     writer: Option<Arc<BatchingWriter>>,
     token: CancellationToken,
-    join_set: JoinSet<()>,
 }
 
 /// Builder for constructing a Node with optional premium providers.
@@ -64,7 +62,6 @@ impl NodeBuilder {
             shared: self.shared,
             writer: self.writer,
             token: CancellationToken::new(),
-            join_set: JoinSet::new(),
         }
     }
 }
@@ -80,8 +77,9 @@ impl Node {
 
     /// Starts the node: ensures schema, starts coordinators for configured tables.
     ///
-    /// In community edition, all tables are started directly. In enterprise
-    /// (with HAProvider), the reconciliation loop manages table ownership.
+    /// In community edition, call with the full table list. In enterprise (HA) mode,
+    /// call with an empty slice — the reconciliation loop drives table assignment via
+    /// [`Node::ha_callbacks`].
     pub async fn start(&mut self, tables: &[String]) -> Result<(), NodeError> {
         // Ensure system tables exist.
         execute_ddl_statements(&self.shared.db, SCHEMA_SQL).await?;
@@ -89,133 +87,206 @@ impl Node {
 
         // Start coordinators for each table.
         for table_name in tables {
-            self.start_coordinator(table_name).await?;
+            start_coordinator(
+                table_name,
+                &self.config,
+                self.shared.clone(),
+                self.writer.clone(),
+                &self.token,
+            )
+            .await?;
         }
 
         tracing::info!(tables = tables.len(), "node started");
         Ok(())
     }
 
-    /// Starts a coordinator for a single table.
-    async fn start_coordinator(&mut self, table_name: &str) -> Result<(), NodeError> {
-        // Ensure the table is provisioned.
-        ensure_table(&self.shared.db, table_name, None).await?;
+    /// Returns the three closures needed to wire HA reconciliation.
+    ///
+    /// - `on_start(table)` — spawns a coordinator for the table (fire-and-forget)
+    /// - `on_stop(table)` — cancels and removes the coordinator
+    /// - `stall_checker(table)` — returns true if the coordinator's [`ProgressTracker`] has
+    ///   exceeded its stall timeout
+    ///
+    /// Pass these directly to [`HAModule::start_reconciliation`].
+    ///
+    /// [`ProgressTracker`]: metalog_coordinator::ProgressTracker
+    pub fn ha_callbacks(
+        &self,
+    ) -> (
+        Arc<dyn Fn(&str) + Send + Sync>,
+        Arc<dyn Fn(&str) + Send + Sync>,
+        Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    ) {
+        let config = Arc::new(self.config.clone());
+        let shared = self.shared.clone();
+        let writer = self.writer.clone();
+        let parent_token = self.token.clone();
 
-        // Create column registry.
-        let registry = Arc::new(ColumnRegistry::new(self.shared.db.clone(), table_name).await?);
+        let on_start = {
+            let config = config.clone();
+            let shared = shared.clone();
+            let writer = writer.clone();
+            let token = parent_token.clone();
+            Arc::new(move |table: &str| {
+                let table = table.to_string();
+                let config = config.clone();
+                let shared = shared.clone();
+                let writer = writer.clone();
+                let token = token.clone();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        start_coordinator(&table, &config, shared, writer, &token).await
+                    {
+                        tracing::error!(error = %e, table = %table, "coordinator start failed");
+                    }
+                });
+            }) as Arc<dyn Fn(&str) + Send + Sync>
+        };
 
-        // Cache registry in shared resources.
-        self.shared
-            .set_column_registry(table_name, registry.clone())
-            .await;
+        let on_stop = {
+            let shared = shared.clone();
+            Arc::new(move |table: &str| {
+                shared.stop_coordinator(table);
+            }) as Arc<dyn Fn(&str) + Send + Sync>
+        };
 
-        // Register with BatchingWriter if available.
-        if let Some(writer) = &self.writer {
-            writer.set_registry(table_name, registry.clone()).await;
-        }
+        let stall_checker = {
+            Arc::new(move |table: &str| -> bool { shared.is_coordinator_stalled(table) })
+                as Arc<dyn Fn(&str) -> bool + Send + Sync>
+        };
 
-        // Create coordinator unit.
-        let table_cfg = metalog_metastore::default_table_config();
-        let consolidation_cfg = table_cfg.consolidation.clone();
-        let unit = CoordinatorUnit::new(
-            table_name,
-            table_cfg,
-            registry.clone(),
-            DEFAULT_PROGRESS_STALL_TIMEOUT,
-        );
-        let unit_token = unit.token().clone();
-
-        // Spawn partition maintenance task.
-        let pm = metalog_schema::PartitionManager::new(self.shared.db.clone(), table_name, 7, 90);
-        let pm_token = unit_token.clone();
-        self.join_set.spawn(async move {
-            run_periodic(pm_token, PARTITION_MAINTENANCE_INTERVAL, || async {
-                if let Err(e) = pm.run_maintenance().await {
-                    tracing::warn!(error = %e, "partition maintenance failed");
-                }
-            })
-            .await;
-        });
-
-        // Spawn alias refresh task.
-        let reg = registry.clone();
-        let ar_token = unit_token.clone();
-        self.join_set.spawn(async move {
-            run_periodic(ar_token, ALIAS_REFRESH_INTERVAL, || async {
-                if let Err(e) = reg.refresh_aliases().await {
-                    tracing::warn!(error = %e, "alias refresh failed");
-                }
-            })
-            .await;
-        });
-
-        // Spawn consolidation planner if enabled in table config.
-        if consolidation_cfg.enabled {
-            let archive_backend = self.config.storage.default_backend.clone();
-            let archive_bucket = self
-                .config
-                .storage
-                .backends
-                .get(&archive_backend)
-                .map(|b| b.bucket.clone())
-                .unwrap_or_default();
-
-            let stale_threshold = if consolidation_cfg.stale_buffering_mins > 0 {
-                Duration::from_secs(consolidation_cfg.stale_buffering_mins as u64 * 60)
-            } else if consolidation_cfg.stale_buffering_mins < 0 {
-                Duration::ZERO // disabled
-            } else {
-                DEFAULT_STALE_THRESHOLD
-            };
-
-            let file_recs = Arc::new(FileRecords::new(self.shared.db.clone(), table_name));
-            let queue = Arc::new(Queue::new(self.shared.db.clone()));
-            let in_flight = Arc::new(InFlightSet::new());
-            let policy: Arc<dyn metalog_consolidation::Policy> = Arc::new(
-                TimeWindowPolicy::new(Duration::from_secs(3600), 2, 100),
-            );
-
-            let planner = Planner::new(PlannerConfig {
-                file_recs,
-                queue,
-                policy,
-                in_flight,
-                table_name: table_name.to_string(),
-                archive_backend,
-                archive_bucket,
-                interval: DEFAULT_PLANNER_INTERVAL,
-                stale_threshold,
-                buffering_state: FileState::IrArchiveBuffering,
-                pending_state: FileState::IrArchiveConsolidationPending,
-            });
-
-            let planner_token = unit_token.clone();
-            self.join_set.spawn(async move {
-                planner.run(planner_token).await;
-            });
-
-            tracing::info!(table = table_name, "consolidation planner started");
-        }
-
-        tracing::info!(table = table_name, "coordinator started");
-        Ok(())
+        (on_start, on_stop, stall_checker)
     }
 
-    /// Stops the node: cancels all coordinators and waits for cleanup.
+    /// Stops the node: cancels all coordinator tokens, drains the writer.
     pub async fn stop(&mut self) {
         tracing::info!("stopping node");
+        // Cancels all coordinator child tokens (partition maintenance, alias refresh, planner).
         self.token.cancel();
 
-        // Stop BatchingWriter (drains remaining records).
+        // Drain the BatchingWriter before exit.
         if let Some(writer) = &self.writer {
             writer.stop().await;
         }
 
-        // Wait for all background tasks.
-        while self.join_set.join_next().await.is_some() {}
-
         tracing::info!("node stopped");
     }
+}
+
+/// Ensures a table is provisioned, creates its column registry, and spawns its background tasks.
+///
+/// The coordinator unit's cancellation token is created as a child of `parent_token` so that
+/// cancelling the node token (on shutdown) propagates to all coordinator tasks.
+async fn start_coordinator(
+    table_name: &str,
+    config: &NodeConfig,
+    shared: Arc<Resources>,
+    writer: Option<Arc<BatchingWriter>>,
+    parent_token: &CancellationToken,
+) -> Result<(), NodeError> {
+    // Ensure the table is provisioned.
+    ensure_table(&shared.db, table_name, None).await?;
+
+    // Create column registry.
+    let registry = Arc::new(ColumnRegistry::new(shared.db.clone(), table_name).await?);
+
+    // Cache registry in shared resources (synchronous with parking_lot).
+    shared.set_column_registry(table_name, registry.clone());
+
+    // Register with BatchingWriter if available.
+    if let Some(writer) = &writer {
+        writer.set_registry(table_name, registry.clone()).await;
+    }
+
+    // Create coordinator unit with a child token so node shutdown cascades.
+    let table_cfg = metalog_metastore::default_table_config();
+    let consolidation_cfg = table_cfg.consolidation.clone();
+    let unit = Arc::new(CoordinatorUnit::new_with_token(
+        table_name,
+        table_cfg,
+        registry.clone(),
+        DEFAULT_PROGRESS_STALL_TIMEOUT,
+        parent_token,
+    ));
+    let unit_token = unit.token().clone();
+
+    // Store unit so HA watchdog can inspect stall status and stop it.
+    shared.store_coordinator_unit(table_name, unit);
+
+    // Spawn partition maintenance task.
+    let pm =
+        metalog_schema::PartitionManager::new(shared.db.clone(), table_name, 7, 90);
+    let pm_token = unit_token.clone();
+    tokio::spawn(async move {
+        run_periodic(pm_token, PARTITION_MAINTENANCE_INTERVAL, || async {
+            if let Err(e) = pm.run_maintenance().await {
+                tracing::warn!(error = %e, "partition maintenance failed");
+            }
+        })
+        .await;
+    });
+
+    // Spawn alias refresh task.
+    let reg = registry.clone();
+    let ar_token = unit_token.clone();
+    tokio::spawn(async move {
+        run_periodic(ar_token, ALIAS_REFRESH_INTERVAL, || async {
+            if let Err(e) = reg.refresh_aliases().await {
+                tracing::warn!(error = %e, "alias refresh failed");
+            }
+        })
+        .await;
+    });
+
+    // Spawn consolidation planner if enabled in table config.
+    if consolidation_cfg.enabled {
+        let archive_backend = config.storage.default_backend.clone();
+        let archive_bucket = config
+            .storage
+            .backends
+            .get(&archive_backend)
+            .map(|b| b.bucket.clone())
+            .unwrap_or_default();
+
+        let stale_threshold = if consolidation_cfg.stale_buffering_mins > 0 {
+            Duration::from_secs(consolidation_cfg.stale_buffering_mins as u64 * 60)
+        } else if consolidation_cfg.stale_buffering_mins < 0 {
+            Duration::ZERO
+        } else {
+            DEFAULT_STALE_THRESHOLD
+        };
+
+        let file_recs = Arc::new(FileRecords::new(shared.db.clone(), table_name));
+        let queue = Arc::new(Queue::new(shared.db.clone()));
+        let in_flight = Arc::new(InFlightSet::new());
+        let policy: Arc<dyn metalog_consolidation::Policy> =
+            Arc::new(TimeWindowPolicy::new(Duration::from_secs(3600), 2, 100));
+
+        let planner = Planner::new(PlannerConfig {
+            file_recs,
+            queue,
+            policy,
+            in_flight,
+            table_name: table_name.to_string(),
+            archive_backend,
+            archive_bucket,
+            interval: DEFAULT_PLANNER_INTERVAL,
+            stale_threshold,
+            buffering_state: FileState::IrArchiveBuffering,
+            pending_state: FileState::IrArchiveConsolidationPending,
+        });
+
+        let planner_token = unit_token.clone();
+        tokio::spawn(async move {
+            planner.run(planner_token).await;
+        });
+
+        tracing::info!(table = table_name, "consolidation planner started");
+    }
+
+    tracing::info!(table = table_name, "coordinator started");
+    Ok(())
 }
 
 /// Errors from node lifecycle operations.

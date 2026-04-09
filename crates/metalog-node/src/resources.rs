@@ -2,8 +2,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use metalog_schema::ColumnRegistry;
 use metalog_telemetry::TelemetryProvider;
+use parking_lot::RwLock;
 use sqlx::MySqlPool;
-use tokio::sync::RwLock;
+
+use crate::CoordinatorUnit;
 
 /// Shared resources accessible by all coordinator/worker units.
 pub struct Resources {
@@ -12,7 +14,8 @@ pub struct Resources {
     pub telemetry: Option<TelemetryProvider>,
     pub is_mariadb: bool,
     pub failure_log_interval: Duration,
-    column_registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
+    column_registries: RwLock<HashMap<String, Arc<ColumnRegistry>>>,
+    coordinator_units: RwLock<HashMap<String, Arc<CoordinatorUnit>>>,
 }
 
 impl Resources {
@@ -23,7 +26,8 @@ impl Resources {
             telemetry: None,
             is_mariadb,
             failure_log_interval,
-            column_registries: Arc::new(RwLock::new(HashMap::new())),
+            column_registries: RwLock::new(HashMap::new()),
+            coordinator_units: RwLock::new(HashMap::new()),
         }
     }
 
@@ -33,15 +37,34 @@ impl Resources {
     }
 
     /// Caches a column registry for a table.
-    pub async fn set_column_registry(&self, table_name: &str, registry: Arc<ColumnRegistry>) {
-        let mut regs = self.column_registries.write().await;
-        regs.insert(table_name.to_string(), registry);
+    pub fn set_column_registry(&self, table_name: &str, registry: Arc<ColumnRegistry>) {
+        self.column_registries.write().insert(table_name.to_string(), registry);
     }
 
     /// Gets a cached column registry for a table.
-    pub async fn get_column_registry(&self, table_name: &str) -> Option<Arc<ColumnRegistry>> {
-        let regs = self.column_registries.read().await;
-        regs.get(table_name).cloned()
+    pub fn get_column_registry(&self, table_name: &str) -> Option<Arc<ColumnRegistry>> {
+        self.column_registries.read().get(table_name).cloned()
+    }
+
+    /// Stores the coordinator unit for a table (used by HA watchdog).
+    pub fn store_coordinator_unit(&self, table_name: &str, unit: Arc<CoordinatorUnit>) {
+        self.coordinator_units.write().insert(table_name.to_string(), unit);
+    }
+
+    /// Cancels and removes the coordinator unit for a table.
+    pub fn stop_coordinator(&self, table_name: &str) {
+        if let Some(unit) = self.coordinator_units.write().remove(table_name) {
+            unit.stop();
+        }
+    }
+
+    /// Returns true if the coordinator for a table has stalled.
+    pub fn is_coordinator_stalled(&self, table_name: &str) -> bool {
+        self.coordinator_units
+            .read()
+            .get(table_name)
+            .map(|u| u.is_stalled())
+            .unwrap_or(false)
     }
 }
 
