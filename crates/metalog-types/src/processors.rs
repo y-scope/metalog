@@ -27,11 +27,31 @@ pub trait SketchProcessor: Send + Sync {
 /// Premium: provides Kafka ingestion capabilities.
 ///
 /// Implemented by `metalog-kafka`.
+#[async_trait::async_trait]
 pub trait KafkaProvider: Send + Sync {
     /// Name for logging.
     fn name(&self) -> &str {
         "kafka"
     }
+
+    /// Registers a Kafka source for a table (idempotent — returns true if newly created).
+    async fn register_source(
+        &self,
+        table_name: &str,
+        source_name: &str,
+        topic: &str,
+        bootstrap_servers: &str,
+        record_transformer: &str,
+        consumer_group_id: &str,
+        required_env: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Deletes a Kafka source and its assignment row.
+    async fn delete_source(
+        &self,
+        table_name: &str,
+        source_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// Premium: provides high-availability coordination.

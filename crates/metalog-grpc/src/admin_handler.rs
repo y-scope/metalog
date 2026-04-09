@@ -92,14 +92,23 @@ impl AdminService for AdminHandler {
             return Err(Status::invalid_argument("consumer_group_id is required"));
         }
 
-        // Delegate to premium KafkaProvider.
-        // TODO: call kafka.register_source() when trait method is implemented
-        let _ = kafka;
+        let created = kafka
+            .register_source(
+                &req.table_name,
+                &req.source_name,
+                &req.topic,
+                &req.bootstrap_servers,
+                &req.record_transformer,
+                &req.consumer_group_id,
+                &req.required_env,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(RegisterKafkaSourceResponse {
             table_name: req.table_name,
             source_name: req.source_name,
-            created: true,
+            created,
         }))
     }
 
@@ -107,7 +116,7 @@ impl AdminService for AdminHandler {
         &self,
         request: Request<DeleteKafkaSourceRequest>,
     ) -> Result<Response<DeleteKafkaSourceResponse>, Status> {
-        let _kafka = self
+        let kafka = self
             .kafka
             .as_ref()
             .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
@@ -119,7 +128,10 @@ impl AdminService for AdminHandler {
             ));
         }
 
-        // TODO: call kafka.delete_source() when trait method is implemented
+        kafka
+            .delete_source(&req.table_name, &req.source_name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(DeleteKafkaSourceResponse {}))
     }

@@ -25,9 +25,11 @@ impl KafkaModule {
         &self.source_store
     }
 
-    /// Registers a new Kafka source.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn register_source(
+}
+
+#[async_trait::async_trait]
+impl KafkaProvider for KafkaModule {
+    async fn register_source(
         &self,
         table_name: &str,
         source_name: &str,
@@ -36,7 +38,7 @@ impl KafkaModule {
         record_transformer: &str,
         consumer_group_id: &str,
         required_env: &str,
-    ) -> Result<bool, sqlx::Error> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         self.source_store
             .register(
                 table_name,
@@ -48,19 +50,20 @@ impl KafkaModule {
                 required_env,
             )
             .await
+            .map_err(|e| Box::new(e) as _)
     }
 
-    /// Deletes a Kafka source.
-    pub async fn delete_source(
+    async fn delete_source(
         &self,
         table_name: &str,
         source_name: &str,
-    ) -> Result<(), sqlx::Error> {
-        self.source_store.delete(table_name, source_name).await
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.source_store
+            .delete(table_name, source_name)
+            .await
+            .map_err(|e| Box::new(e) as _)
     }
 }
-
-impl KafkaProvider for KafkaModule {}
 
 #[cfg(test)]
 mod tests {
