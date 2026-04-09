@@ -2,6 +2,10 @@ use std::process;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use metalog_proto::coordinator::{
+    admin_service_client::AdminServiceClient,
+    RegisterTableRequest,
+};
 
 #[derive(Parser)]
 #[command(name = "metalog", about = "CLP Metastore Service")]
@@ -97,27 +101,47 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
         .with_writer(writer.clone())
         .build();
 
-    // TODO: Register premium providers:
-    // - AggExtension
-    // - SketchExtension
-    // - KafkaModule
-    // - HAModule
-    // - ConsolidationModule
-    // - RetentionModule
-
-    // Initialize schema and start coordinators for existing tables.
-    // On first boot (empty DB), this starts with no tables; tables are
-    // registered at runtime via the AdminService RPC.
+    // Initialize schema.
+    // In HA mode the reconciliation loop drives table assignment, so we start with no tables.
+    // In community edition we start all existing tables directly.
     let reader = Arc::new(metalog_metastore::MetadataReader::new(pool.clone()));
-    let existing_tables = match reader.list_tables().await {
-        Ok(tables) => tables,
-        Err(_) => {
-            // Schema may not exist yet on first boot; start with no tables.
-            tracing::info!("no existing tables found (first boot?)");
-            vec![]
+
+    let tables_to_start: Vec<String> = if config.coordinator.enabled {
+        vec![]
+    } else {
+        match reader.list_tables().await {
+            Ok(tables) => tables,
+            Err(_) => {
+                // Schema may not exist yet on first boot; start with no tables.
+                tracing::info!("no existing tables found (first boot?)");
+                vec![]
+            }
         }
     };
-    node.start(&existing_tables).await?;
+
+    node.start(&tables_to_start).await?;
+
+    // Wire HA module when coordinator mode is enabled.
+    // The reconciliation loop drives table assignment; the liveness loop sends heartbeats.
+    if config.coordinator.enabled {
+        let ha = metalog_ha::HAModule::new(
+            pool.clone(),
+            &node_id,
+            config.coordinator.clone(),
+        );
+        ha.registry().register_node().await?;
+        tracing::info!(node_id = %node_id, "HA mode: registered node in registry");
+
+        let token = node.token().clone();
+        let (on_start, on_stop, stall_checker) = node.ha_callbacks();
+
+        ha.start_liveness(token.clone());
+        ha.start_reconciliation(token, on_start, on_stop, stall_checker);
+        tracing::info!("HA reconciliation loop started");
+    }
+
+    // Wire premium Kafka module for admin source registration.
+    let kafka = Arc::new(metalog_kafka::KafkaModule::new(pool.clone()));
     tracing::info!("node started");
 
     // Build the tonic gRPC server with configured services.
@@ -148,7 +172,7 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
             pool.clone(),
             &config.coordinator.table_compression,
         ));
-        let handler = metalog_grpc::AdminHandler::new(registration, None);
+        let handler = metalog_grpc::AdminHandler::new(registration, Some(kafka.clone()));
         tracing::info!("admin service enabled");
         Some(
             metalog_proto::coordinator::admin_service_server::AdminServiceServer::new(handler),
@@ -223,20 +247,26 @@ async fn run_admin(cmd: AdminCommands) -> Result<(), Box<dyn std::error::Error>>
             display_name,
             config_json,
         } => {
-            tracing::info!(addr = %addr, table = %table, "registering table");
-
-            // Connect to the admin gRPC service.
             let endpoint = format!("http://{addr}");
-            tracing::info!(%endpoint, "connecting to server");
+            tracing::info!(%endpoint, table = %table, "connecting to admin service");
 
-            // TODO: Use AdminService client (RegisterTable RPC).
-            // Currently just verifies the CLI argument parsing works.
-            tracing::info!(
-                table = %table,
-                display_name = ?display_name,
-                config_json = ?config_json,
-                "table registration would be sent via AdminService RPC"
-            );
+            let mut client = AdminServiceClient::connect(endpoint).await?;
+
+            let request = RegisterTableRequest {
+                table_name: table.clone(),
+                display_name: display_name.unwrap_or_default(),
+                config_json: config_json,
+            };
+
+            let response = client.register_table(request).await?.into_inner();
+
+            if response.created {
+                tracing::info!(table = %response.table_name, "table registered");
+                println!("Registered table '{}'", response.table_name);
+            } else {
+                tracing::info!(table = %response.table_name, "table already exists (idempotent)");
+                println!("Table '{}' already exists", response.table_name);
+            }
 
             Ok(())
         }
