@@ -184,7 +184,7 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
     // Query service.
     let query_svc = if grpc_config.query.enabled {
         let engine = Arc::new(metalog_query::SplitQueryEngine::new(pool.clone()));
-        let handler = metalog_grpc::QueryHandler::new(engine);
+        let handler = metalog_grpc::QueryHandler::new(engine, pool.clone());
         tracing::info!("query service enabled");
         Some(
             metalog_proto::query::split_query_service_server::SplitQueryServiceServer::new(handler),
@@ -203,6 +203,15 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
     } else {
         None
     };
+
+    // Start HTTP health server.
+    let health_server = metalog_health::HealthServer::new(config.health.port);
+    health_server.set_ready(true);
+    tokio::spawn(async move {
+        if let Err(e) = health_server.run().await {
+            tracing::error!(error = %e, "health server failed");
+        }
+    });
 
     // Build the final router with all enabled services.
     // tonic requires adding services to the router in one chain since

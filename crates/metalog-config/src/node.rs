@@ -40,8 +40,13 @@ fn default_kafka_driver() -> String {
 
 impl NodeConfig {
     /// Loads a `NodeConfig` from a YAML file.
+    ///
+    /// `${VAR}` and `$VAR` references in the file are expanded from the process environment
+    /// before parsing. An undefined variable is treated as an error.
     pub fn load(path: &str) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(path.into(), e))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(path.into(), e))?;
+        let content = shellexpand::full(&raw)
+            .map_err(|e| ConfigError::EnvVar(path.into(), e.var_name.to_string()))?;
         let config: NodeConfig =
             serde_yaml::from_str(&content).map_err(|e| ConfigError::Parse(path.into(), e))?;
         config.validate()?;
@@ -342,6 +347,9 @@ pub enum ConfigError {
 
     #[error("config parse {0}: {1}")]
     Parse(String, serde_yaml::Error),
+
+    #[error("config {0}: undefined environment variable '${1}'")]
+    EnvVar(String, String),
 
     #[error("config validation: {0}")]
     Validation(String),

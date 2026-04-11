@@ -230,9 +230,31 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
             .iter()
             .any(|m| !ctx.dim_cache.contains_key(&m.key));
         if has_new_keys {
+            // Get registry from cache, or lazy-load from DB if not yet set
+            // (e.g. before the reconciliation loop assigns this table).
             let registry = {
                 let regs = ctx.registries.read().await;
                 regs.get(&ctx.table_name).cloned()
+            };
+            let registry = if registry.is_none() {
+                match ColumnRegistry::new(ctx.db.clone(), &ctx.table_name).await {
+                    Ok(reg) => {
+                        let reg = Arc::new(reg);
+                        ctx.registries
+                            .write()
+                            .await
+                            .insert(ctx.table_name.clone(), Arc::clone(&reg));
+                        Some(reg)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            table = %ctx.table_name, error = %e, "failed to lazy-load registry"
+                        );
+                        None
+                    }
+                }
+            } else {
+                registry
             };
             if let Some(reg) = &registry {
                 for meta in &first.dim_meta {

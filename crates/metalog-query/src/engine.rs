@@ -57,9 +57,13 @@ impl SplitQueryEngine {
         group_by: &[String],
     ) -> Result<Vec<SplitRow>, EngineError> {
         let cols_sql = if !group_by.is_empty() {
-            // GROUP BY mode: projection must be explicit and caller specifies aggregations.
-            // Projection expressions like "MIN(min_timestamp)", "archive_path", "SUM(record_count)"
-            // are passed through as-is. The group_by columns are validated as identifiers.
+            // Streaming dedup mode: when group_by is set, we don't use SQL GROUP BY.
+            // Instead, we ensure the group_by columns are prepended to ORDER BY so that
+            // rows with the same group key are consecutive. The gRPC handler merges
+            // consecutive rows with the same group key, applying aggregations.
+            //
+            // The projection uses bare column names only (no aggregate functions in SQL).
+            // Aggregation is done in the handler during streaming merge.
             if columns.is_empty() {
                 return Err(EngineError::GroupByRequiresProjection);
             }
@@ -67,12 +71,17 @@ impl SplitQueryEngine {
                 validate_sql_identifier(col)
                     .map_err(|_| EngineError::InvalidGroupByColumn(col.clone()))?;
             }
-            // Validate projection expressions: each must be either a bare identifier or
-            // an aggregate function call (FUNC(identifier) or FUNC(identifier) AS identifier).
+            // Extract bare column names from projection expressions.
+            // "MIN(min_timestamp)" -> "min_timestamp", "archive_path" -> "archive_path"
             columns
                 .iter()
-                .map(|c| Self::validate_and_format_projection_expr(c))
-                .collect::<Result<Vec<_>, _>>()?
+                .map(|c| {
+                    let col_name = Self::extract_column_name(c);
+                    validate_sql_identifier(col_name)
+                        .map_err(|_| EngineError::InvalidProjection(c.to_string()))?;
+                    Ok(quote_identifier(col_name))
+                })
+                .collect::<Result<Vec<_>, EngineError>>()?
                 .join(", ")
         } else if columns.is_empty() {
             "*".to_string()
@@ -99,11 +108,9 @@ impl SplitQueryEngine {
             write!(sql, " WHERE {}", conditions.join(" AND ")).unwrap();
         }
 
-        // GROUP BY.
-        if !group_by.is_empty() {
-            let gb_cols: Vec<String> = group_by.iter().map(|c| quote_identifier(c)).collect();
-            write!(sql, " GROUP BY {}", gb_cols.join(", ")).unwrap();
-        }
+        // Note: when group_by is set, the caller must prepend group_by columns to order_clauses
+        // so that rows with the same group key are consecutive. No SQL GROUP BY is used —
+        // aggregation happens in the gRPC handler via streaming merge.
 
         // ORDER BY.
         if !order_clauses.is_empty() {
@@ -154,40 +161,37 @@ impl SplitQueryEngine {
     }
 
     /// Allowed aggregate functions in projection expressions.
-    const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
+    pub const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
 
-    /// Validates and formats a projection expression for GROUP BY queries.
+    /// Extracts the bare column name from a projection expression.
     ///
-    /// Accepts:
-    /// - Bare identifiers: `"archive_path"` → `` `archive_path` ``
-    /// - Aggregate calls: `"MIN(min_timestamp)"` → `` MIN(`min_timestamp`) AS `min_timestamp` ``
-    /// - Allowed aggregates: MIN, MAX, SUM, COUNT, AVG
-    fn validate_and_format_projection_expr(expr: &str) -> Result<String, EngineError> {
-        // Check for aggregate function pattern: FUNC(column_name)
+    /// - `"archive_path"` → `"archive_path"`
+    /// - `"MIN(min_timestamp)"` → `"min_timestamp"`
+    /// - `"SUM(record_count)"` → `"record_count"`
+    pub fn extract_column_name(expr: &str) -> &str {
         if let Some(paren_start) = expr.find('(') {
-            if !expr.ends_with(')') {
-                return Err(EngineError::InvalidProjection(expr.to_string()));
+            if expr.ends_with(')') {
+                return expr[paren_start + 1..expr.len() - 1].trim();
             }
-            let func = &expr[..paren_start].trim().to_uppercase();
-            let col_name = &expr[paren_start + 1..expr.len() - 1].trim();
-
-            // Validate the column name inside the function.
-            validate_sql_identifier(col_name)
-                .map_err(|_| EngineError::InvalidProjection(expr.to_string()))?;
-            let quoted_col = quote_identifier(col_name);
-
-            // Validate function name.
-            if !Self::ALLOWED_AGGREGATES.contains(&func.as_str()) {
-                return Err(EngineError::InvalidProjection(expr.to_string()));
-            }
-
-            Ok(format!("{func}({quoted_col}) AS {quoted_col}"))
-        } else {
-            // Bare identifier.
-            validate_sql_identifier(expr)
-                .map_err(|_| EngineError::InvalidProjection(expr.to_string()))?;
-            Ok(quote_identifier(expr))
         }
+        expr.trim()
+    }
+
+    /// Parses an aggregate function name from a projection expression.
+    /// Returns None for bare column names.
+    ///
+    /// - `"MIN(min_timestamp)"` → `Some("MIN")`
+    /// - `"archive_path"` → `None`
+    pub fn parse_aggregate_func(expr: &str) -> Option<String> {
+        if let Some(paren_start) = expr.find('(') {
+            if expr.ends_with(')') {
+                let func = expr[..paren_start].trim().to_uppercase();
+                if Self::ALLOWED_AGGREGATES.contains(&func.as_str()) {
+                    return Some(func);
+                }
+            }
+        }
+        None
     }
 
     /// Validates that all ORDER BY columns are indexed (unless `allow_unindexed` is set).

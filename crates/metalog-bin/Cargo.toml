@@ -27,6 +27,7 @@ metalog-kafka = { workspace = true }
 metalog-ha = { workspace = true }
 metalog-consolidation = { workspace = true }
 metalog-retention = { workspace = true }
+metalog-health = { workspace = true }
 
 # Runtime
 clap = { workspace = true }

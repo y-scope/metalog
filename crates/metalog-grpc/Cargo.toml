@@ -12,6 +12,8 @@ metalog-ingestion = { workspace = true }
 metalog-coordinator = { workspace = true }
 metalog-db = { workspace = true }
 metalog-query = { workspace = true }
+metalog-schema = { workspace = true }
+sqlx = { workspace = true }
 metalog-metastore = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
