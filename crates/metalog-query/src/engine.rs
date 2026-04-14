@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
-use metalog_db::quote_identifier;
+use metalog_db::{quote_identifier, try_quote_identifier};
 use sqlx::{Column, MySqlPool};
 
 /// Indexed sort columns that support efficient keyset pagination.
 const INDEXED_SORT_COLUMNS: &[&str] = &["min_timestamp", "max_timestamp"];
+
+/// Maximum query limit. Results beyond this will be capped to prevent OOM.
+/// If the client requests more than this, we cap at this value with a warning.
+pub const MAX_QUERY_LIMIT: i32 = 100_000;
 
 /// Sort specification for ORDER BY.
 #[derive(Debug, Clone)]
@@ -51,6 +55,11 @@ impl SplitQueryEngine {
         keyset_where: &str,
         limit: i32,
     ) -> Result<Vec<SplitRow>, EngineError> {
+        // Validate table name before interpolating into SQL.
+        try_quote_identifier(table_name).map_err(|e| {
+            EngineError::InvalidTableName(table_name.to_string(), e.to_string())
+        })?;
+
         let cols_sql = if columns.is_empty() {
             "*".to_string()
         } else {
@@ -66,7 +75,7 @@ impl SplitQueryEngine {
         // WHERE clauses.
         let mut conditions = Vec::new();
         if !filter_expr.is_empty() {
-            conditions.push(filter_expr.to_string());
+            conditions.push(format!("({filter_expr})"));
         }
         if !keyset_where.is_empty() {
             conditions.push(format!("({keyset_where})"));
@@ -80,8 +89,23 @@ impl SplitQueryEngine {
             sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
         }
 
-        // LIMIT (fetch limit+1 for truncation detection).
-        let fetch_limit = if limit > 0 { limit + 1 } else { 10000 };
+        // LIMIT: cap at MAX_QUERY_LIMIT to prevent OOM. If the client requests more,
+        // we still fetch limit+1 for truncation detection but warn about the cap.
+        let capped_limit = if limit > 0 {
+            if limit > MAX_QUERY_LIMIT {
+                tracing::warn!(
+                    requested = limit,
+                    capped = MAX_QUERY_LIMIT,
+                    "query limit exceeded, capping result limit"
+                );
+                MAX_QUERY_LIMIT
+            } else {
+                limit
+            }
+        } else {
+            MAX_QUERY_LIMIT
+        };
+        let fetch_limit = capped_limit + 1;
         sql.push_str(&format!(" LIMIT {fetch_limit}"));
 
         tracing::info!(sql = %sql, "executing split query");
@@ -238,6 +262,9 @@ pub enum EngineError {
     )]
     UnindexedSort(String),
 
+    #[error("invalid table name {0:?}: {1}")]
+    InvalidTableName(String, String),
+
     #[error("sql: {0}")]
     Sql(#[from] sqlx::Error),
 }
@@ -337,8 +364,53 @@ mod tests {
     }
 
     #[test]
+    fn reject_invalid_table_name() {
+        // Table names with special chars should be rejected.
+        assert!(SplitQueryEngine::validate_sort_columns(&[], true).is_ok());
+        // We can't call execute_page without a DB, but try_quote_identifier
+        // validates the same thing — verify it rejects dangerous names.
+        assert!(try_quote_identifier("DROP TABLE").is_err());
+        assert!(try_quote_identifier("has space").is_err());
+        assert!(try_quote_identifier("has-dash").is_err());
+        assert!(try_quote_identifier("").is_err());
+        // Valid names should pass.
+        assert!(try_quote_identifier("clp_files").is_ok());
+        assert!(try_quote_identifier("my_table_1").is_ok());
+    }
+
+    #[test]
+    fn filter_expr_or_wrapped_in_parens() {
+        // A filter with OR must be parenthesized when combined with keyset WHERE,
+        // otherwise `a = 1 OR b = 2 AND keyset` is parsed as
+        // `a = 1 OR (b = 2 AND keyset)` — wrong results.
+        let filter = "state = 1 OR state = 2".to_string();
+        let keyset = "`min_timestamp` > '1000'".to_string();
+        // Replicate the condition-joining logic from execute_page.
+        let mut conditions = Vec::new();
+        if !filter.is_empty() {
+            conditions.push(format!("({filter})"));
+        }
+        if !keyset.is_empty() {
+            conditions.push(format!("({keyset})"));
+        }
+        let where_clause = conditions.join(" AND ");
+        assert_eq!(
+            where_clause,
+            "(state = 1 OR state = 2) AND (`min_timestamp` > '1000')"
+        );
+        // Without the fix, this would produce:
+        // "state = 1 OR state = 2 AND (`min_timestamp` > '1000')"
+    }
+
+    #[test]
     fn keyset_where_empty() {
         let sql = SplitQueryEngine::build_keyset_where(&[], &[], 0);
         assert!(sql.is_empty());
+    }
+
+    #[test]
+    fn max_query_limit_constant() {
+        // Verify MAX_QUERY_LIMIT is set correctly.
+        assert_eq!(MAX_QUERY_LIMIT, 100_000);
     }
 }

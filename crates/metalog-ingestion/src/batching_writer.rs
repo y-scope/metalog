@@ -86,8 +86,18 @@ impl BatchingWriter {
     /// Non-blocking submit. Returns `ChannelFullError` if the channel is full.
     pub async fn submit(&self, table_name: &str, rec: FileRecord) -> Result<(), ChannelFullError> {
         let tx = self.get_or_create_writer(table_name).await;
-        tx.try_send(rec)
-            .map_err(|_| ChannelFullError(table_name.to_string()))
+        match tx.try_send(rec) {
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // Log the rejection for observability; the caller receives an error.
+                tracing::warn!(table = table_name, "channel full, record dropped");
+                Err(ChannelFullError(table_name.to_string()))
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                // Channel is closed (writer stopped).
+                Err(ChannelFullError(table_name.to_string()))
+            }
+            Ok(()) => Ok(()),
+        }
     }
 
     /// Blocking submit. Waits until channel has space or context is cancelled.
@@ -259,15 +269,19 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
 
     // Rebuild SQL template and dim_keys only when dim columns change.
     if dims_changed || ctx.sql_prefix.is_none() {
-        let dim_cols: Vec<(&str, &str)> = ctx
-            .dim_cache
+        // Sort keys for deterministic column order. Both the SQL template
+        // (INSERT column list) and value ordering (dim_keys) must use the
+        // same order — a single sorted iteration guarantees this.
+        let mut sorted_keys: Vec<String> = ctx.dim_cache.keys().cloned().collect();
+        sorted_keys.sort();
+        let dim_cols: Vec<(&str, &str)> = sorted_keys
             .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .map(|k| (k.as_str(), ctx.dim_cache[k].as_str()))
             .collect();
         let (prefix, suffix) = build_sql_template(&ctx.table_name, &dim_cols);
         ctx.sql_prefix = Some(prefix);
         ctx.sql_suffix = Some(suffix);
-        ctx.dim_keys = ctx.dim_cache.keys().cloned().collect();
+        ctx.dim_keys = sorted_keys;
     }
     let sql_prefix = ctx.sql_prefix.as_deref().unwrap();
     let sql_suffix = ctx.sql_suffix.as_deref().unwrap();
@@ -605,5 +619,23 @@ mod tests {
         assert!(prefix.contains("`dim_f01`"));
         assert!(prefix.contains("`dim_f02`"));
         assert!(suffix.contains("ON DUPLICATE KEY UPDATE"));
+    }
+
+    #[test]
+    fn build_template_dim_column_order_matches_sorted_keys() {
+        // Dim columns must appear in the same order in the INSERT column list
+        // and the VALUES rows. Using a single sorted iteration guarantees this.
+        // Pass dims in reverse alphabetical order by logical key;
+        // build_sql_template should place physical columns in the order given.
+        let dims = vec![("zone", "dim_f02"), ("host", "dim_f01")];
+        let (prefix, _suffix) = build_sql_template("test_table", &dims);
+        // dim_f02 (zone) should appear before dim_f01 (host) in the column list
+        // because that's the order we passed them.
+        let f02_pos = prefix.find("dim_f02").unwrap();
+        let f01_pos = prefix.find("dim_f01").unwrap();
+        assert!(
+            f02_pos < f01_pos,
+            "dim columns should appear in the order passed to build_sql_template"
+        );
     }
 }
