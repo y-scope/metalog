@@ -11,5 +11,11 @@ pub use column_registry::{
     RegistrySnapshot,
 };
 pub use ddl::{execute_ddl_statements, split_sql_statements, SCHEMA_SQL};
-pub use partition_manager::{IndexManager, PartitionError, PartitionManager};
+pub use partition_manager::{
+    create_lookahead_partitions,
+    IndexManager,
+    PartitionError,
+    PartitionManager,
+    DEFAULT_PROVISION_LOOKAHEAD_DAYS,
+};
 pub use provisioner::{ensure_kafka_tables, ensure_table, EnsureTableError};

@@ -10,6 +10,8 @@ use metalog_timeutil::epoch_nanos;
 use sqlx::MySqlPool;
 
 use crate::ddl::{execute_ddl_statements, SCHEMA_SQL};
+use crate::partition_manager::create_lookahead_partitions;
+use crate::DEFAULT_PROVISION_LOOKAHEAD_DAYS;
 
 /// Provisions a new table by:
 /// 1. Ensuring system tables exist (idempotent DDL)
@@ -71,6 +73,15 @@ pub async fn ensure_table(
             .execute(pool)
             .await
             .map_err(EnsureTableError::Sql)?;
+
+        // Pre-populate daily partitions for the next N days.
+        if let Err(e) = create_lookahead_partitions(pool, table_name, DEFAULT_PROVISION_LOOKAHEAD_DAYS).await {
+            tracing::warn!(
+                table_name,
+                error = %e,
+                "failed to create initial lookahead partitions during provisioning"
+            );
+        }
 
         // Pre-populate sketch slots (s01..s64) as AVAILABLE.
         let now = epoch_nanos();
