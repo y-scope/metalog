@@ -1,23 +1,22 @@
+use sqlx::mysql::MySqlDatabaseError;
 use sqlx::Error as SqlxError;
 
 // MySQL/MariaDB error codes.
-const ERR_DUPLICATE_KEY: u32 = 1062;
-const ERR_DEADLOCK: u32 = 1213;
-const ERR_LOCK_WAIT_TIMEOUT: u32 = 1205;
-const ERR_DUPLICATE_COLUMN: u32 = 1060;
-const ERR_TABLE_EXISTS: u32 = 1050;
-const ERR_DUPLICATE_PARTITION: u32 = 1517;
-const ERR_CANT_DROP_KEY: u32 = 1091;
+const ERR_DUPLICATE_KEY: u16 = 1062;
+const ERR_DEADLOCK: u16 = 1213;
+const ERR_LOCK_WAIT_TIMEOUT: u16 = 1205;
+const ERR_DUPLICATE_COLUMN: u16 = 1060;
+const ERR_TABLE_EXISTS: u16 = 1050;
+const ERR_DUPLICATE_PARTITION: u16 = 1517;
+const ERR_CANT_DROP_KEY: u16 = 1091;
 
-/// Extracts the MySQL error code from a sqlx error, if present.
-pub fn mysql_error_code(err: &SqlxError) -> Option<u32> {
-    match err {
-        SqlxError::Database(db_err) => db_err.code().and_then(|c| c.parse::<u32>().ok()),
-        _ => None,
-    }
+/// Extracts the MySQL native error number from a sqlx error, if present.
+pub fn mysql_error_code(err: &SqlxError) -> Option<u16> {
+    err.as_database_error()
+        .map(|db_err| db_err.downcast_ref::<MySqlDatabaseError>().number())
 }
 
-fn is_mysql_error(err: &SqlxError, code: u32) -> bool {
+fn is_mysql_error(err: &SqlxError, code: u16) -> bool {
     mysql_error_code(err) == Some(code)
 }
 
