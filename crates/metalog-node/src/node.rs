@@ -11,7 +11,6 @@ use crate::{
     CoordinatorUnit,
     Resources,
     ALIAS_REFRESH_INTERVAL,
-    PARTITION_MAINTENANCE_INTERVAL,
 };
 
 /// Top-level node orchestrator.
@@ -107,29 +106,24 @@ impl Node {
 
         // Create coordinator unit.
         let table_cfg = metalog_metastore::default_table_config();
-        let unit = CoordinatorUnit::new(
+        let unit = Arc::new(CoordinatorUnit::new(
             table_name,
             table_cfg,
             registry.clone(),
+            self.shared.db.clone(),
+            None, // TODO: pass storage registry when wired
             DEFAULT_PROGRESS_STALL_TIMEOUT,
-        );
-        let unit_token = unit.token().clone();
+        ));
 
-        // Spawn partition maintenance task.
-        let pm = metalog_schema::PartitionManager::new(self.shared.db.clone(), table_name, 7, 90);
-        let pm_token = unit_token.clone();
-        self.join_set.spawn(async move {
-            run_periodic(pm_token, PARTITION_MAINTENANCE_INTERVAL, || async {
-                if let Err(e) = pm.run_maintenance().await {
-                    tracing::warn!(error = %e, "partition maintenance failed");
-                }
-            })
-            .await;
-        });
+        // Blocking: ensure partitions exist before proceeding.
+        unit.ensure_partitions_ready().await;
+
+        // Spawn background tasks (partition maintenance + retention + alias refresh).
+        unit.spawn_background_tasks();
 
         // Spawn alias refresh task.
         let reg = registry.clone();
-        let ar_token = unit_token.clone();
+        let ar_token = unit.token().clone();
         self.join_set.spawn(async move {
             run_periodic(ar_token, ALIAS_REFRESH_INTERVAL, || async {
                 if let Err(e) = reg.refresh_aliases().await {

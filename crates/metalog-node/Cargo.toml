@@ -14,6 +14,10 @@ metalog-ingestion = { workspace = true }
 metalog-coordinator = { workspace = true }
 metalog-health = { workspace = true }
 metalog-telemetry = { workspace = true }
+metalog-retention = { workspace = true }
+metalog-storage = { workspace = true }
+metalog-timeutil = { workspace = true }
+metalog-logutil = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
