@@ -2,12 +2,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// File lifecycle state. Three independent chains, all forward-only.
+/// File lifecycle state. Four independent chains, all forward-only.
 ///
-/// IR-only:     `IrBuffering` -> `IrClosed` -> `IrPurging` -> [deleted]
-/// Hybrid:      `IrArchiveBuffering` -> `IrArchiveConsolidationPending`
-///              -> `ArchiveClosed` -> `ArchivePurging` -> [deleted]
-/// Archive-only: `ArchiveClosed` -> `ArchivePurging` -> [deleted]
+/// IR-only:       `IrBuffering` -> `IrClosed` -> `IrPurging` -> [deleted]
+/// IR→Archive:    `IrArchiveBuffering` -> `IrArchiveConsolidationPending`
+///                -> `ArchiveClosed` -> `ArchivePurging` -> [deleted]
+/// File→Archive:  `FileArchiveBuffering` -> `FileArchiveConsolidationPending`
+///                -> `ArchiveClosed` -> `ArchivePurging` -> [deleted]
+/// Archive-only:  `ArchiveClosed` -> `ArchivePurging` -> [deleted]
+///
+/// The IR→Archive and File→Archive chains differ in that IR files are
+/// searchable (CLP-encoded) while plain files are opaque blobs. Both
+/// converge at `ArchiveClosed` after consolidation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FileState {
     IrBuffering,
@@ -15,6 +21,8 @@ pub enum FileState {
     IrPurging,
     IrArchiveBuffering,
     IrArchiveConsolidationPending,
+    FileArchiveBuffering,
+    FileArchiveConsolidationPending,
     ArchiveClosed,
     ArchivePurging,
 }
@@ -28,6 +36,8 @@ impl FileState {
             Self::IrPurging => "IR_PURGING",
             Self::IrArchiveBuffering => "IR_ARCHIVE_BUFFERING",
             Self::IrArchiveConsolidationPending => "IR_ARCHIVE_CONSOLIDATION_PENDING",
+            Self::FileArchiveBuffering => "FILE_ARCHIVE_BUFFERING",
+            Self::FileArchiveConsolidationPending => "FILE_ARCHIVE_CONSOLIDATION_PENDING",
             Self::ArchiveClosed => "ARCHIVE_CLOSED",
             Self::ArchivePurging => "ARCHIVE_PURGING",
         }
@@ -41,6 +51,8 @@ impl FileState {
             "IR_PURGING" => Some(Self::IrPurging),
             "IR_ARCHIVE_BUFFERING" => Some(Self::IrArchiveBuffering),
             "IR_ARCHIVE_CONSOLIDATION_PENDING" => Some(Self::IrArchiveConsolidationPending),
+            "FILE_ARCHIVE_BUFFERING" => Some(Self::FileArchiveBuffering),
+            "FILE_ARCHIVE_CONSOLIDATION_PENDING" => Some(Self::FileArchiveConsolidationPending),
             "ARCHIVE_CLOSED" => Some(Self::ArchiveClosed),
             "ARCHIVE_PURGING" => Some(Self::ArchivePurging),
             _ => None,
@@ -63,6 +75,11 @@ impl FileState {
                     Self::IrArchiveConsolidationPending
                 )
                 | (Self::IrArchiveConsolidationPending, Self::ArchiveClosed)
+                | (
+                    Self::FileArchiveBuffering,
+                    Self::FileArchiveConsolidationPending
+                )
+                | (Self::FileArchiveConsolidationPending, Self::ArchiveClosed)
                 | (Self::ArchiveClosed, Self::ArchivePurging)
         )
     }
@@ -72,6 +89,7 @@ impl FileState {
         &[
             Self::IrPurging,
             Self::IrArchiveConsolidationPending,
+            Self::FileArchiveConsolidationPending,
             Self::ArchiveClosed,
             Self::ArchivePurging,
         ]
@@ -85,6 +103,8 @@ impl FileState {
             Self::IrPurging,
             Self::IrArchiveBuffering,
             Self::IrArchiveConsolidationPending,
+            Self::FileArchiveBuffering,
+            Self::FileArchiveConsolidationPending,
             Self::ArchiveClosed,
             Self::ArchivePurging,
         ]
@@ -132,6 +152,11 @@ mod tests {
         assert!(
             FileState::IrArchiveConsolidationPending.can_transition_to(FileState::ArchiveClosed)
         );
+        assert!(FileState::FileArchiveBuffering
+            .can_transition_to(FileState::FileArchiveConsolidationPending));
+        assert!(
+            FileState::FileArchiveConsolidationPending.can_transition_to(FileState::ArchiveClosed)
+        );
         assert!(FileState::ArchiveClosed.can_transition_to(FileState::ArchivePurging));
     }
 
@@ -140,11 +165,16 @@ mod tests {
         assert!(!FileState::IrBuffering.can_transition_to(FileState::IrPurging));
         assert!(!FileState::IrPurging.can_transition_to(FileState::IrBuffering));
         assert!(!FileState::ArchiveClosed.can_transition_to(FileState::IrBuffering));
+        // No cross-chain transitions.
+        assert!(!FileState::IrArchiveBuffering
+            .can_transition_to(FileState::FileArchiveConsolidationPending));
+        assert!(!FileState::FileArchiveBuffering
+            .can_transition_to(FileState::IrArchiveConsolidationPending));
     }
 
     #[test]
     fn upsert_guard_states_count() {
-        assert_eq!(FileState::upsert_guard_states().len(), 4);
+        assert_eq!(FileState::upsert_guard_states().len(), 5);
     }
 
     #[test]

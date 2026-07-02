@@ -10,4 +10,5 @@ hostname = { workspace = true }
 which = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+shellexpand = { workspace = true }
 thiserror = { workspace = true }

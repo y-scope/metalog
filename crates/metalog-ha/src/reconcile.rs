@@ -11,13 +11,15 @@ use crate::NodeRegistry;
 /// 4 steps per cycle (each tolerates failure independently):
 /// 1. Claim orphans — adopt tables from dead nodes
 /// 2. Claim unassigned — pick up newly registered tables (fair-share)
-/// 3. Watchdog — (future: detect stalled coordinators)
+/// 3. Watchdog — detect and restart stalled coordinators
 /// 4. Ownership verification — stop coordinators for lost assignments
 pub struct ReconciliationLoop {
     registry: Arc<NodeRegistry>,
     config: CoordinatorConfig,
     on_start: Arc<dyn Fn(&str) + Send + Sync>,
     on_stop: Arc<dyn Fn(&str) + Send + Sync>,
+    /// Returns true if the coordinator for a given table has stalled.
+    stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl ReconciliationLoop {
@@ -26,12 +28,14 @@ impl ReconciliationLoop {
         config: CoordinatorConfig,
         on_start: Arc<dyn Fn(&str) + Send + Sync>,
         on_stop: Arc<dyn Fn(&str) + Send + Sync>,
+        stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     ) -> Self {
         Self {
             registry,
             config,
             on_start,
             on_stop,
+            stall_checker,
         }
     }
 
@@ -107,7 +111,19 @@ impl ReconciliationLoop {
             }
         }
 
-        // Step 3: Watchdog (TODO: detect stalled coordinators via ProgressTracker).
+        // Step 3: Watchdog — restart coordinators that have stalled.
+        let stalled: Vec<String> = running
+            .iter()
+            .filter(|t| (self.stall_checker)(t))
+            .cloned()
+            .collect();
+        for table in stalled {
+            tracing::warn!(table = %table, "coordinator stalled, restarting");
+            (self.on_stop)(&table);
+            running.remove(&table);
+            (self.on_start)(&table);
+            running.insert(table);
+        }
 
         // Step 4: Ownership verification — stop coordinators for lost assignments.
         let my_tables: HashSet<String> = self.registry.get_my_tables().await?.into_iter().collect();

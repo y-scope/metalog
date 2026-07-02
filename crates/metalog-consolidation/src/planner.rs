@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use metalog_logutil::FailureLogger;
 use metalog_metastore::FileRecords;
 use metalog_timeutil::epoch_nanos;
+use metalog_types::file_state::FileState;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -26,6 +27,10 @@ pub struct Planner {
     archive_bucket: String,
     interval: Duration,
     stale_threshold: Duration,
+    /// The buffering state to promote from (e.g., `IrArchiveBuffering` or `FileArchiveBuffering`).
+    buffering_state: FileState,
+    /// The consolidation-pending state to promote to and query for candidates.
+    pending_state: FileState,
 }
 
 /// Configuration for creating a Planner.
@@ -39,6 +44,10 @@ pub struct PlannerConfig {
     pub archive_bucket: String,
     pub interval: Duration,
     pub stale_threshold: Duration,
+    /// The buffering state to promote from (e.g., `IrArchiveBuffering` or `FileArchiveBuffering`).
+    pub buffering_state: FileState,
+    /// The consolidation-pending state to promote to and query for candidates.
+    pub pending_state: FileState,
 }
 
 impl Planner {
@@ -53,6 +62,8 @@ impl Planner {
             archive_bucket: config.archive_bucket,
             interval: config.interval,
             stale_threshold: config.stale_threshold,
+            buffering_state: config.buffering_state,
+            pending_state: config.pending_state,
         }
     }
 
@@ -101,14 +112,20 @@ impl Planner {
         // Step 3: Promote stuck buffering.
         if self.stale_threshold > Duration::ZERO {
             let stale_before = epoch_nanos() - self.stale_threshold.as_nanos() as i64;
-            let promoted = self.file_recs.promote_stuck_buffering(stale_before).await?;
+            let promoted = self
+                .file_recs
+                .promote_stuck_buffering(self.buffering_state, self.pending_state, stale_before)
+                .await?;
             if promoted > 0 {
                 tracing::info!(promoted, "promoted stuck buffering files");
             }
         }
 
         // Step 4: Find candidates.
-        let candidates = self.file_recs.find_consolidation_pending(&[], &[]).await?;
+        let candidates = self
+            .file_recs
+            .find_consolidation_pending(self.pending_state, &[], &[])
+            .await?;
         if candidates.is_empty() {
             return Ok(());
         }

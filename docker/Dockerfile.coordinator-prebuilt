@@ -1,0 +1,14 @@
+# Lightweight image using a pre-built metalog binary (avoids Rust compile in Docker).
+FROM ubuntu:noble
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY target/release/metalog /app/metalog
+
+EXPOSE 9090 8081
+
+ENTRYPOINT ["/app/metalog", "serve"]
+CMD ["--config", "/etc/clp/node.yaml"]

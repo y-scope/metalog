@@ -7,7 +7,7 @@ lifecycle of compressed log file metadata at petabyte scale.
 ## Architecture
 
 - **MariaDB/MySQL** as single source of truth (no ZooKeeper/etcd)
-- **gRPC** ingestion and query APIs
+- **gRPC** ingestion (`Ingest` and `BatchIngest`) and query APIs
 - **Pluggable storage** backends (S3, filesystem, HTTP)
 - **Daily RANGE partitions** on `min_timestamp` for write locality and query pruning
 
@@ -24,7 +24,7 @@ partition management.
 | Sketches | `metalog-sketches` | Bloom filter pruning (SBBF, Parquet-compatible) |
 | Kafka | `metalog-kafka` | Pull-based ingestion with offset watermark tracking |
 | HA | `metalog-ha` | Multi-node coordination, fair-share table claiming |
-| Consolidation | `metalog-consolidation` | IR→Archive pipeline with task queue |
+| Consolidation | `metalog-consolidation` | IR→Archive and File→Archive pipelines with task queue |
 | Retention | `metalog-retention` | Policy-based deletion with per-file adjustment |
 
 ## Building
@@ -69,7 +69,7 @@ crates/
 ├── metalog-metastore/      # File records, advisory locks, UPSERT builder
 ├── metalog-schema/         # Column registry, partition manager, DDL
 ├── metalog-proto/          # Protobuf definitions (tonic/prost)
-├── metalog-ingestion/      # BatchingWriter, proto conversion
+├── metalog-ingestion/      # BatchingWriter, BatchIngest service, proto conversion
 ├── metalog-coordinator/    # Progress tracking, table registration
 ├── metalog-query/          # Filter validation, keyset pagination, cache
 ├── metalog-storage/        # Backend trait, filesystem implementation

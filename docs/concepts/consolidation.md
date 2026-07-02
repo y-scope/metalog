@@ -79,7 +79,7 @@ The metastore supports multiple entry types, each with a distinct lifecycle:
 ```
 ┌─────────────────────────┐
 │  IR_ARCHIVE_BUFFERING   │  IR file actively being written
-│  (clp_archive_path='')  │
+│  (archive_path='')  │
 └───────────┬─────────────┘
             │ file closed (rotation/timeout)
             │   — OR —
@@ -88,13 +88,13 @@ The metastore supports multiple entry types, each with a distinct lifecycle:
 ┌─────────────────────────────────┐
 │  IR_ARCHIVE_CONSOLIDATION_      │  Awaiting consolidation
 │  PENDING                        │
-│  (clp_archive_path='')          │
+│  (archive_path='')          │
 └───────────┬─────────────────────┘
             │ worker consolidates
             ▼
 ┌─────────────────────────┐
 │     ARCHIVE_CLOSED      │  Successfully consolidated
-│  (clp_archive_path set) │
+│  (archive_path set) │
 └─────────────────────────┘
 ```
 
@@ -114,7 +114,7 @@ A **many-to-one** relationship exists: one CLP-Archive contains multiple CLP-IR 
 ┌───────────────────────────────────────────────────────────────────────┐
 │ clp_spark                                                          │
 ├────────────────────┬───────────┬──────────────────────────────────────┤
-│ clp_ir_path        │ service   │ clp_archive_path                     │
+│ file_path        │ service   │ archive_path                     │
 ├────────────────────┼───────────┼──────────────────────────────────────┤
 │ /ir/host-a/1.clp   │ payments  │ /archive/2024/01/15/abc.clp          │
 │ /ir/host-b/2.clp   │ payments  │ /archive/2024/01/15/abc.clp          │ ◄─ Same archive
@@ -123,7 +123,7 @@ A **many-to-one** relationship exists: one CLP-Archive contains multiple CLP-IR 
 └────────────────────┴───────────┴──────────────────────────────────────┘
 ```
 
-- Tracked via `clp_archive_path` column
+- Tracked via `archive_path` column
 - Archive metadata (size, timestamps) denormalized onto each IR row
 - Queries can still operate at IR file granularity within an archive
 
@@ -276,7 +276,7 @@ The query layer abstracts IR/Archive complexity from users — queries return re
 
 | Mode | When to Use | What's Searched |
 |------|-------------|-----------------|
-| **Archives only** | Fresh data not required | Only `clp_archive_path != ''` |
+| **Archives only** | Fresh data not required | Only `archive_path != ''` |
 | **Hybrid** | Need freshest data | Archives + unconsolidated IR files |
 
 ### Query Routing
@@ -285,17 +285,17 @@ The query layer abstracts IR/Archive complexity from users — queries return re
 
 | Step | Action | Details |
 |------|--------|---------|
-| 1. Query metastore | `SELECT clp_ir_path, clp_archive_path FROM clp_spark WHERE ...` | Filter by time range and dimensions against a read replica |
-| 2. Generate splits | Group results by `clp_archive_path` | Multiple IR files in the same archive become a single split; standalone IRs become individual splits |
+| 1. Query metastore | `SELECT file_path, archive_path FROM clp_spark WHERE ...` | Filter by time range and dimensions against a read replica |
+| 2. Generate splits | Group results by `archive_path` | Multiple IR files in the same archive become a single split; standalone IRs become individual splits |
 | 3. Execute splits | Workers open each split | Archive splits: open archive, scan only the specified files within. IR splits: open IR file directly |
-| 4. Return results | Union split results | No duplication — `clp_archive_path` determines the search target |
+| 4. Return results | Union split results | No duplication — `archive_path` determines the search target |
 
-**Routing rule:** `clp_archive_path` is non-empty → search the archive. `clp_archive_path` is empty → search the IR file. Never both.
+**Routing rule:** `archive_path` is non-empty → search the archive. `archive_path` is empty → search the IR file. Never both.
 
 **Key properties:**
 - CLP archives support **selective file access** — workers read only the specified files within an archive, not the entire archive
 - Split grouping by archive path minimizes I/O (3 rows may produce 2 splits)
-- **Replication lag**: if a replica is behind, `clp_archive_path` may appear empty, routing the query to the IR file instead of the archive. Results remain correct with slightly reduced efficiency.
+- **Replication lag**: if a replica is behind, `archive_path` may appear empty, routing the query to the IR file instead of the archive. Results remain correct with slightly reduced efficiency.
 
 ---
 

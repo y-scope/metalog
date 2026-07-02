@@ -49,17 +49,22 @@ impl HAModule {
     }
 
     /// Starts the reconciliation loop.
+    ///
+    /// `stall_checker` is called each cycle for each running table; returning `true` triggers a
+    /// stop-then-start restart. Wire it to [`ProgressTracker::is_stalled`] via the node's
+    /// coordinator unit registry.
     pub fn start_reconciliation(
         &self,
         token: CancellationToken,
         on_start: Arc<dyn Fn(&str) + Send + Sync>,
         on_stop: Arc<dyn Fn(&str) + Send + Sync>,
+        stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.registry.clone();
         let config = self.config.clone();
 
         tokio::spawn(async move {
-            ReconciliationLoop::new(registry, config, on_start, on_stop)
+            ReconciliationLoop::new(registry, config, on_start, on_stop, stall_checker)
                 .run(token)
                 .await;
         })

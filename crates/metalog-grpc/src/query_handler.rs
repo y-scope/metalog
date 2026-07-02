@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use metalog_proto::query::{
     split_query_service_server::SplitQueryService,
@@ -8,19 +8,60 @@ use metalog_proto::query::{
     StreamSplitsRequest,
     StreamSplitsResponse,
 };
-use metalog_query::{validate_filter_expression, OrderBySpec, SplitQueryEngine};
-use tokio::sync::mpsc;
+use metalog_db::validate_sql_identifier;
+use metalog_query::{
+    rewrite_filter_columns, validate_filter_expression, OrderBySpec, SplitQueryEngine, SplitRow,
+};
+use metalog_schema::ColumnRegistry;
+use sqlx::MySqlPool;
+use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 /// gRPC handler for the SplitQueryService (StreamSplits).
+///
+/// Holds a lazy-loaded registry cache keyed by table name so that
+/// `__DIM.<key>` references in filter expressions can be resolved to
+/// physical column names (e.g. `dim_f01`) before the query reaches the DB.
 pub struct QueryHandler {
     engine: Arc<SplitQueryEngine>,
+    db: MySqlPool,
+    registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
 }
 
 impl QueryHandler {
-    pub fn new(engine: Arc<SplitQueryEngine>) -> Self {
-        Self { engine }
+    pub fn new(engine: Arc<SplitQueryEngine>, db: MySqlPool) -> Self {
+        Self {
+            engine,
+            db,
+            registries: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Returns the `ColumnRegistry` for `table_name`, loading it from the DB
+    /// on the first call and caching it for subsequent ones.
+    async fn get_or_load_registry(
+        &self,
+        table_name: &str,
+    ) -> Result<Arc<ColumnRegistry>, Status> {
+        // Fast path: registry already cached.
+        {
+            let cache = self.registries.read().await;
+            if let Some(reg) = cache.get(table_name) {
+                return Ok(Arc::clone(reg));
+            }
+        }
+
+        // Slow path: load from DB and cache.
+        let registry = ColumnRegistry::new(self.db.clone(), table_name)
+            .await
+            .map_err(|e| Status::internal(format!("load registry for {table_name}: {e}")))?;
+        let registry = Arc::new(registry);
+        self.registries
+            .write()
+            .await
+            .insert(table_name.to_string(), Arc::clone(&registry));
+        Ok(registry)
     }
 }
 
@@ -42,10 +83,27 @@ impl SplitQueryService for QueryHandler {
             return Err(Status::invalid_argument("order_by is required"));
         }
 
-        // Validate filter expression.
+        // Validate filter expression (raw, before __DIM rewrite).
         if !req.filter_expression.is_empty() {
             validate_filter_expression(&req.filter_expression)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        }
+
+        // Rewrite __DIM.<key> references to physical column names.
+        // Load the registry for this table only when the filter contains __DIM references.
+        let filter = if req.filter_expression.contains("__DIM.") {
+            let registry = self.get_or_load_registry(&req.table).await?;
+            rewrite_filter_columns(&req.filter_expression, Some(&registry))
+                .map_err(|e| Status::invalid_argument(format!("filter column resolution: {e}")))?
+        } else {
+            req.filter_expression.clone()
+        };
+
+        // Extract and validate group_by columns.
+        let group_by = req.group_by.clone();
+        for col in &group_by {
+            validate_sql_identifier(col)
+                .map_err(|e| Status::invalid_argument(format!("invalid group_by column: {e}")))?;
         }
 
         // Build ORDER BY specs.
@@ -59,10 +117,32 @@ impl SplitQueryService for QueryHandler {
             .collect();
 
         // Validate sort columns.
-        SplitQueryEngine::validate_sort_columns(&order_by, req.allow_unindexed_sort)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        SplitQueryEngine::validate_sort_columns(
+            &order_by,
+            req.allow_unindexed_sort || !group_by.is_empty(),
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let order_clauses = SplitQueryEngine::build_order_clauses(&order_by);
+        // Build ORDER BY clauses. When group_by is set, prepend group columns so
+        // rows with the same group key are consecutive (streaming dedup).
+        let order_clauses = if group_by.is_empty() {
+            SplitQueryEngine::build_order_clauses(&order_by)
+        } else {
+            let mut clauses: Vec<String> = group_by
+                .iter()
+                .map(|c| format!("{} ASC", metalog_db::quote_identifier(c)))
+                .collect();
+            for ob in &order_by {
+                let dir = if ob.desc { "DESC" } else { "ASC" };
+                let clause = format!("{} {dir}", metalog_db::quote_identifier(&ob.column));
+                if !clauses.contains(&clause) {
+                    clauses.push(clause);
+                }
+            }
+            // Add id tiebreaker for keyset pagination.
+            clauses.push("`id` ASC".to_string());
+            clauses
+        };
 
         // Build keyset WHERE from cursor.
         let keyset_where = if let Some(ref cursor) = req.cursor {
@@ -81,13 +161,21 @@ impl SplitQueryService for QueryHandler {
             String::new()
         };
 
-        // Resolve projection columns.
         let columns = req.projection.clone();
-        let filter = req.filter_expression.clone();
         let table = req.table.clone();
         let limit = req.limit;
 
         let engine = self.engine.clone();
+
+        // Parse aggregation specs from projection when group_by is active.
+        let agg_specs: Vec<(String, Option<String>)> = columns
+            .iter()
+            .map(|c| {
+                let col_name = SplitQueryEngine::extract_column_name(c).to_string();
+                let func = SplitQueryEngine::parse_aggregate_func(c);
+                (col_name, func)
+            })
+            .collect();
 
         // Stream results via channel.
         let (tx, rx) = mpsc::channel(128);
@@ -104,6 +192,7 @@ impl SplitQueryService for QueryHandler {
                     &order_clauses,
                     &keyset_where,
                     limit,
+                    &group_by,
                 )
                 .await
             {
@@ -117,18 +206,80 @@ impl SplitQueryService for QueryHandler {
 
                     splits_scanned = rows.len() as i64;
 
-                    for row in result_rows {
-                        sequence += 1;
-                        let split = row_to_split(row);
-                        let resp = StreamSplitsResponse {
-                            split: Some(split),
-                            sequence,
-                            stats: None,
-                            done: false,
-                            cursor: None,
-                        };
-                        if tx.send(Ok(resp)).await.is_err() {
-                            return; // Client disconnected.
+                    if group_by.is_empty() {
+                        // No grouping — emit each row directly.
+                        for row in result_rows {
+                            sequence += 1;
+                            let split = row_to_split(row);
+                            let resp = StreamSplitsResponse {
+                                split: Some(split),
+                                sequence,
+                                stats: None,
+                                done: false,
+                                cursor: None,
+                            };
+                            if tx.send(Ok(resp)).await.is_err() {
+                                return;
+                            }
+                        }
+                    } else {
+                        // Streaming merge: consecutive rows with the same group key are merged.
+                        let mut current_group: Option<SplitRow> = None;
+                        let mut current_key = String::new();
+
+                        for row in result_rows {
+                            let row_key = group_by
+                                .iter()
+                                .map(|g| {
+                                    row.get(g.as_str())
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_default()
+                                })
+                                .collect::<Vec<_>>()
+                                .join("|");
+
+                            if row_key != current_key {
+                                // Emit previous group.
+                                if let Some(group) = current_group.take() {
+                                    sequence += 1;
+                                    let split = row_to_split(&group);
+                                    if tx
+                                        .send(Ok(StreamSplitsResponse {
+                                            split: Some(split),
+                                            sequence,
+                                            stats: None,
+                                            done: false,
+                                            cursor: None,
+                                        }))
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                                current_key = row_key;
+                                current_group = Some(row.clone());
+                            } else {
+                                // Merge into current group.
+                                if let Some(ref mut group) = current_group {
+                                    merge_row_into_group(group, row, &agg_specs);
+                                }
+                            }
+                        }
+
+                        // Emit last group.
+                        if let Some(group) = current_group {
+                            sequence += 1;
+                            let split = row_to_split(&group);
+                            let _ = tx
+                                .send(Ok(StreamSplitsResponse {
+                                    split: Some(split),
+                                    sequence,
+                                    stats: None,
+                                    done: false,
+                                    cursor: None,
+                                }))
+                                .await;
                         }
                     }
 
@@ -154,6 +305,52 @@ impl SplitQueryService for QueryHandler {
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+/// Merges a new row into an existing group, applying aggregation functions.
+fn merge_row_into_group(
+    group: &mut SplitRow,
+    row: &SplitRow,
+    agg_specs: &[(String, Option<String>)],
+) {
+    for (col_name, func) in agg_specs {
+        let Some(new_val) = row.get(col_name.as_str()) else {
+            continue;
+        };
+        let Some(func) = func else {
+            // No aggregate (group_by column or ANY_VALUE) — keep first value.
+            continue;
+        };
+
+        let cur_val = group.get(col_name.as_str()).cloned();
+        let merged = match func.as_str() {
+            "MIN" => match (&cur_val, new_val) {
+                (Some(c), n) if n.as_i64() < c.as_i64() => new_val.clone(),
+                (None, _) => new_val.clone(),
+                _ => cur_val.unwrap_or_else(|| new_val.clone()),
+            },
+            "MAX" => match (&cur_val, new_val) {
+                (Some(c), n) if n.as_i64() > c.as_i64() => new_val.clone(),
+                (None, _) => new_val.clone(),
+                _ => cur_val.unwrap_or_else(|| new_val.clone()),
+            },
+            "SUM" | "COUNT" => {
+                let cur = cur_val.and_then(|v| v.as_i64()).unwrap_or(0);
+                let add = new_val.as_i64().unwrap_or(0);
+                serde_json::json!(cur + add)
+            }
+            "AVG" => {
+                // For streaming AVG we'd need count tracking. Fall back to last value.
+                new_val.clone()
+            }
+            "ANY_VALUE" => {
+                // Keep first value.
+                cur_val.unwrap_or_else(|| new_val.clone())
+            }
+            _ => new_val.clone(),
+        };
+        group.insert(col_name.clone(), merged);
     }
 }
 

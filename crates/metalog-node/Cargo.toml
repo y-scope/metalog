@@ -11,6 +11,7 @@ metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }
 metalog-ingestion = { workspace = true }
+metalog-consolidation = { workspace = true }
 metalog-coordinator = { workspace = true }
 metalog-health = { workspace = true }
 metalog-telemetry = { workspace = true }
@@ -18,6 +19,7 @@ metalog-retention = { workspace = true }
 metalog-storage = { workspace = true }
 metalog-timeutil = { workspace = true }
 metalog-logutil = { workspace = true }
+parking_lot = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -4,4 +4,4 @@ mod service;
 
 pub use batching_writer::BatchingWriter;
 pub use protoconv::convert_record;
-pub use service::{IngestionResult, IngestionService};
+pub use service::{BatchIngestionResult, IngestionResult, IngestionService, RecordFailure};

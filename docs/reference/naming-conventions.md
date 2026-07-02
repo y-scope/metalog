@@ -182,8 +182,8 @@ All index names begin with `idx_` followed by a short description of the index's
 | Index Name | Columns | Purpose |
 |------------|---------|---------|
 | `idx_id` | `(id)` | AUTO_INCREMENT support on partitioned table |
-| `idx_clp_ir_hash` | `(clp_ir_path_hash, min_timestamp)` | IR path uniqueness |
-| `idx_clp_archive_hash` | `(clp_archive_path_hash)` | Archive path lookup |
+| `idx_file_path_hash` | `(file_path_hash, min_timestamp)` | IR path uniqueness |
+| `idx_archive_path_hash` | `(archive_path_hash)` | Archive path lookup |
 | `idx_consolidation` | `(state, min_timestamp)` | Planner: pending files, oldest first |
 | `idx_expiration` | `(expires_at)` | Retention: expired files |
 | `idx_max_timestamp` | `(max_timestamp)` | Queries: time-range overlap |

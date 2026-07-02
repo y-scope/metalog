@@ -37,7 +37,7 @@ A file-level metadata catalog that enables queries to skip millions of files and
 | **Time bounds** | Second-precision pruning | `min_timestamp`, `max_timestamp` |
 | **Dimensions** | Multi-dimensional file filtering | Skip files where `service ≠ 'auth'` |
 | **Aggregations** | Early termination | Skip files where `level=error` agg = 0 |
-| **Hash indexes** | O(1) path lookups (99.6% smaller) | `clp_ir_path_hash` VIRTUAL column |
+| **Hash indexes** | O(1) path lookups (99.6% smaller) | `file_path_hash` VIRTUAL column |
 
 **Two-layer architecture:**
 
@@ -68,7 +68,7 @@ IR-only:       IR_BUFFERING → IR_CLOSED → IR_PURGING → (deleted)
 Archive-only:  ARCHIVE_CLOSED → ARCHIVE_PURGING → (deleted)
 
 IR+Archive:    IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING → (deleted)
-               (After consolidation, the IR file in storage is deleted but clp_ir_path is preserved in the row as provenance)
+               (After consolidation, the IR file in storage is deleted but file_path is preserved in the row as provenance)
 ```
 
 > **States reference:** See [Naming Conventions: Lifecycle States](../reference/naming-conventions.md#lifecycle-state-naming) for complete state definitions.
@@ -165,7 +165,7 @@ MySQL/MariaDB evaluates `ON DUPLICATE KEY UPDATE` assignments left-to-right, and
 
 ### Partition Routing
 
-The UNIQUE index on IR path is `UNIQUE(clp_ir_path_hash, min_timestamp)` — scoped to a single partition. Every upsert for the same file must provide the same `min_timestamp` so MySQL routes the duplicate-key check to the correct partition. The Client SDK contract guarantees this: `min_timestamp` is set once at file creation (the first event's timestamp) and never changes.
+The UNIQUE index on IR path is `UNIQUE(file_path_hash, min_timestamp)` — scoped to a single partition. Every upsert for the same file must provide the same `min_timestamp` so MySQL routes the duplicate-key check to the correct partition. The Client SDK contract guarantees this: `min_timestamp` is set once at file creation (the first event's timestamp) and never changes.
 
 ---
 

@@ -8,6 +8,9 @@
 //!
 //!   # Full pipeline with MariaDB (testcontainers):
 //!   cargo run -p metalog-bench-ingestion --release -- --with-db
+//!
+//!   # Batch API mode (sends records in BatchIngest RPCs):
+//!   cargo run -p metalog-bench-ingestion --release -- --with-db --batch-rpc 500
 
 use std::{
     net::SocketAddr,
@@ -24,6 +27,7 @@ use metalog_proto::{
     coordinator::{
         dimension_value,
         ingest_agg_entry,
+        BatchIngestRequest,
         DimEntry,
         DimensionValue,
         FileFields,
@@ -69,6 +73,11 @@ struct Args {
     /// Batch size for the BatchingWriter.
     #[arg(long, default_value_t = 5_000)]
     batch_size: usize,
+
+    /// Use BatchIngest API with this many records per RPC.
+    /// When 0 (default), uses single-record Ingest API.
+    #[arg(long, default_value_t = 0)]
+    batch_rpc: usize,
 }
 
 #[tokio::main]
@@ -89,6 +98,14 @@ async fn main() {
         args.clients * args.concurrency_per_client
     );
     println!("  Batch size  : {}", args.batch_size);
+    println!(
+        "  RPC mode    : {}",
+        if args.batch_rpc > 0 {
+            format!("BatchIngest ({})", args.batch_rpc)
+        } else {
+            "Ingest (single)".into()
+        }
+    );
     println!("  With DB     : {}", args.with_db);
     println!("  Table       : {}", args.table);
     println!("========================================");
@@ -165,15 +182,28 @@ async fn run_with_db(args: &Args) {
     .await;
 
     // Run benchmark.
-    let (accepted, rejected, elapsed) = run_grpc(
-        addr,
-        &args.table,
-        args.records,
-        args.apps,
-        args.clients,
-        args.concurrency_per_client,
-    )
-    .await;
+    let (accepted, rejected, elapsed) = if args.batch_rpc > 0 {
+        run_grpc_batch(
+            addr,
+            &args.table,
+            args.records,
+            args.apps,
+            args.clients,
+            args.concurrency_per_client,
+            args.batch_rpc,
+        )
+        .await
+    } else {
+        run_grpc(
+            addr,
+            &args.table,
+            args.records,
+            args.apps,
+            args.clients,
+            args.concurrency_per_client,
+        )
+        .await
+    };
 
     // Wait for BatchingWriter to flush remaining records.
     println!("Stopping writer (flushing remaining batches)...");
@@ -192,15 +222,28 @@ async fn run_with_db(args: &Args) {
 async fn run_channel_only(args: &Args) {
     let (addr, _writer) = start_server_no_db(args.batch_size).await;
 
-    let (accepted, rejected, elapsed) = run_grpc(
-        addr,
-        &args.table,
-        args.records,
-        args.apps,
-        args.clients,
-        args.concurrency_per_client,
-    )
-    .await;
+    let (accepted, rejected, elapsed) = if args.batch_rpc > 0 {
+        run_grpc_batch(
+            addr,
+            &args.table,
+            args.records,
+            args.apps,
+            args.clients,
+            args.concurrency_per_client,
+            args.batch_rpc,
+        )
+        .await
+    } else {
+        run_grpc(
+            addr,
+            &args.table,
+            args.records,
+            args.apps,
+            args.clients,
+            args.concurrency_per_client,
+        )
+        .await
+    };
 
     print_results(args, accepted, rejected, elapsed, None);
 }
@@ -365,8 +408,112 @@ async fn run_grpc(
     )
 }
 
-/// Builds an IngestRequest matching the Go benchmark's record format.
+/// Runs the gRPC benchmark using BatchIngest API.
+///
+/// Workers collect records into batches of `batch_rpc_size` and send them
+/// in a single BatchIngest RPC, reducing per-record gRPC overhead.
+async fn run_grpc_batch(
+    addr: SocketAddr,
+    table: &str,
+    records: usize,
+    apps: usize,
+    num_clients: usize,
+    concurrency_per_client: usize,
+    batch_rpc_size: usize,
+) -> (i64, i64, Duration) {
+    let accepted = Arc::new(AtomicI64::new(0));
+    let rejected = Arc::new(AtomicI64::new(0));
+
+    let endpoint = format!("http://{addr}");
+    let total_workers = num_clients * concurrency_per_client;
+    let (tx, rx) = async_channel::bounded::<usize>(total_workers);
+
+    let start = Instant::now();
+
+    let mut join_set = JoinSet::new();
+    for _client_id in 0..num_clients {
+        let channel = tonic::transport::Channel::from_shared(endpoint.clone())
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+
+        for _ in 0..concurrency_per_client {
+            let rx = rx.clone();
+            let channel = channel.clone();
+            let accepted = accepted.clone();
+            let rejected = rejected.clone();
+            let table = table.to_string();
+
+            join_set.spawn(async move {
+                let mut client = metalog_proto::MetadataIngestionServiceClient::new(channel);
+                let mut batch = Vec::with_capacity(batch_rpc_size);
+
+                loop {
+                    // Collect up to batch_rpc_size records.
+                    batch.clear();
+                    for _ in 0..batch_rpc_size {
+                        match rx.try_recv() {
+                            Ok(idx) => batch.push(build_record(idx, apps)),
+                            Err(async_channel::TryRecvError::Empty) => break,
+                            Err(async_channel::TryRecvError::Closed) => break,
+                        }
+                    }
+
+                    // If nothing collected, try a blocking recv for one more.
+                    if batch.is_empty() {
+                        match rx.recv().await {
+                            Ok(idx) => batch.push(build_record(idx, apps)),
+                            Err(_) => break, // Channel closed, done.
+                        }
+                    }
+
+                    let count = batch.len() as i64;
+                    let req = BatchIngestRequest {
+                        table_name: table.clone(),
+                        records: std::mem::take(&mut batch),
+                    };
+
+                    match client.batch_ingest(tonic::Request::new(req)).await {
+                        Ok(resp) => {
+                            let r = resp.into_inner();
+                            accepted.fetch_add(r.accepted_count as i64, Ordering::Relaxed);
+                            rejected.fetch_add(r.rejected_count as i64, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            rejected.fetch_add(count, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    for i in 0..records {
+        tx.send(i).await.unwrap();
+    }
+    drop(tx);
+
+    while join_set.join_next().await.is_some() {}
+
+    let elapsed = start.elapsed();
+    (
+        accepted.load(Ordering::Relaxed),
+        rejected.load(Ordering::Relaxed),
+        elapsed,
+    )
+}
+
+/// Builds an IngestRequest wrapping a single MetadataRecord.
 fn build_ingest_request(table: &str, i: usize, app_count: usize) -> IngestRequest {
+    IngestRequest {
+        table_name: table.to_string(),
+        record: Some(build_record(i, app_count)),
+    }
+}
+
+/// Builds a MetadataRecord matching the Go benchmark's record format.
+fn build_record(i: usize, app_count: usize) -> MetadataRecord {
     let app_id = i % app_count;
     let hour_offset = (i % 24) as i64;
     let record_count = (50_000 + (i % 50_000)) as i32;
@@ -381,9 +528,7 @@ fn build_ingest_request(table: &str, i: usize, app_count: usize) -> IngestReques
     let min_ts = BASE_TIMESTAMP + hour_offset * HOUR;
     let max_ts = min_ts + HOUR - 1;
 
-    IngestRequest {
-        table_name: table.to_string(),
-        record: Some(MetadataRecord {
+    MetadataRecord {
             file: Some(FileFields {
                 state: "IR_CLOSED".into(),
                 min_timestamp: min_ts,
@@ -467,6 +612,5 @@ fn build_ingest_request(table: &str, i: usize, app_count: usize) -> IngestReques
             ],
             self_describing_kv: vec![],
             sketch: vec![],
-        }),
     }
 }

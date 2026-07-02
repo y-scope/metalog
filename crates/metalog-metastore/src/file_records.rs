@@ -40,10 +40,15 @@ impl FileRecords {
         &self.table_name
     }
 
-    /// Finds files in `CONSOLIDATION_PENDING` state with required dimension/agg
+    /// Finds files in a consolidation-pending state with required dimension/agg
     /// column mappings populated.
+    ///
+    /// The caller chooses which pending state to query (e.g.,
+    /// `IrArchiveConsolidationPending` or `FileArchiveConsolidationPending`),
+    /// allowing policy-based control over which consolidation chain is active.
     pub async fn find_consolidation_pending(
         &self,
+        pending_state: FileState,
         dim_mappings: &[ColumnMapping],
         agg_mappings: &[ColumnMapping],
     ) -> Result<Vec<PendingFile>, sqlx::Error> {
@@ -70,7 +75,7 @@ impl FileRecords {
         );
 
         let rows = sqlx::query(&sql)
-            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
+            .bind(pending_state.as_db_str())
             .fetch_all(&self.db)
             .await?;
 
@@ -89,11 +94,18 @@ impl FileRecords {
         Ok(results)
     }
 
-    /// Promotes stuck `IR_ARCHIVE_BUFFERING` files to `CONSOLIDATION_PENDING`.
+    /// Promotes stuck buffering files to their corresponding consolidation-pending
+    /// state.
+    ///
+    /// The caller specifies the `(from, to)` state pair:
+    /// - `(IrArchiveBuffering, IrArchiveConsolidationPending)` for the IR→Archive chain
+    /// - `(FileArchiveBuffering, FileArchiveConsolidationPending)` for the File→Archive chain
     ///
     /// Files with `max_timestamp` older than `stale_before_nanos` are considered stuck.
     pub async fn promote_stuck_buffering(
         &self,
+        from_state: FileState,
+        to_state: FileState,
         stale_before_nanos: i64,
     ) -> Result<u64, sqlx::Error> {
         let sql = format!(
@@ -102,8 +114,8 @@ impl FileRecords {
             self.table_name
         );
         let result = sqlx::query(&sql)
-            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
-            .bind(FileState::IrArchiveBuffering.as_db_str())
+            .bind(to_state.as_db_str())
+            .bind(from_state.as_db_str())
             .bind(stale_before_nanos)
             .execute(&self.db)
             .await?;
@@ -111,20 +123,25 @@ impl FileRecords {
     }
 
     /// Marks files as `ARCHIVE_CLOSED` after successful consolidation.
+    ///
+    /// The caller specifies which consolidation-pending state the files are
+    /// transitioning from (e.g., `IrArchiveConsolidationPending` or
+    /// `FileArchiveConsolidationPending`).
     pub async fn mark_archive_closed(
         &self,
-        ir_paths: &[String],
+        from_state: FileState,
+        file_paths: &[String],
         archive_path: &str,
         archive_backend: &str,
         archive_bucket: &str,
         archive_size_bytes: i64,
         archive_created_at: i64,
     ) -> Result<u64, sqlx::Error> {
-        if ir_paths.is_empty() {
+        if file_paths.is_empty() {
             return Ok(0);
         }
 
-        let placeholders: Vec<&str> = ir_paths.iter().map(|_| "?").collect();
+        let placeholders: Vec<&str> = file_paths.iter().map(|_| "?").collect();
         let sql = format!(
             "UPDATE `{}` SET state = ?, archive_path = ?, archive_storage_backend = ?, \
              archive_bucket = ?, archive_size_bytes = ?, archive_created_at = ? WHERE file_path \
@@ -141,23 +158,32 @@ impl FileRecords {
             .bind(archive_size_bytes)
             .bind(archive_created_at);
 
-        for path in ir_paths {
+        for path in file_paths {
             query = query.bind(path);
         }
-        query = query.bind(FileState::IrArchiveConsolidationPending.as_db_str());
+        query = query.bind(from_state.as_db_str());
 
         let result = query.execute(&self.db).await?;
         Ok(result.rows_affected())
     }
 
     /// Transitions expired files to PURGING state (retention phase 1).
+    ///
+    /// Handles all non-terminal states:
+    /// - IR chain: IR_BUFFERING, IR_CLOSED → IR_PURGING
+    /// - Archive chain: ARCHIVE_CLOSED, IR_ARCHIVE_BUFFERING, FILE_ARCHIVE_BUFFERING,
+    ///   IR_ARCHIVE_CONSOLIDATION_PENDING, FILE_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_PURGING
     pub async fn transition_expired_to_purging(
         &self,
         current_nanos: i64,
     ) -> Result<u64, sqlx::Error> {
         let sql = format!(
-            "UPDATE `{}` SET state = CASE WHEN state IN (?, ?) THEN ? WHEN state IN (?, ?) THEN ? \
-             ELSE state END WHERE expires_at > 0 AND expires_at < ? AND state IN (?, ?, ?, ?) \
+            "UPDATE `{}` SET state = CASE \
+             WHEN state IN (?, ?) THEN ? \
+             WHEN state IN (?, ?, ?, ?, ?) THEN ? \
+             ELSE state END \
+             WHERE expires_at > 0 AND expires_at < ? \
+             AND state IN (?, ?, ?, ?, ?, ?, ?) \
              LIMIT 1000",
             self.table_name,
         );
@@ -166,9 +192,12 @@ impl FileRecords {
             .bind(FileState::IrBuffering.as_db_str())
             .bind(FileState::IrClosed.as_db_str())
             .bind(FileState::IrPurging.as_db_str())
-            // Archive chain: ARCHIVE_CLOSED → ARCHIVE_PURGING
+            // Archive chain → ARCHIVE_PURGING
             .bind(FileState::ArchiveClosed.as_db_str())
             .bind(FileState::IrArchiveBuffering.as_db_str())
+            .bind(FileState::FileArchiveBuffering.as_db_str())
+            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
+            .bind(FileState::FileArchiveConsolidationPending.as_db_str())
             .bind(FileState::ArchivePurging.as_db_str())
             // WHERE
             .bind(current_nanos)
@@ -176,77 +205,91 @@ impl FileRecords {
             .bind(FileState::IrClosed.as_db_str())
             .bind(FileState::ArchiveClosed.as_db_str())
             .bind(FileState::IrArchiveBuffering.as_db_str())
+            .bind(FileState::FileArchiveBuffering.as_db_str())
+            .bind(FileState::IrArchiveConsolidationPending.as_db_str())
+            .bind(FileState::FileArchiveConsolidationPending.as_db_str())
             .execute(&self.db)
             .await?;
         Ok(result.rows_affected())
     }
 
     /// Deletes PURGING files and returns their storage paths (retention phase 2).
+    ///
+    /// Uses a transaction to ensure the SELECT and DELETE operate on the same
+    /// row set, preventing TOCTOU races where rows could be deleted without
+    /// their storage paths being returned for cleanup.
     pub async fn delete_expired_files(
         &self,
         current_nanos: i64,
     ) -> Result<DeletionResult, sqlx::Error> {
-        // Select paths before delete (CAST needed: ascii_bin → VARBINARY in sqlx).
+        let mut conn = self.db.acquire().await?;
+
+        sqlx::query("START TRANSACTION")
+            .execute(&mut *conn)
+            .await?;
+
+        // Select paths within the transaction (CAST needed: ascii_bin → VARBINARY in sqlx).
         let select_sql = format!(
-            "SELECT CAST(file_storage_backend AS CHAR) AS file_storage_backend, CAST(file_bucket \
-             AS CHAR) AS file_bucket, CAST(file_path AS CHAR) AS file_path, \
+            "SELECT id, CAST(file_storage_backend AS CHAR) AS file_storage_backend, \
+             CAST(file_bucket AS CHAR) AS file_bucket, CAST(file_path AS CHAR) AS file_path, \
              CAST(archive_storage_backend AS CHAR) AS archive_storage_backend, \
              CAST(archive_bucket AS CHAR) AS archive_bucket, CAST(archive_path AS CHAR) AS \
              archive_path FROM `{}` WHERE state IN (?, ?) AND expires_at > 0 AND expires_at < ? \
-             LIMIT 1000",
+             LIMIT 1000 FOR UPDATE",
             self.table_name,
         );
-        let rows = sqlx::query(&select_sql)
-            .bind(FileState::IrPurging.as_db_str())
-            .bind(FileState::ArchivePurging.as_db_str())
-            .bind(current_nanos)
-            .fetch_all(&self.db)
-            .await?;
+        let rows: Vec<(i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as(&select_sql)
+                .bind(FileState::IrPurging.as_db_str())
+                .bind(FileState::ArchivePurging.as_db_str())
+                .bind(current_nanos)
+                .fetch_all(&mut *conn)
+                .await?;
+
+        if rows.is_empty() {
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            return Ok(DeletionResult::default());
+        }
 
         let mut result = DeletionResult::default();
-        for row in &rows {
-            use sqlx::Row;
-            let ir_backend: Option<String> = row.get("file_storage_backend");
-            let ir_bucket: Option<String> = row.get("file_bucket");
-            let ir_path: Option<String> = row.get("file_path");
+        let mut ids = Vec::with_capacity(rows.len());
+        for (id, ir_backend, ir_bucket, ir_path, arch_backend, arch_bucket, arch_path) in &rows {
+            ids.push(*id);
             if let (Some(backend), Some(bucket), Some(path)) = (ir_backend, ir_bucket, ir_path) {
                 if !path.is_empty() {
                     result.ir_paths.push(StoragePath {
-                        backend,
-                        bucket,
-                        path,
+                        backend: backend.clone(),
+                        bucket: bucket.clone(),
+                        path: path.clone(),
                     });
                 }
             }
-
-            let arch_backend: Option<String> = row.get("archive_storage_backend");
-            let arch_bucket: Option<String> = row.get("archive_bucket");
-            let arch_path: Option<String> = row.get("archive_path");
             if let (Some(backend), Some(bucket), Some(path)) =
                 (arch_backend, arch_bucket, arch_path)
             {
                 if !path.is_empty() {
                     result.archive_paths.push(StoragePath {
-                        backend,
-                        bucket,
-                        path,
+                        backend: backend.clone(),
+                        bucket: bucket.clone(),
+                        path: path.clone(),
                     });
                 }
             }
         }
 
-        // Delete with re-check guard (TOCTOU prevention).
+        // Delete the exact rows we selected (by id, within same transaction).
+        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let delete_sql = format!(
-            "DELETE FROM `{}` WHERE state IN (?, ?) AND expires_at > 0 AND expires_at < ? LIMIT \
-             1000",
+            "DELETE FROM `{}` WHERE id IN ({placeholders})",
             self.table_name,
         );
-        let delete_result = sqlx::query(&delete_sql)
-            .bind(FileState::IrPurging.as_db_str())
-            .bind(FileState::ArchivePurging.as_db_str())
-            .bind(current_nanos)
-            .execute(&self.db)
-            .await?;
+        let mut query = sqlx::query(&delete_sql);
+        for id in &ids {
+            query = query.bind(id);
+        }
+        let delete_result = query.execute(&mut *conn).await?;
+
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
 
         result.deleted_count = delete_result.rows_affected() as i64;
         Ok(result)

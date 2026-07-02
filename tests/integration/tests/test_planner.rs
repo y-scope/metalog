@@ -9,6 +9,7 @@ mod tests {
     use metalog_it::helpers::setup_db_with_table;
     use metalog_metastore::FileRecords;
     use metalog_timeutil::epoch_nanos;
+    use metalog_types::file_state::FileState;
     use metalog_types::FileRecord;
     use tokio_util::sync::CancellationToken;
 
@@ -88,6 +89,8 @@ mod tests {
             archive_bucket: "archives".into(),
             interval: Duration::from_millis(10),
             stale_threshold: Duration::ZERO,
+            buffering_state: FileState::IrArchiveBuffering,
+            pending_state: FileState::IrArchiveConsolidationPending,
         });
 
         let token = CancellationToken::new();
@@ -163,6 +166,8 @@ mod tests {
             archive_bucket: "archives".into(),
             interval: Duration::from_millis(10),
             stale_threshold: Duration::ZERO,
+            buffering_state: FileState::IrArchiveBuffering,
+            pending_state: FileState::IrArchiveConsolidationPending,
         });
 
         let token = CancellationToken::new();
@@ -218,6 +223,8 @@ mod tests {
             archive_bucket: "archives".into(),
             interval: Duration::from_millis(10),
             stale_threshold: Duration::from_secs(1800),
+            buffering_state: FileState::IrArchiveBuffering,
+            pending_state: FileState::IrArchiveConsolidationPending,
         });
 
         let token = CancellationToken::new();

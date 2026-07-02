@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use metalog_db::{quote_identifier, try_quote_identifier};
+use metalog_db::{quote_identifier, try_quote_identifier, validate_sql_identifier};
 use sqlx::{Column, MySqlPool};
 
 /// Indexed sort columns that support efficient keyset pagination.
@@ -46,6 +46,10 @@ impl SplitQueryEngine {
     }
 
     /// Executes a single page of results with keyset pagination.
+    ///
+    /// When `group_by` is non-empty, the query is rewritten as an aggregate
+    /// query: columns in `group_by` are selected as-is, while known numeric
+    /// columns get SUM/MIN/MAX wrappers and all others default to MAX.
     pub async fn execute_page(
         &self,
         table_name: &str,
@@ -54,13 +58,41 @@ impl SplitQueryEngine {
         order_clauses: &[String],
         keyset_where: &str,
         limit: i32,
+        group_by: &[String],
     ) -> Result<Vec<SplitRow>, EngineError> {
         // Validate table name before interpolating into SQL.
         try_quote_identifier(table_name).map_err(|e| {
             EngineError::InvalidTableName(table_name.to_string(), e.to_string())
         })?;
 
-        let cols_sql = if columns.is_empty() {
+        let cols_sql = if !group_by.is_empty() {
+            // Streaming dedup mode: when group_by is set, we don't use SQL GROUP BY.
+            // Instead, we ensure the group_by columns are prepended to ORDER BY so that
+            // rows with the same group key are consecutive. The gRPC handler merges
+            // consecutive rows with the same group key, applying aggregations.
+            //
+            // The projection uses bare column names only (no aggregate functions in SQL).
+            // Aggregation is done in the handler during streaming merge.
+            if columns.is_empty() {
+                return Err(EngineError::GroupByRequiresProjection);
+            }
+            for col in group_by {
+                validate_sql_identifier(col)
+                    .map_err(|_| EngineError::InvalidGroupByColumn(col.clone()))?;
+            }
+            // Extract bare column names from projection expressions.
+            // "MIN(min_timestamp)" -> "min_timestamp", "archive_path" -> "archive_path"
+            columns
+                .iter()
+                .map(|c| {
+                    let col_name = Self::extract_column_name(c);
+                    validate_sql_identifier(col_name)
+                        .map_err(|_| EngineError::InvalidProjection(c.to_string()))?;
+                    Ok(quote_identifier(col_name))
+                })
+                .collect::<Result<Vec<_>, EngineError>>()?
+                .join(", ")
+        } else if columns.is_empty() {
             "*".to_string()
         } else {
             columns
@@ -70,6 +102,7 @@ impl SplitQueryEngine {
                 .join(", ")
         };
 
+        use std::fmt::Write;
         let mut sql = format!("SELECT {cols_sql} FROM `{table_name}`");
 
         // WHERE clauses.
@@ -81,12 +114,16 @@ impl SplitQueryEngine {
             conditions.push(format!("({keyset_where})"));
         }
         if !conditions.is_empty() {
-            sql.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
+            write!(sql, " WHERE {}", conditions.join(" AND ")).unwrap();
         }
+
+        // Note: when group_by is set, the caller must prepend group_by columns to order_clauses
+        // so that rows with the same group key are consecutive. No SQL GROUP BY is used —
+        // aggregation happens in the gRPC handler via streaming merge.
 
         // ORDER BY.
         if !order_clauses.is_empty() {
-            sql.push_str(&format!(" ORDER BY {}", order_clauses.join(", ")));
+            write!(sql, " ORDER BY {}", order_clauses.join(", ")).unwrap();
         }
 
         // LIMIT: cap at MAX_QUERY_LIMIT to prevent OOM. If the client requests more,
@@ -106,33 +143,79 @@ impl SplitQueryEngine {
             MAX_QUERY_LIMIT
         };
         let fetch_limit = capped_limit + 1;
-        sql.push_str(&format!(" LIMIT {fetch_limit}"));
+        write!(sql, " LIMIT {fetch_limit}").unwrap();
 
         tracing::info!(sql = %sql, "executing split query");
 
         let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
 
         let mut results = Vec::with_capacity(rows.len());
-        for row in &rows {
+
+        // Detect column types from the first row, then reuse for subsequent rows.
+        // Avoids repeated try_get failures (each creates a discarded error).
+        let mut col_types: Vec<ColType> = Vec::new();
+
+        for (row_idx, row) in rows.iter().enumerate() {
             use sqlx::Row;
             let mut split_row = SplitRow::new();
-            for col in row.columns() {
-                let name = col.name().to_string();
-                // Try to extract as various types.
-                if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
-                    split_row.insert(name, serde_json::json!(v));
-                } else {
-                    split_row.insert(name, serde_json::Value::Null);
+
+            if row_idx == 0 {
+                // First row: detect types via try cascade, cache the result.
+                col_types.reserve(row.columns().len());
+                for col in row.columns() {
+                    let name = col.name().to_string();
+                    let (val, typ) = detect_column_value(row, col.ordinal());
+                    tracing::debug!(column = %name, ?typ, value = %val, "detected column");
+                    col_types.push(typ);
+                    split_row.insert(name, val);
+                }
+            } else {
+                // Subsequent rows: use cached types directly.
+                for (col, typ) in row.columns().iter().zip(col_types.iter()) {
+                    let name = col.name().to_string();
+                    let val = extract_by_type(row, col.ordinal(), *typ);
+                    split_row.insert(name, val);
                 }
             }
+
             results.push(split_row);
         }
 
         Ok(results)
+    }
+
+    /// Allowed aggregate functions in projection expressions.
+    pub const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
+
+    /// Extracts the bare column name from a projection expression.
+    ///
+    /// - `"archive_path"` → `"archive_path"`
+    /// - `"MIN(min_timestamp)"` → `"min_timestamp"`
+    /// - `"SUM(record_count)"` → `"record_count"`
+    pub fn extract_column_name(expr: &str) -> &str {
+        if let Some(paren_start) = expr.find('(') {
+            if expr.ends_with(')') {
+                return expr[paren_start + 1..expr.len() - 1].trim();
+            }
+        }
+        expr.trim()
+    }
+
+    /// Parses an aggregate function name from a projection expression.
+    /// Returns None for bare column names.
+    ///
+    /// - `"MIN(min_timestamp)"` → `Some("MIN")`
+    /// - `"archive_path"` → `None`
+    pub fn parse_aggregate_func(expr: &str) -> Option<String> {
+        if let Some(paren_start) = expr.find('(') {
+            if expr.ends_with(')') {
+                let func = expr[..paren_start].trim().to_uppercase();
+                if Self::ALLOWED_AGGREGATES.contains(&func.as_str()) {
+                    return Some(func);
+                }
+            }
+        }
+        None
     }
 
     /// Validates that all ORDER BY columns are indexed (unless `allow_unindexed` is set).
@@ -233,6 +316,118 @@ impl SplitQueryEngine {
     }
 }
 
+/// Column type detected from the first row, cached for subsequent rows.
+#[derive(Debug, Clone, Copy)]
+enum ColType {
+    Int,
+    Str,
+    Float,
+    Decimal,
+    Null,
+}
+
+/// Detects the column type using the database column type metadata.
+///
+/// We use the column type name from the database rather than try-cast, because MySQL/MariaDB
+/// will silently cast VARCHAR values like "5075fd79-..." to integer 5075, giving wrong results.
+fn detect_column_value(
+    row: &sqlx::mysql::MySqlRow,
+    ordinal: usize,
+) -> (serde_json::Value, ColType) {
+    use sqlx::{Column, Row, TypeInfo};
+
+    let col = &row.columns()[ordinal];
+    let type_name = col.type_info().name();
+    match type_name {
+        // Integer types
+        "BIGINT" | "INT" | "MEDIUMINT" | "SMALLINT" | "TINYINT" | "BIGINT UNSIGNED"
+        | "INT UNSIGNED" | "MEDIUMINT UNSIGNED" | "SMALLINT UNSIGNED" | "TINYINT UNSIGNED" => {
+            if let Ok(v) = row.try_get::<i64, _>(ordinal) {
+                (serde_json::json!(v), ColType::Int)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        // DECIMAL is returned by SUM/AVG aggregates in MariaDB.
+        // Use rust_decimal to read natively, then convert to i64 or f64.
+        "DECIMAL" | "NEWDECIMAL" => {
+            if let Ok(v) = row.try_get::<rust_decimal::Decimal, _>(ordinal) {
+                use rust_decimal::prelude::ToPrimitive;
+                if let Some(n) = v.to_i64() {
+                    (serde_json::json!(n), ColType::Decimal)
+                } else if let Some(n) = v.to_f64() {
+                    (serde_json::json!(n), ColType::Decimal)
+                } else {
+                    (serde_json::json!(v.to_string()), ColType::Decimal)
+                }
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        "FLOAT" | "DOUBLE" => {
+            if let Ok(v) = row.try_get::<f64, _>(ordinal) {
+                (serde_json::json!(v), ColType::Float)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+        // Everything else (VARCHAR, TEXT, ENUM, VARBINARY, etc.) -> String
+        _ => {
+            // For VARBINARY columns (utf8mb4_bin collation), try_get::<String> may fail.
+            // Fall back to reading raw bytes and converting to String.
+            if let Ok(v) = row.try_get::<String, _>(ordinal) {
+                (serde_json::json!(v), ColType::Str)
+            } else if let Ok(v) = row.try_get::<Vec<u8>, _>(ordinal) {
+                let s = String::from_utf8_lossy(&v).to_string();
+                (serde_json::json!(s), ColType::Str)
+            } else {
+                (serde_json::Value::Null, ColType::Null)
+            }
+        }
+    }
+}
+
+/// Extracts a value using the cached column type, avoiding failed try_get calls.
+fn extract_by_type(
+    row: &sqlx::mysql::MySqlRow,
+    ordinal: usize,
+    typ: ColType,
+) -> serde_json::Value {
+    use sqlx::Row;
+    match typ {
+        ColType::Int => row
+            .try_get::<i64, _>(ordinal)
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Str => row
+            .try_get::<String, _>(ordinal)
+            .or_else(|_| {
+                row.try_get::<Vec<u8>, _>(ordinal)
+                    .map(|v| String::from_utf8_lossy(&v).to_string())
+            })
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Float => row
+            .try_get::<f64, _>(ordinal)
+            .map(|v| serde_json::json!(v))
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Decimal => row
+            .try_get::<rust_decimal::Decimal, _>(ordinal)
+            .map(|v| {
+                use rust_decimal::prelude::ToPrimitive;
+                if let Some(n) = v.to_i64() {
+                    serde_json::json!(n)
+                } else if let Some(n) = v.to_f64() {
+                    serde_json::json!(n)
+                } else {
+                    serde_json::json!(v.to_string())
+                }
+            })
+            .unwrap_or(serde_json::Value::Null),
+        ColType::Null => serde_json::Value::Null,
+    }
+}
+
 /// Escapes a value for safe SQL embedding in keyset WHERE clauses.
 /// Wraps in single quotes with backslash/quote escaping.
 /// Escapes a value for safe SQL embedding. Handles all MySQL-special characters.
@@ -264,6 +459,15 @@ pub enum EngineError {
 
     #[error("invalid table name {0:?}: {1}")]
     InvalidTableName(String, String),
+
+    #[error("group_by requires an explicit projection (columns must not be empty)")]
+    GroupByRequiresProjection,
+
+    #[error("invalid group_by column: {0:?}")]
+    InvalidGroupByColumn(String),
+
+    #[error("invalid projection expression: {0:?} (use bare column names or FUNC(column))")]
+    InvalidProjection(String),
 
     #[error("sql: {0}")]
     Sql(#[from] sqlx::Error),

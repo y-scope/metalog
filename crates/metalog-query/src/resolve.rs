@@ -57,45 +57,55 @@ pub fn resolve_projection_columns(
 
 /// Rewrites column references in a filter expression.
 ///
-/// Replaces `__FILE.xxx` and `__DIM.xxx` prefixes with physical column names.
-/// This is a simple string-based rewrite — the filter has already been validated.
+/// Replaces `__FILE.xxx` and `__DIM.xxx` prefixes with physical column names
+/// in a single pass, avoiding repeated string scans and intermediate allocations.
+/// The filter has already been validated before this point.
 pub fn rewrite_filter_columns(
     filter: &str,
     registry: Option<&ColumnRegistry>,
 ) -> Result<String, ResolveError> {
-    let mut result = filter.to_string();
+    let mut result = String::with_capacity(filter.len());
+    let bytes = filter.as_bytes();
+    let mut i = 0;
 
-    // Replace __FILE.xxx references.
-    while let Some(pos) = result.find("__FILE.") {
-        let start = pos;
-        let rest = &result[pos + 7..];
-        let end = rest
-            .find(|c: char| !c.is_alphanumeric() && c != '_')
-            .unwrap_or(rest.len());
-        let col_name = &rest[..end];
-        result = format!("{}{col_name}{}", &result[..start], &rest[end..]);
-    }
+    while i < bytes.len() {
+        // Check for __FILE. prefix.
+        if filter[i..].starts_with("__FILE.") {
+            let rest = &filter[i + 7..];
+            let end = rest
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(rest.len());
+            let col_name = &rest[..end];
+            result.push_str(col_name);
+            i += 7 + end;
+            continue;
+        }
 
-    // Replace __DIM.xxx references.
-    while let Some(pos) = result.find("__DIM.") {
-        let start = pos;
-        let rest = &result[pos + 6..];
-        let end = rest
-            .find(|c: char| !c.is_alphanumeric() && c != '_')
-            .unwrap_or(rest.len());
-        let dim_key = &rest[..end];
+        // Check for __DIM. prefix.
+        if filter[i..].starts_with("__DIM.") {
+            let rest = &filter[i + 6..];
+            let end = rest
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(rest.len());
+            let dim_key = &rest[..end];
 
-        let physical = if let Some(reg) = registry {
-            reg.resolve_dim(dim_key).ok_or_else(|| {
-                ResolveError::UnknownColumn(format!("dimension {dim_key} not found"))
-            })?
-        } else {
-            return Err(ResolveError::InvalidColumn(
-                "no registry for __DIM resolution".into(),
-            ));
-        };
+            let physical = if let Some(reg) = registry {
+                reg.resolve_dim(dim_key).ok_or_else(|| {
+                    ResolveError::UnknownColumn(format!("dimension {dim_key} not found"))
+                })?
+            } else {
+                return Err(ResolveError::InvalidColumn(
+                    "no registry for __DIM resolution".into(),
+                ));
+            };
 
-        result = format!("{}{physical}{}", &result[..start], &rest[end..]);
+            result.push_str(&physical);
+            i += 6 + end;
+            continue;
+        }
+
+        result.push(bytes[i] as char);
+        i += 1;
     }
 
     Ok(result)

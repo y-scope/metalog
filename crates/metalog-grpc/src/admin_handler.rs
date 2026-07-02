@@ -129,11 +129,23 @@ impl AdminService for AdminHandler {
         let req = request.into_inner();
         validate_register_kafka_source_req(&req)?;
 
-        let _ = kafka;
+        let created = kafka
+            .register_source(
+                &req.table_name,
+                &req.source_name,
+                &req.topic,
+                &req.bootstrap_servers,
+                &req.record_transformer,
+                &req.consumer_group_id,
+                &req.required_env,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         Ok(Response::new(RegisterKafkaSourceResponse {
             table_name: req.table_name,
             source_name: req.source_name,
-            created: true,
+            created,
         }))
     }
 
@@ -141,13 +153,18 @@ impl AdminService for AdminHandler {
         &self,
         request: Request<DeleteKafkaSourceRequest>,
     ) -> Result<Response<DeleteKafkaSourceResponse>, Status> {
-        let _kafka = self
+        let kafka = self
             .kafka
             .as_ref()
             .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
 
         let req = request.into_inner();
         validate_delete_kafka_source_req(&req)?;
+
+        kafka
+            .delete_source(&req.table_name, &req.source_name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(DeleteKafkaSourceResponse {}))
     }

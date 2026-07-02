@@ -230,7 +230,7 @@ Object storage paths can be 1024 characters. With utf8mb4 (4 bytes/char), that's
 VIRTUAL columns compute an MD5 hash at read time. The hash is stored **only in the index**, not in the row.
 
 ```sql
-clp_ir_path_hash BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL
+file_path_hash BINARY(16) AS (UNHEX(MD5(file_path))) VIRTUAL
 ```
 
 | Approach | Index Key Size | At 150M Rows |
@@ -252,11 +252,11 @@ clp_ir_path_hash BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL
 
 ```sql
 -- CORRECT: Use VIRTUAL column name
-WHERE clp_ir_path_hash = UNHEX(MD5('/path/to/file'))
+WHERE file_path_hash = UNHEX(MD5('/path/to/file'))
   AND min_timestamp = ?
 
 -- WRONG: Full table scan
-WHERE clp_ir_path = '/path/to/file'
+WHERE file_path = '/path/to/file'
 ```
 
 ---
@@ -286,7 +286,7 @@ Indexes prefixed with `idx_` can be added or removed based on query patterns wit
 
 #### 1. Time-Range + Dimension
 ```sql
-SELECT id, clp_ir_path, clp_archive_path, min_timestamp, max_timestamp
+SELECT id, file_path, archive_path, min_timestamp, max_timestamp
 FROM clp_spark
 WHERE min_timestamp <= [END] AND max_timestamp >= [START]
   AND dim_str128_service = 'myservice'
@@ -296,16 +296,16 @@ LIMIT 100;
 
 #### 2. Archive-Only (Bulk Analytics)
 ```sql
-SELECT DISTINCT clp_archive_path
+SELECT DISTINCT archive_path
 FROM clp_spark
 WHERE min_timestamp <= [END] AND max_timestamp >= [START]
   AND dim_str128_service = 'myservice'
-  AND clp_archive_path IS NOT NULL;
+  AND archive_path IS NOT NULL;
 ```
 
 #### 3. Early Termination with Count Filter
 ```sql
-SELECT id, clp_ir_path, max_timestamp,
+SELECT id, file_path, max_timestamp,
   (agg_gte_level_error - agg_gte_level_fatal) AS error_count
 FROM clp_spark
 WHERE dim_str128_service = 'auth'
@@ -317,7 +317,7 @@ ORDER BY max_timestamp DESC;
 
 #### 4. Pending Consolidation
 ```sql
-SELECT clp_ir_path, min_timestamp
+SELECT file_path, min_timestamp
 FROM clp_spark
 WHERE state = 'IR_ARCHIVE_CONSOLIDATION_PENDING'
 ORDER BY min_timestamp ASC
@@ -326,7 +326,7 @@ LIMIT 1000;
 
 #### 5. Expired Files
 ```sql
-SELECT clp_ir_path, clp_archive_path
+SELECT file_path, archive_path
 FROM clp_spark
 WHERE expires_at > 0 AND expires_at <= [NOW]
   AND state NOT IN ('IR_PURGING', 'ARCHIVE_PURGING')
@@ -347,14 +347,14 @@ GROUP BY state;
 SELECT dim_str128_service,
   COUNT(*) AS files,
   SUM(raw_size_bytes) AS raw_bytes,
-  SUM(clp_archive_size_bytes) AS archive_bytes
+  SUM(archive_size_bytes) AS archive_bytes
 FROM clp_spark
 GROUP BY dim_str128_service;
 ```
 
 #### 8. Consolidation Latency
 ```sql
-SELECT clp_ir_path, dim_str128_service,
+SELECT file_path, dim_str128_service,
   ([NOW] - min_timestamp) / 60 AS minutes_waiting
 FROM clp_spark
 WHERE state = 'IR_ARCHIVE_CONSOLIDATION_PENDING'
@@ -381,23 +381,23 @@ LIMIT 10000;
 ```sql
 -- Insert
 INSERT INTO clp_spark (
-  clp_ir_storage_backend, clp_ir_bucket, clp_ir_path,
+  file_storage_backend, file_bucket, file_path,
   state, min_timestamp, dim_str128_service
 ) VALUES ('s3', 'bucket', '/ir/file.clp', 'IR_ARCHIVE_BUFFERING', 1704067200, 'auth');
 
 -- Close file (hash lookup)
 UPDATE clp_spark
 SET state = 'IR_ARCHIVE_CONSOLIDATION_PENDING', record_count = [COUNT]
-WHERE clp_ir_path_hash = UNHEX(MD5('/ir/file.clp'))
+WHERE file_path_hash = UNHEX(MD5('/ir/file.clp'))
   AND min_timestamp = 1704067200;
 
 -- Consolidation complete
 UPDATE clp_spark
 SET state = 'ARCHIVE_CLOSED',
-    clp_archive_storage_backend = 's3',
-    clp_archive_bucket = 'archive-bucket',
-    clp_archive_path = '/archives/archive.clp'
-WHERE clp_ir_path_hash = UNHEX(MD5('/ir/file.clp'))
+    archive_storage_backend = 's3',
+    archive_bucket = 'archive-bucket',
+    archive_path = '/archives/archive.clp'
+WHERE file_path_hash = UNHEX(MD5('/ir/file.clp'))
   AND min_timestamp = 1704067200;
 ```
 

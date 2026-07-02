@@ -16,14 +16,14 @@ DDL, column reference, index reference, and scalability projections for the `clp
 |--------|------|---------|
 | `id` | BIGINT AUTO_INCREMENT | Primary key (second component of composite PK) |
 | `min_timestamp`, `max_timestamp` | BIGINT | Event time bounds (epoch nanoseconds) |
-| `clp_archive_created_at` | BIGINT | Archive creation time (epoch nanoseconds; 0 if not yet consolidated) |
-| `clp_ir_*` | storage_backend, bucket, path | IR file location (NULL for archive-only entries) |
-| `clp_archive_*` | storage_backend, bucket, path | Archive location (NULL until consolidated) |
+| `archive_created_at` | BIGINT | Archive creation time (epoch nanoseconds; 0 if not yet consolidated) |
+| `file_*` | storage_backend, bucket, path | File/IR location (NULL for archive-only entries) |
+| `archive_*` | storage_backend, bucket, path | Archive location (NULL until consolidated) |
 | `state` | ENUM | Lifecycle state |
 | `record_count` | INT UNSIGNED | Total log records in file |
 | `raw_size_bytes` | BIGINT | Original uncompressed source size (BIGINT to support files exceeding 4 GB) |
-| `clp_ir_size_bytes` | INT UNSIGNED | IR file size in bytes |
-| `clp_archive_size_bytes` | INT UNSIGNED | Archive size in bytes |
+| `file_size_bytes` | INT UNSIGNED | IR file size in bytes |
+| `archive_size_bytes` | INT UNSIGNED | Archive size in bytes |
 | `retention_days`, `expires_at` | SMALLINT UNSIGNED, BIGINT | Retention policy and computed expiry (epoch nanoseconds). `expires_at` has no DB default — computed server-side from `min_timestamp + retention_days` when not provided by the producer |
 
 ### Query Optimization Columns
@@ -62,13 +62,13 @@ The metastore's role with sketches is purely **"definitely not" elimination**: i
 Path columns can be up to 4096 bytes (utf8mb4), exceeding MariaDB/MySQL's 3072-byte index limit. VIRTUAL columns with MD5 hash provide 16-byte keys stored only in the index.
 
 ```sql
-clp_ir_path_hash BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL
+file_path_hash BINARY(16) AS (UNHEX(MD5(file_path))) VIRTUAL
 ```
 
 **Query pattern:**
 ```sql
-WHERE clp_ir_path_hash = UNHEX(MD5('/path/to/file'))  -- O(1) lookup
--- NOT: WHERE clp_ir_path = '/path/to/file'           -- Full table scan!
+WHERE file_path_hash = UNHEX(MD5('/path/to/file'))  -- O(1) lookup
+-- NOT: WHERE file_path = '/path/to/file'           -- Full table scan!
 ```
 
 See [Query Execution: VIRTUAL Columns](../concepts/query-execution.md#virtual-columns-and-hash-indexes) for details.
@@ -83,21 +83,21 @@ CREATE TABLE clp_spark (
     id                          BIGINT AUTO_INCREMENT,
     min_timestamp               BIGINT NOT NULL,
     max_timestamp               BIGINT NOT NULL DEFAULT 0,
-    clp_archive_created_at      BIGINT NOT NULL DEFAULT 0,
+    archive_created_at      BIGINT NOT NULL DEFAULT 0,
 
     -- Storage locations (IR file; NULL = archive-only entry)
-    clp_ir_storage_backend      VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_ir_bucket               VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_ir_path                 VARCHAR(1024) NULL,
+    file_storage_backend      VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    file_bucket               VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    file_path                 VARCHAR(1024) NULL,
 
     -- Storage locations (archive; NULL = not yet consolidated)
-    clp_archive_storage_backend VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_archive_bucket          VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_archive_path            VARCHAR(1024) NULL,
+    archive_storage_backend VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    archive_bucket          VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    archive_path            VARCHAR(1024) NULL,
 
     -- VIRTUAL columns for hash-based lookups
-    clp_ir_path_hash            BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL,
-    clp_archive_path_hash       BINARY(16) AS (UNHEX(MD5(clp_archive_path))) VIRTUAL,
+    file_path_hash            BINARY(16) AS (UNHEX(MD5(file_path))) VIRTUAL,
+    archive_path_hash       BINARY(16) AS (UNHEX(MD5(archive_path))) VIRTUAL,
 
     -- Lifecycle state
     -- Lifecycle states (ordinal order matches lifecycle progression)
@@ -113,8 +113,8 @@ CREATE TABLE clp_spark (
     -- Metrics
     record_count                INT UNSIGNED NOT NULL DEFAULT 0,
     raw_size_bytes              BIGINT NULL,              -- original uncompressed size (may exceed 4 GB)
-    clp_ir_size_bytes           INT UNSIGNED NULL,        -- IR file size (max 4 GB)
-    clp_archive_size_bytes      INT UNSIGNED NULL,        -- archive size (max 4 GB)
+    file_size_bytes           INT UNSIGNED NULL,        -- IR file size (max 4 GB)
+    archive_size_bytes      INT UNSIGNED NULL,        -- archive size (max 4 GB)
 
     -- Retention
     retention_days              SMALLINT UNSIGNED NOT NULL DEFAULT 30,
@@ -134,8 +134,8 @@ CREATE TABLE clp_spark (
     -- Indexes (see Index Reference for detailed analysis)
     PRIMARY KEY (min_timestamp, id),
     KEY idx_id (id),
-    UNIQUE KEY idx_clp_ir_hash (clp_ir_path_hash, min_timestamp),
-    INDEX idx_clp_archive_hash (clp_archive_path_hash),
+    UNIQUE KEY idx_file_path_hash (file_path_hash, min_timestamp),
+    INDEX idx_archive_path_hash (archive_path_hash),
     INDEX idx_consolidation (state, min_timestamp ASC),
     INDEX idx_expiration (expires_at ASC),
     INDEX idx_max_timestamp (max_timestamp DESC)
@@ -172,17 +172,17 @@ The schema defines 7 indexes. Each serves a specific access pattern.
 |-------|---------|:------:|---------|---------|
 | PRIMARY KEY | `(min_timestamp, id)` | Y | Partition key + row ID; write locality within daily partitions | All queries (InnoDB clustered index) |
 | `idx_id` | `(id)` | — | AUTO_INCREMENT on partitioned tables requires `id` as the first column in some index | Internal (MySQL partitioning requirement) |
-| `idx_clp_ir_hash` | `(clp_ir_path_hash, min_timestamp)` | Y | UPSERT duplicate detection, IR path lookups | Ingestion (UPSERT), Planner, state transitions |
-| `idx_clp_archive_hash` | `(clp_archive_path_hash)` | — | Archive path lookups after consolidation | Query engine (archive resolution) |
+| `idx_file_path_hash` | `(file_path_hash, min_timestamp)` | Y | UPSERT duplicate detection, IR path lookups | Ingestion (UPSERT), Planner, state transitions |
+| `idx_archive_path_hash` | `(archive_path_hash)` | — | Archive path lookups after consolidation | Query engine (archive resolution) |
 | `idx_consolidation` | `(state, min_timestamp ASC)` | — | Find consolidation-pending files ordered by age | Planner (pending files query) |
 | `idx_expiration` | `(expires_at ASC)` | — | Find expired files for retention cleanup | Retention goroutine (expired files query) |
 | `idx_max_timestamp` | `(max_timestamp DESC)` | — | Time-range queries ordered by recency | Query engine (time-range queries) |
 
-### Why `idx_clp_ir_hash` Is UNIQUE but `idx_clp_archive_hash` Is Not
+### Why `idx_file_path_hash` Is UNIQUE but `idx_archive_path_hash` Is Not
 
 IR paths are 1:1 with metadata rows — each IR file has exactly one row. The UNIQUE constraint enforces this and enables `ON DUPLICATE KEY UPDATE` to find the existing row for upserts.
 
-Archive paths are 1:N — one archive contains multiple consolidated IR files, so multiple rows share the same `clp_archive_path`. A UNIQUE constraint would prevent this.
+Archive paths are 1:N — one archive contains multiple consolidated IR files, so multiple rows share the same `archive_path`. A UNIQUE constraint would prevent this.
 
 ### Why `idx_id` Exists Separately
 
@@ -190,7 +190,7 @@ On partitioned tables, MySQL requires the AUTO_INCREMENT column to be the first 
 
 ### Composite Index Column Ordering
 
-**`idx_clp_ir_hash (clp_ir_path_hash, min_timestamp)`**: Hash first because all lookups filter by path. `min_timestamp` is included because MySQL requires the partition key in every unique index (see [Partitioning: Composite Primary Key](../concepts/metadata-schema.md#composite-primary-key)).
+**`idx_file_path_hash (file_path_hash, min_timestamp)`**: Hash first because all lookups filter by path. `min_timestamp` is included because MySQL requires the partition key in every unique index (see [Partitioning: Composite Primary Key](../concepts/metadata-schema.md#composite-primary-key)).
 
 **`idx_consolidation (state, min_timestamp ASC)`**: State first for equality filtering (`state = 'IR_ARCHIVE_CONSOLIDATION_PENDING'`), then `min_timestamp` ascending for oldest-first ordering. The Planner reads files in age order to consolidate the oldest data first.
 

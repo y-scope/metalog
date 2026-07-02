@@ -40,9 +40,9 @@
 --    min_timestamp to ensure UPSERT deduplication works correctly.
 --
 -- 2. Path Columns Are Not Directly Indexed
---    Path columns (clp_ir_path, clp_archive_path) are for projection only.
---    VIRTUAL columns (clp_ir_path_hash, clp_archive_path_hash) provide hash-based lookups.
---    Always use: WHERE clp_ir_path_hash = UNHEX(MD5(?))
+--    Path columns (file_path, archive_path) are for projection only.
+--    VIRTUAL columns (file_path_hash, archive_path_hash) provide hash-based lookups.
+--    Always use: WHERE file_path_hash = UNHEX(MD5(?))
 --    Include min_timestamp for partition pruning.
 --
 -- 3. Object Storage Overwrites
@@ -80,7 +80,7 @@
 --    supports — not to upgrade the hash algorithm.
 --
 -- 6. File Size Columns Limited to 4GB
---    clp_ir_size_bytes and clp_archive_size_bytes are INT UNSIGNED (max 4GB).
+--    file_size_bytes and archive_size_bytes are INT UNSIGNED (max 4GB).
 --    Typical sizes: IR files are less than 1 MB, archives are 32-64 MB (CLP achieves high compression).
 --    Accepted risk: 4GB limit is sufficient for expected workloads.
 --    raw_size_bytes is BIGINT for uncompressed source files that may exceed 4GB.
@@ -92,7 +92,7 @@
 --    created_at and updated_at columns may be needed.
 --
 -- 8. Index Overhead on Insert Performance
---    Base table has 7 indexes (PRIMARY, idx_id, idx_clp_ir_hash, idx_clp_archive_hash,
+--    Base table has 7 indexes (PRIMARY, idx_id, idx_file_path_hash, idx_archive_path_hash,
 --    idx_consolidation, idx_expiration, idx_max_timestamp). Dimension indexes
 --    are added dynamically by DynamicIndexManager. Each INSERT updates all indexes.
 --    The VIRTUAL column indexes (MD5 hash) add computation overhead.
@@ -114,7 +114,7 @@
 --    No cross-table dependencies exist, so this is a clean operational split.
 --
 -- 9. Nullable Path Columns with Natural NULL Propagation
---    Path columns (clp_ir_path, clp_archive_path) are nullable, not empty string.
+--    Path columns (file_path, archive_path) are nullable, not empty string.
 --    NULL propagates naturally: MD5(NULL) = NULL, UNHEX(NULL) = NULL.
 --    This simplifies VIRTUAL column definitions (no CASE expression needed).
 --    Benefits:
@@ -122,8 +122,8 @@
 --      - Archive path NULL: saves ~10 bytes/row index space for pre-consolidation rows
 --      - Cleaner semantics: NULL means "not set", non-NULL means "has value"
 --    Query patterns:
---      - Find by path: WHERE clp_ir_path_hash = UNHEX(MD5(?))
---      - Find unset: WHERE clp_ir_path IS NULL (or WHERE clp_ir_path_hash IS NULL)
+--      - Find by path: WHERE file_path_hash = UNHEX(MD5(?))
+--      - Find unset: WHERE file_path IS NULL (or WHERE file_path_hash IS NULL)
 --    Workflow inference from paths:
 --      - ir=NULL, archive=<path>  → Archive-only
 --      - ir=<path>, archive=<path> → HYBRID (consolidation complete)
@@ -140,7 +140,7 @@
 -- 11. All Timestamps Are BIGINT (Epoch Nanoseconds)
 --     Every timestamp column across all tables uses BIGINT epoch nanoseconds.
 --     This includes both file-level timestamps (min_timestamp, max_timestamp,
---     clp_archive_created_at, expires_at) and operational timestamps
+--     archive_created_at, expires_at) and operational timestamps
 --     (created_at, claimed_at, heartbeat_at, etc. in task queue, node registry,
 --     column registries, and table assignment).
 --     Rationale: uniform units eliminate unit-mismatch bugs when joining or
@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     id                          BIGINT AUTO_INCREMENT,
     min_timestamp               BIGINT NOT NULL,                      -- Partition key (earliest event epoch nanos)
     max_timestamp               BIGINT NOT NULL DEFAULT 0,            -- Latest event epoch nanos
-    clp_archive_created_at      BIGINT NOT NULL DEFAULT 0,            -- Archive creation epoch nanos
+    archive_created_at      BIGINT NOT NULL DEFAULT 0,            -- Archive creation epoch nanos
 
     -- ========================================================================
     -- STORAGE LOCATIONS
@@ -318,15 +318,15 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- IR file location (NULL indicates archive-only entry)
     -- Path columns are for projection only; use hash index for lookups
     -- Accepts any @StorageBackendType value (e.g., "s3", "minio", "local"). NULL = not set.
-    clp_ir_storage_backend      VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_ir_bucket               VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_ir_path                 VARCHAR(1024) NULL,
+    file_storage_backend      VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    file_bucket               VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    file_path                 VARCHAR(1024) NULL,
 
     -- Archive location (NULL indicates not yet consolidated)
     -- Path columns are for projection only; use hash index for lookups
-    clp_archive_storage_backend VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_archive_bucket          VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    clp_archive_path            VARCHAR(1024) NULL,
+    archive_storage_backend VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    archive_bucket          VARCHAR(63) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    archive_path            VARCHAR(1024) NULL,
 
     -- ========================================================================
     -- VIRTUAL COLUMNS FOR HASH-BASED LOOKUPS
@@ -339,14 +339,14 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     --   - Archive path NULL: saves index space for pre-consolidation rows
     --
 
-    clp_ir_path_hash            BINARY(16) AS (UNHEX(MD5(clp_ir_path))) VIRTUAL,
-    clp_archive_path_hash       BINARY(16) AS (UNHEX(MD5(clp_archive_path))) VIRTUAL,
+    file_path_hash            BINARY(16) AS (UNHEX(MD5(file_path))) VIRTUAL,
+    archive_path_hash       BINARY(16) AS (UNHEX(MD5(archive_path))) VIRTUAL,
 
     -- ========================================================================
     -- LIFECYCLE STATE
     -- ========================================================================
 
-    -- Three lifecycle chains — a file enters ONE chain at creation:
+    -- Four lifecycle chains — a file enters ONE chain at creation:
     --
     --   IR-only chain (no consolidation):
     --     IR_BUFFERING → IR_CLOSED → IR_PURGING
@@ -354,29 +354,40 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     --   Archive-only chain (pre-built archives, no IR stage):
     --     ARCHIVE_CLOSED → ARCHIVE_PURGING
     --
-    --   Hybrid chain (IR ingested, then consolidated into archive):
+    --   IR→Archive chain (searchable IR, then consolidated into archive):
     --     IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
     --
-    -- The hybrid and archive-only chains share the ARCHIVE_CLOSED →
-    -- ARCHIVE_PURGING tail. The starting state is chosen by the producer
-    -- at file creation time. There is NO transition between the IR-only
-    -- chain and the other chains (e.g., IR_BUFFERING cannot become
-    -- IR_ARCHIVE_BUFFERING or ARCHIVE_CLOSED).
+    --   File→Archive chain (opaque file, then consolidated into archive):
+    --     FILE_ARCHIVE_BUFFERING → FILE_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING
+    --
+    -- The IR→Archive and File→Archive chains differ in that IR files are
+    -- searchable (CLP-encoded) while plain files are opaque blobs. Both
+    -- converge at ARCHIVE_CLOSED after consolidation and share the
+    -- ARCHIVE_CLOSED → ARCHIVE_PURGING tail with the archive-only chain.
+    --
+    -- The starting state is chosen by the producer at file creation time.
+    -- There is NO transition between chains (e.g., IR_BUFFERING cannot
+    -- become IR_ARCHIVE_BUFFERING, FILE_ARCHIVE_BUFFERING, or ARCHIVE_CLOSED).
     state ENUM(
         -- IR-only chain (ordinals 1-3, lifecycle order)
-        'IR_BUFFERING',                      -- IR file still being written (entry point)
-        'IR_CLOSED',                         -- IR file closed, queryable
-        'IR_PURGING',                        -- IR file scheduled for deletion
+        'IR_BUFFERING',                       -- IR file still being written (entry point)
+        'IR_CLOSED',                          -- IR file closed, queryable
+        'IR_PURGING',                         -- IR file scheduled for deletion
 
-        -- Hybrid chain (ordinals 4-5, lifecycle order)
+        -- IR→Archive chain (ordinals 4-5, lifecycle order)
         -- Continues into archive chain below after consolidation
-        'IR_ARCHIVE_BUFFERING',              -- IR file being written, will be consolidated (entry point)
-        'IR_ARCHIVE_CONSOLIDATION_PENDING',  -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
+        'IR_ARCHIVE_BUFFERING',               -- IR file being written, will be consolidated (entry point)
+        'IR_ARCHIVE_CONSOLIDATION_PENDING',   -- IR closed, awaiting consolidation → ARCHIVE_CLOSED
 
-        -- Archive chain (ordinals 6-7, lifecycle order)
-        -- Shared tail for both archive-only and hybrid chains
-        'ARCHIVE_CLOSED',                    -- Archive created (entry point for archive-only, or post-consolidation)
-        'ARCHIVE_PURGING'                    -- Archive scheduled for deletion
+        -- File→Archive chain (ordinals 6-7, lifecycle order)
+        -- Continues into archive chain below after consolidation
+        'FILE_ARCHIVE_BUFFERING',             -- Opaque file being written, will be consolidated (entry point)
+        'FILE_ARCHIVE_CONSOLIDATION_PENDING',  -- File closed, awaiting consolidation
+
+        -- Archive chain (ordinals 8-9, lifecycle order)
+        -- Shared tail for archive-only, IR→Archive, and File→Archive chains
+        'ARCHIVE_CLOSED',                     -- Archive created (entry point for archive-only, or post-consolidation)
+        'ARCHIVE_PURGING'                     -- Archive scheduled for deletion
     ) NOT NULL,
 
     -- ========================================================================
@@ -385,8 +396,8 @@ CREATE TABLE IF NOT EXISTS _clp_template (
 
     record_count                INT UNSIGNED NOT NULL DEFAULT 0,      -- Total log records
     raw_size_bytes              BIGINT NULL,                          -- Original size (can exceed 4GB)
-    clp_ir_size_bytes           INT UNSIGNED NULL,                    -- IR file size
-    clp_archive_size_bytes      INT UNSIGNED NULL,                    -- Archive size
+    file_size_bytes           INT UNSIGNED NULL,                    -- IR file size
+    archive_size_bytes      INT UNSIGNED NULL,                    -- Archive size
 
     -- ========================================================================
     -- RETENTION
@@ -469,11 +480,11 @@ CREATE TABLE IF NOT EXISTS _clp_template (
     -- key check. Including them as covering columns would avoid a row fetch on
     -- every UPSERT, but at the cost of a wider index (10 extra bytes/entry).
     -- At current volumes (~14-19K UPSERT/sec) the row fetch is not a bottleneck.
-    UNIQUE KEY idx_clp_ir_hash (clp_ir_path_hash, min_timestamp),
+    UNIQUE KEY idx_file_path_hash (file_path_hash, min_timestamp),
 
     -- Archive path lookup via VIRTUAL column (non-unique: multiple IR files consolidate to one archive)
     -- NULL for pre-consolidation rows (no archive yet) saves index space
-    INDEX idx_clp_archive_hash (clp_archive_path_hash),
+    INDEX idx_archive_path_hash (archive_path_hash),
 
     -- Dimension indexes are created dynamically by DynamicIndexManager
     -- when corresponding dimension columns are added.

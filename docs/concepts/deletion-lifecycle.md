@@ -77,7 +77,7 @@ Streaming data that will be consolidated into a columnar archive. This is the mo
 IR_ARCHIVE_BUFFERING → IR_ARCHIVE_CONSOLIDATION_PENDING → ARCHIVE_CLOSED → ARCHIVE_PURGING → (deleted)
 ```
 
-After consolidation completes, the source IR file in object storage is scheduled for deletion. The metastore row transitions to `ARCHIVE_CLOSED` with `clp_archive_path` set — `clp_ir_path` is preserved in the row as provenance. The many-to-one relationship (multiple IR files per archive) is tracked via the shared `clp_archive_path` value. See [Consolidation: IR to Archive Relationship](consolidation.md#ir-to-archive-relationship).
+After consolidation completes, the source IR file in object storage is scheduled for deletion. The metastore row transitions to `ARCHIVE_CLOSED` with `archive_path` set — `file_path` is preserved in the row as provenance. The many-to-one relationship (multiple IR files per archive) is tracked via the shared `archive_path` value. See [Consolidation: IR to Archive Relationship](consolidation.md#ir-to-archive-relationship).
 
 ---
 

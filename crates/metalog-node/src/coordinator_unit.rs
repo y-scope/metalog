@@ -68,6 +68,42 @@ impl CoordinatorUnit {
         }
     }
 
+    /// Creates a coordinator unit whose cancellation token is a child of `parent_token`.
+    ///
+    /// Cancelling `parent_token` (e.g. on node shutdown) automatically cancels this unit.
+    pub fn new_with_token(
+        table_name: &str,
+        table_cfg: TableConfig,
+        registry: Arc<ColumnRegistry>,
+        db: MySqlPool,
+        storage: Option<Arc<StorageRegistry>>,
+        stall_timeout: Duration,
+        parent_token: &CancellationToken,
+    ) -> Self {
+        let partition = PartitionManager::new(db.clone(), table_name, DEFAULT_LOOKAHEAD_DAYS);
+
+        let retention = if table_cfg.retention.enabled {
+            Some(Arc::new(RetentionModule::with_config(
+                Duration::from_secs(table_cfg.retention.scan_interval_secs),
+                table_cfg.retention.delete_rate,
+            )))
+        } else {
+            None
+        };
+
+        Self {
+            table_name: table_name.to_string(),
+            table_cfg,
+            db,
+            partition,
+            retention,
+            storage,
+            _registry: registry,
+            progress: Arc::new(ProgressTracker::new(stall_timeout)),
+            token: parent_token.child_token(),
+        }
+    }
+
     /// Returns the table name.
     pub fn table_name(&self) -> &str {
         &self.table_name
