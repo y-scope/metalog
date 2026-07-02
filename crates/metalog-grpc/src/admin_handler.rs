@@ -35,6 +35,57 @@ impl AdminHandler {
     }
 }
 
+fn validate_register_table_req(req: &RegisterTableRequest) -> Result<(), Status> {
+    if req.table_name.is_empty() {
+        return Err(Status::invalid_argument("table_name is required"));
+    }
+    Ok(())
+}
+
+fn validate_register_kafka_source_req(req: &RegisterKafkaSourceRequest) -> Result<(), Status> {
+    if req.table_name.is_empty() || req.source_name.is_empty() {
+        return Err(Status::invalid_argument(
+            "table_name and source_name are required",
+        ));
+    }
+    if req.topic.is_empty() || req.bootstrap_servers.is_empty() {
+        return Err(Status::invalid_argument(
+            "topic and bootstrap_servers are required",
+        ));
+    }
+    if req.consumer_group_id.is_empty() {
+        return Err(Status::invalid_argument("consumer_group_id is required"));
+    }
+    Ok(())
+}
+
+fn validate_delete_kafka_source_req(req: &DeleteKafkaSourceRequest) -> Result<(), Status> {
+    if req.table_name.is_empty() || req.source_name.is_empty() {
+        return Err(Status::invalid_argument(
+            "table_name and source_name are required",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_set_column_alias_req(req: &SetColumnAliasRequest) -> Result<(), Status> {
+    if req.table_name.is_empty() || req.column_name.is_empty() {
+        return Err(Status::invalid_argument(
+            "table_name and column_name are required",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_invalidate_column_req(req: &InvalidateColumnRequest) -> Result<(), Status> {
+    if req.table_name.is_empty() || req.column_name.is_empty() {
+        return Err(Status::invalid_argument(
+            "table_name and column_name are required",
+        ));
+    }
+    Ok(())
+}
+
 #[tonic::async_trait]
 impl AdminService for AdminHandler {
     async fn register_table(
@@ -42,9 +93,7 @@ impl AdminService for AdminHandler {
         request: Request<RegisterTableRequest>,
     ) -> Result<Response<RegisterTableResponse>, Status> {
         let req = request.into_inner();
-        if req.table_name.is_empty() {
-            return Err(Status::invalid_argument("table_name is required"));
-        }
+        validate_register_table_req(&req)?;
 
         let display_name = if req.display_name.is_empty() {
             &req.table_name
@@ -78,24 +127,9 @@ impl AdminService for AdminHandler {
             .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
 
         let req = request.into_inner();
-        if req.table_name.is_empty() || req.source_name.is_empty() {
-            return Err(Status::invalid_argument(
-                "table_name and source_name are required",
-            ));
-        }
-        if req.topic.is_empty() || req.bootstrap_servers.is_empty() {
-            return Err(Status::invalid_argument(
-                "topic and bootstrap_servers are required",
-            ));
-        }
-        if req.consumer_group_id.is_empty() {
-            return Err(Status::invalid_argument("consumer_group_id is required"));
-        }
+        validate_register_kafka_source_req(&req)?;
 
-        // Delegate to premium KafkaProvider.
-        // TODO: call kafka.register_source() when trait method is implemented
         let _ = kafka;
-
         Ok(Response::new(RegisterKafkaSourceResponse {
             table_name: req.table_name,
             source_name: req.source_name,
@@ -113,13 +147,7 @@ impl AdminService for AdminHandler {
             .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
 
         let req = request.into_inner();
-        if req.table_name.is_empty() || req.source_name.is_empty() {
-            return Err(Status::invalid_argument(
-                "table_name and source_name are required",
-            ));
-        }
-
-        // TODO: call kafka.delete_source() when trait method is implemented
+        validate_delete_kafka_source_req(&req)?;
 
         Ok(Response::new(DeleteKafkaSourceResponse {}))
     }
@@ -129,11 +157,7 @@ impl AdminService for AdminHandler {
         request: Request<SetColumnAliasRequest>,
     ) -> Result<Response<SetColumnAliasResponse>, Status> {
         let req = request.into_inner();
-        if req.table_name.is_empty() || req.column_name.is_empty() {
-            return Err(Status::invalid_argument(
-                "table_name and column_name are required",
-            ));
-        }
+        validate_set_column_alias_req(&req)?;
 
         let alias = self
             .registration
@@ -152,11 +176,7 @@ impl AdminService for AdminHandler {
         request: Request<InvalidateColumnRequest>,
     ) -> Result<Response<InvalidateColumnResponse>, Status> {
         let req = request.into_inner();
-        if req.table_name.is_empty() || req.column_name.is_empty() {
-            return Err(Status::invalid_argument(
-                "table_name and column_name are required",
-            ));
-        }
+        validate_invalidate_column_req(&req)?;
 
         let previous_key = self
             .registration
@@ -168,5 +188,156 @@ impl AdminService for AdminHandler {
             column_name: req.column_name,
             previous_key,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_table_rejects_empty_name() {
+        let req = RegisterTableRequest {
+            table_name: String::new(),
+            display_name: String::new(),
+            config_json: None,
+        };
+        let err = validate_register_table_req(&req).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn kafka_source_rejects_missing_fields() {
+        let base = RegisterKafkaSourceRequest {
+            table_name: "t".into(),
+            source_name: "s".into(),
+            topic: "topic".into(),
+            bootstrap_servers: "host:9092".into(),
+            record_transformer: String::new(),
+            consumer_group_id: "cg".into(),
+            required_env: String::new(),
+        };
+        // All fields present → Ok.
+        assert!(validate_register_kafka_source_req(&base).is_ok());
+
+        // Missing table_name.
+        let mut r = base.clone();
+        r.table_name.clear();
+        assert!(validate_register_kafka_source_req(&r).is_err());
+
+        // Missing source_name.
+        let mut r = base.clone();
+        r.source_name.clear();
+        assert!(validate_register_kafka_source_req(&r).is_err());
+
+        // Missing topic.
+        let mut r = base.clone();
+        r.topic.clear();
+        assert!(validate_register_kafka_source_req(&r).is_err());
+
+        // Missing bootstrap_servers.
+        let mut r = base.clone();
+        r.bootstrap_servers.clear();
+        assert!(validate_register_kafka_source_req(&r).is_err());
+
+        // Missing consumer_group_id.
+        let mut r = base.clone();
+        r.consumer_group_id.clear();
+        assert!(validate_register_kafka_source_req(&r).is_err());
+    }
+
+    #[test]
+    fn delete_kafka_source_rejects_missing_fields() {
+        let base = DeleteKafkaSourceRequest {
+            table_name: "t".into(),
+            source_name: "s".into(),
+        };
+        assert!(validate_delete_kafka_source_req(&base).is_ok());
+
+        let mut r = base.clone();
+        r.table_name.clear();
+        assert!(validate_delete_kafka_source_req(&r).is_err());
+
+        let mut r = base.clone();
+        r.source_name.clear();
+        assert!(validate_delete_kafka_source_req(&r).is_err());
+    }
+
+    #[test]
+    fn set_column_alias_rejects_missing_fields() {
+        let base = SetColumnAliasRequest {
+            table_name: "t".into(),
+            column_name: "c".into(),
+            alias_column: "a".into(),
+        };
+        assert!(validate_set_column_alias_req(&base).is_ok());
+
+        let mut r = base.clone();
+        r.table_name.clear();
+        assert!(validate_set_column_alias_req(&r).is_err());
+
+        let mut r = base.clone();
+        r.column_name.clear();
+        assert!(validate_set_column_alias_req(&r).is_err());
+    }
+
+    #[test]
+    fn invalidate_column_rejects_missing_fields() {
+        let base = InvalidateColumnRequest {
+            table_name: "t".into(),
+            column_name: "c".into(),
+        };
+        assert!(validate_invalidate_column_req(&base).is_ok());
+
+        let mut r = base.clone();
+        r.table_name.clear();
+        assert!(validate_invalidate_column_req(&r).is_err());
+
+        let mut r = base.clone();
+        r.column_name.clear();
+        assert!(validate_invalidate_column_req(&r).is_err());
+    }
+
+    #[tokio::test]
+    async fn kafka_source_requires_kafka_provider() {
+        let handler = AdminHandler {
+            registration: Arc::new(TableRegistration::new(
+                sqlx::MySqlPool::connect_lazy("mysql://u@h/d").unwrap(),
+                "",
+            )),
+            kafka: None,
+        };
+
+        let req = Request::new(RegisterKafkaSourceRequest {
+            table_name: "t".into(),
+            source_name: "s".into(),
+            topic: "topic".into(),
+            bootstrap_servers: "host:9092".into(),
+            record_transformer: String::new(),
+            consumer_group_id: "cg".into(),
+            required_env: String::new(),
+        });
+
+        let result = handler.register_kafka_source(req).await;
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn delete_kafka_source_requires_kafka_provider() {
+        let handler = AdminHandler {
+            registration: Arc::new(TableRegistration::new(
+                sqlx::MySqlPool::connect_lazy("mysql://u@h/d").unwrap(),
+                "",
+            )),
+            kafka: None,
+        };
+
+        let req = Request::new(DeleteKafkaSourceRequest {
+            table_name: "t".into(),
+            source_name: "s".into(),
+        });
+
+        let result = handler.delete_kafka_source(req).await;
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
     }
 }

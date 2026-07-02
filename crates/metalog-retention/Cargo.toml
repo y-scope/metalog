@@ -15,3 +15,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 sqlx = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

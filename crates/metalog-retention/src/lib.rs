@@ -71,7 +71,7 @@ impl RetentionModule {
     /// Deletes storage paths from their respective backends, rate-limited.
     ///
     /// Respects cancellation via `token` between deletions.
-    async fn delete_storage_paths(
+    pub(crate) async fn delete_storage_paths(
         &self,
         token: &CancellationToken,
         storage: &StorageRegistry,
@@ -195,5 +195,217 @@ mod tests {
     fn retention_module_with_config_zero_rate() {
         let module = RetentionModule::with_config(Duration::from_secs(30), 0);
         assert_eq!(module.delete_rate, DEFAULT_DELETE_RATE);
+    }
+
+    use metalog_metastore::StoragePath;
+    use metalog_storage::Registry as StorageRegistry;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    /// Manual mock Backend that records delete calls.
+    struct MockBackend {
+        deleted: std::sync::Mutex<Vec<(String, String)>>,
+        fail_on: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl MockBackend {
+        fn new() -> Self {
+            Self {
+                deleted: std::sync::Mutex::new(Vec::new()),
+                fail_on: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_fail_keys(keys: &[&str]) -> Self {
+            Self {
+                deleted: std::sync::Mutex::new(Vec::new()),
+                fail_on: std::sync::Mutex::new(keys.iter().map(|k| k.to_string()).collect()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl metalog_storage::Backend for MockBackend {
+        async fn get(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, metalog_storage::StorageError>
+        {
+            unimplemented!()
+        }
+
+        async fn put(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _data: &[u8],
+        ) -> Result<(), metalog_storage::StorageError> {
+            unimplemented!()
+        }
+
+        async fn delete(
+            &self,
+            bucket: &str,
+            key: &str,
+        ) -> Result<(), metalog_storage::StorageError> {
+            if self.fail_on.lock().unwrap().contains(&key.to_string()) {
+                return Err(metalog_storage::StorageError::NotFound {
+                    bucket: bucket.into(),
+                    key: key.into(),
+                });
+            }
+            self.deleted
+                .lock()
+                .unwrap()
+                .push((bucket.to_string(), key.to_string()));
+            Ok(())
+        }
+
+        async fn exists(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> Result<bool, metalog_storage::StorageError> {
+            unimplemented!()
+        }
+    }
+
+    fn make_paths(items: &[(&str, &str, &str)]) -> Vec<StoragePath> {
+        items
+            .iter()
+            .map(|(backend, bucket, path)| StoragePath {
+                backend: backend.to_string(),
+                bucket: bucket.to_string(),
+                path: path.to_string(),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn deletes_multiple_paths() {
+        let mock = Arc::new(MockBackend::new());
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        let module = RetentionModule::new();
+        let token = CancellationToken::new();
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("s3", "bucket", "/logs/b.ir"),
+            ("s3", "bucket", "/logs/c.ir"),
+        ]);
+
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        assert_eq!(deleted, 3);
+        assert_eq!(mock.deleted.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn skips_empty_backend_or_path() {
+        let mock = Arc::new(MockBackend::new());
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        let module = RetentionModule::new();
+        let token = CancellationToken::new();
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("", "bucket", "/logs/b.ir"),
+            ("s3", "bucket", ""),
+        ]);
+
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        assert_eq!(deleted, 1);
+        assert_eq!(mock.deleted.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn warns_on_unknown_backend() {
+        let mock = Arc::new(MockBackend::new());
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        let module = RetentionModule::new();
+        let token = CancellationToken::new();
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("unknown", "bucket", "/logs/b.ir"),
+        ]);
+
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        assert_eq!(deleted, 1);
+        assert_eq!(mock.deleted.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn continues_on_delete_failure() {
+        let mock = Arc::new(MockBackend::with_fail_keys(&["/logs/b.ir"]));
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        let module = RetentionModule::with_config(Duration::from_secs(60), u32::MAX);
+        let token = CancellationToken::new();
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("s3", "bucket", "/logs/b.ir"),
+            ("s3", "bucket", "/logs/c.ir"),
+        ]);
+
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        assert_eq!(deleted, 2);
+        let calls = mock.deleted.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, "/logs/a.ir");
+        assert_eq!(calls[1].1, "/logs/c.ir");
+    }
+
+    #[tokio::test]
+    async fn respects_cancellation_token() {
+        let mock = Arc::new(MockBackend::new());
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        let module = RetentionModule::with_config(Duration::from_secs(60), u32::MAX);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("s3", "bucket", "/logs/b.ir"),
+        ]);
+
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        // First deletion happens before the token check, but between-deletion
+        // check sees the cancellation and returns.
+        assert!(deleted <= 1);
+    }
+
+    #[tokio::test]
+    async fn rate_limits_deletions() {
+        let mock = Arc::new(MockBackend::new());
+        let mut registry = StorageRegistry::new();
+        registry.register("s3", mock.clone());
+
+        // 2 deletions/second → 500ms between each.
+        let module = RetentionModule::with_config(Duration::from_secs(60), 2);
+        let token = CancellationToken::new();
+        let paths = make_paths(&[
+            ("s3", "bucket", "/logs/a.ir"),
+            ("s3", "bucket", "/logs/b.ir"),
+            ("s3", "bucket", "/logs/c.ir"),
+        ]);
+
+        let start = std::time::Instant::now();
+        let deleted = module.delete_storage_paths(&token, &registry, &paths).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(deleted, 3);
+        // 2 sleeps of 500ms each between 3 deletions → >= 900ms.
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "elapsed {:?} expected >= 900ms",
+            elapsed
+        );
     }
 }

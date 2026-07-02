@@ -244,6 +244,95 @@ fn row_to_split(row: &metalog_query::SplitRow) -> Split {
     Split {
         file: Some(file),
         dimensions,
-        aggs: vec![], // Premium feature.
+        aggs: vec! [], // Premium feature.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::row_to_split;
+
+    fn make_row(pairs: &[(&str, serde_json::Value)]) -> metalog_query::SplitRow {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn row_to_split_maps_all_file_fields() {
+        let row = make_row(&[
+            ("min_timestamp", serde_json::json!(1000)),
+            ("max_timestamp", serde_json::json!(2000)),
+            ("state", serde_json::json!("IR_CLOSED")),
+            ("record_count", serde_json::json!(500)),
+            ("raw_size_bytes", serde_json::json!(1024)),
+            ("file_path", serde_json::json!("/logs/a.ir")),
+            ("file_storage_backend", serde_json::json!("s3")),
+            ("file_bucket", serde_json::json!("my-bucket")),
+            ("file_size_bytes", serde_json::json!(2048)),
+            ("archive_path", serde_json::json!("/archives/a.clp")),
+            ("archive_storage_backend", serde_json::json!("s3")),
+            ("archive_bucket", serde_json::json!("arch-bucket")),
+            ("archive_size_bytes", serde_json::json!(4096)),
+            ("archive_created_at", serde_json::json!(3000)),
+            ("retention_days", serde_json::json!(30)),
+            ("expires_at", serde_json::json!(4000)),
+        ]);
+
+        let split = row_to_split(&row);
+        let file = split.file.unwrap();
+        assert_eq!(file.min_timestamp, 1000);
+        assert_eq!(file.max_timestamp, 2000);
+        assert_eq!(file.state, "IR_CLOSED");
+        assert_eq!(file.record_count, 500);
+        assert_eq!(file.raw_size_bytes, 1024);
+        assert_eq!(file.file_path, "/logs/a.ir");
+        assert_eq!(file.file_storage_backend, "s3");
+        assert_eq!(file.file_bucket, "my-bucket");
+        assert_eq!(file.file_size_bytes, 2048);
+        assert_eq!(file.archive_path, "/archives/a.clp");
+        assert_eq!(file.archive_storage_backend, "s3");
+        assert_eq!(file.archive_bucket, "arch-bucket");
+        assert_eq!(file.archive_size_bytes, 4096);
+        assert_eq!(file.archive_created_at, 3000);
+        assert_eq!(file.retention_days, 30);
+        assert_eq!(file.expires_at, 4000);
+        assert!(split.dimensions.is_empty());
+        assert!(split.aggs.is_empty());
+    }
+
+    #[test]
+    fn row_to_split_extracts_dimensions() {
+        let row = make_row(&[
+            ("min_timestamp", serde_json::json!(0)),
+            ("dim_f01", serde_json::json!("host-1")),
+            ("dim_f42", serde_json::json!("svc-abc")),
+            ("other_col", serde_json::json!("ignored")),
+        ]);
+
+        let split = row_to_split(&row);
+        assert_eq!(split.dimensions.len(), 2);
+        assert_eq!(split.dimensions.get("dim_f01").unwrap(), "host-1");
+        assert_eq!(split.dimensions.get("dim_f42").unwrap(), "svc-abc");
+        assert!(!split.dimensions.contains_key("other_col"));
+    }
+
+    #[test]
+    fn row_to_split_defaults_missing_fields() {
+        let row = HashMap::new();
+        let split = row_to_split(&row);
+        let file = split.file.unwrap();
+        assert_eq!(file.min_timestamp, 0);
+        assert_eq!(file.max_timestamp, 0);
+        assert_eq!(file.state, "");
+        assert_eq!(file.record_count, 0);
+        assert_eq!(file.file_path, "");
+        assert_eq!(file.archive_path, "");
+        assert_eq!(file.retention_days, 0);
+        assert_eq!(file.expires_at, 0);
+        assert!(split.dimensions.is_empty());
     }
 }

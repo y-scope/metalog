@@ -144,3 +144,32 @@ fn parse_agg_type(s: &str) -> metalog_proto::query::AggregationType {
         _ => AggregationType::Unspecified,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use metalog_proto::query::AggregationType;
+
+    use super::parse_agg_type;
+
+    #[test]
+    fn parse_agg_type_all_variants() {
+        assert_eq!(parse_agg_type("EQ"), AggregationType::Eq);
+        assert_eq!(parse_agg_type("GTE"), AggregationType::Gte);
+        assert_eq!(parse_agg_type("GT"), AggregationType::Gt);
+        assert_eq!(parse_agg_type("LTE"), AggregationType::Lte);
+        assert_eq!(parse_agg_type("LT"), AggregationType::Lt);
+        assert_eq!(parse_agg_type("SUM"), AggregationType::Sum);
+        assert_eq!(parse_agg_type("AVG"), AggregationType::Avg);
+        assert_eq!(parse_agg_type("MIN"), AggregationType::Min);
+        assert_eq!(parse_agg_type("MAX"), AggregationType::Max);
+    }
+
+    #[test]
+    fn parse_agg_type_case_sensitive() {
+        assert_eq!(parse_agg_type("eq"), AggregationType::Unspecified);
+        assert_eq!(parse_agg_type("Sum"), AggregationType::Unspecified);
+        assert_eq!(parse_agg_type("SUM "), AggregationType::Unspecified);
+        assert_eq!(parse_agg_type(""), AggregationType::Unspecified);
+        assert_eq!(parse_agg_type("UNKNOWN"), AggregationType::Unspecified);
+    }
+}
