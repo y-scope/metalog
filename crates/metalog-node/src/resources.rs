@@ -16,6 +16,7 @@ pub struct Resources {
     pub failure_log_interval: Duration,
     column_registries: RwLock<HashMap<String, Arc<ColumnRegistry>>>,
     coordinator_units: RwLock<HashMap<String, Arc<CoordinatorUnit>>>,
+    pub(crate) coordinator_lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl Resources {
@@ -28,6 +29,7 @@ impl Resources {
             failure_log_interval,
             column_registries: RwLock::new(HashMap::new()),
             coordinator_units: RwLock::new(HashMap::new()),
+            coordinator_lifecycle: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -38,7 +40,9 @@ impl Resources {
 
     /// Caches a column registry for a table.
     pub fn set_column_registry(&self, table_name: &str, registry: Arc<ColumnRegistry>) {
-        self.column_registries.write().insert(table_name.to_string(), registry);
+        self.column_registries
+            .write()
+            .insert(table_name.to_string(), registry);
     }
 
     /// Gets a cached column registry for a table.
@@ -48,13 +52,38 @@ impl Resources {
 
     /// Stores the coordinator unit for a table (used by HA watchdog).
     pub fn store_coordinator_unit(&self, table_name: &str, unit: Arc<CoordinatorUnit>) {
-        self.coordinator_units.write().insert(table_name.to_string(), unit);
+        self.coordinator_units
+            .write()
+            .insert(table_name.to_string(), unit);
     }
 
     /// Cancels and removes the coordinator unit for a table.
-    pub fn stop_coordinator(&self, table_name: &str) {
-        if let Some(unit) = self.coordinator_units.write().remove(table_name) {
-            unit.stop();
+    pub async fn stop_coordinator(&self, table_name: &str) {
+        let _guard = self.coordinator_lifecycle.lock().await;
+        let unit = self.remove_coordinator(table_name);
+        if let Some(unit) = unit {
+            unit.stop().await;
+        }
+    }
+
+    pub(crate) fn remove_coordinator(&self, table_name: &str) -> Option<Arc<CoordinatorUnit>> {
+        self.coordinator_units.write().remove(table_name)
+    }
+
+    pub fn coordinator(&self, table_name: &str) -> Option<Arc<CoordinatorUnit>> {
+        self.coordinator_units.read().get(table_name).cloned()
+    }
+
+    pub async fn stop_coordinators(&self) {
+        let _guard = self.coordinator_lifecycle.lock().await;
+        let units: Vec<_> = self
+            .coordinator_units
+            .write()
+            .drain()
+            .map(|(_, unit)| unit)
+            .collect();
+        for unit in units {
+            unit.stop().await;
         }
     }
 

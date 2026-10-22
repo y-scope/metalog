@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Per-table configuration stored as JSON in `_table_config.config`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TableConfig {
     #[serde(default)]
     pub consolidation: ConsolidationConfig,
@@ -11,6 +12,7 @@ pub struct TableConfig {
 
 /// Consolidation subsystem configuration (premium feature).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsolidationConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -31,6 +33,7 @@ pub struct ConsolidationPolicyConfig {
 
 /// Retention subsystem configuration (premium feature).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetentionConfig {
     #[serde(default)]
     pub enabled: bool,

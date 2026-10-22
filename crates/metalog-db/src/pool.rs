@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use metalog_config::DatabaseConfig;
-use sqlx::{mysql::MySqlPoolOptions, MySqlPool};
+use sqlx::{
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    MySqlPool,
+};
 
 /// Creates a MySQL connection pool from a [`DatabaseConfig`].
 ///
@@ -11,12 +14,22 @@ use sqlx::{mysql::MySqlPoolOptions, MySqlPool};
 /// - `idle_timeout`: 5 minutes
 /// - `max_lifetime`: 30 minutes
 pub async fn new_pool(cfg: &DatabaseConfig) -> Result<MySqlPool, sqlx::Error> {
+    let mut options = MySqlConnectOptions::new()
+        .host(&cfg.host)
+        .port(cfg.port)
+        .username(&cfg.user)
+        .database(&cfg.database);
+    // SQLx's native-password handshake hashes Some("") into a nonempty auth
+    // response. Passwordless accounts require None, matching a passwordless DSN.
+    if !cfg.password.is_empty() {
+        options = options.password(&cfg.password);
+    }
     MySqlPoolOptions::new()
         .max_connections(cfg.pool_size)
         .min_connections(cfg.pool_min_idle)
         .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
-        .connect(&cfg.dsn())
+        .connect_with(options)
         .await
 }
 

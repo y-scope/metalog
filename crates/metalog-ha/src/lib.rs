@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 pub use liveness::LivenessLoop;
 use metalog_config::CoordinatorConfig;
 use metalog_types::processors::HAProvider;
-pub use reconcile::ReconciliationLoop;
+pub use reconcile::{CoordinatorCallback, CoordinatorFuture, ReconciliationLoop, StallChecker};
 pub use registry::NodeRegistry;
 use sqlx::MySqlPool;
 use tokio_util::sync::CancellationToken;
@@ -38,7 +38,13 @@ impl HAModule {
     pub fn start_liveness(&self, token: CancellationToken) -> tokio::task::JoinHandle<()> {
         let registry = self.registry.clone();
         let strategy = self.config.ha_strategy;
-        let interval = Duration::from_secs(self.config.heartbeat_interval_secs);
+        let interval = Duration::from_secs(
+            match strategy {
+                metalog_config::HAStrategy::Heartbeat => self.config.heartbeat_interval_secs,
+                metalog_config::HAStrategy::Lease => self.config.lease_renewal_interval_secs,
+            }
+            .max(1),
+        );
         let lease_ttl = Duration::from_secs(self.config.lease_ttl_secs);
 
         tokio::spawn(async move {
@@ -56,9 +62,9 @@ impl HAModule {
     pub fn start_reconciliation(
         &self,
         token: CancellationToken,
-        on_start: Arc<dyn Fn(&str) + Send + Sync>,
-        on_stop: Arc<dyn Fn(&str) + Send + Sync>,
-        stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        on_start: CoordinatorCallback,
+        on_stop: CoordinatorCallback,
+        stall_checker: StallChecker,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.registry.clone();
         let config = self.config.clone();

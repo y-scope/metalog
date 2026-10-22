@@ -10,8 +10,8 @@ mod tests {
         // Insert a record with a string archive_path.
         sqlx::query(
             "INSERT INTO `test_query_str` (min_timestamp, max_timestamp, state, record_count, \
-             retention_days, expires_at, archive_path, file_path) \
-             VALUES (1000, 2000, 'ARCHIVE_CLOSED', 100, 30, 0, 'archive-aaa', 'file1.log')",
+             retention_days, expires_at, archive_path, file_path) VALUES (1000, 2000, \
+             'ARCHIVE_CLOSED', 100, 30, 0, 'archive-aaa', 'file1.log')",
         )
         .execute(&pool)
         .await
@@ -58,8 +58,8 @@ mod tests {
         for (path, min_ts, max_ts) in [("f1.log", 1000_i64, 2000_i64), ("f2.log", 3000, 4000)] {
             sqlx::query(&format!(
                 "INSERT INTO `test_query_grp` (min_timestamp, max_timestamp, state, record_count, \
-                 retention_days, expires_at, archive_path, file_path) \
-                 VALUES ({min_ts}, {max_ts}, 'ARCHIVE_CLOSED', 100, 30, 0, 'archive-aaa', '{path}')"
+                 retention_days, expires_at, archive_path, file_path) VALUES ({min_ts}, {max_ts}, \
+                 'ARCHIVE_CLOSED', 100, 30, 0, 'archive-aaa', '{path}')"
             ))
             .execute(&pool)
             .await
@@ -69,8 +69,8 @@ mod tests {
         // Archive B: 1 file
         sqlx::query(
             "INSERT INTO `test_query_grp` (min_timestamp, max_timestamp, state, record_count, \
-             retention_days, expires_at, archive_path, file_path) \
-             VALUES (5000, 6000, 'ARCHIVE_CLOSED', 50, 30, 0, 'archive-bbb', 'f3.log')",
+             retention_days, expires_at, archive_path, file_path) VALUES (5000, 6000, \
+             'ARCHIVE_CLOSED', 50, 30, 0, 'archive-bbb', 'f3.log')",
         )
         .execute(&pool)
         .await
@@ -103,16 +103,84 @@ mod tests {
 
         // Archive B first (higher max_timestamp)
         let first = &results[0];
-        assert_eq!(first.get("archive_path").unwrap().as_str().unwrap(), "archive-bbb");
+        assert_eq!(
+            first.get("archive_path").unwrap().as_str().unwrap(),
+            "archive-bbb"
+        );
         assert_eq!(first.get("max_timestamp").unwrap().as_i64().unwrap(), 6000);
         assert_eq!(first.get("min_timestamp").unwrap().as_i64().unwrap(), 5000);
         assert_eq!(first.get("record_count").unwrap().as_i64().unwrap(), 50);
 
         // Archive A second
         let second = &results[1];
-        assert_eq!(second.get("archive_path").unwrap().as_str().unwrap(), "archive-aaa");
+        assert_eq!(
+            second.get("archive_path").unwrap().as_str().unwrap(),
+            "archive-aaa"
+        );
         assert_eq!(second.get("max_timestamp").unwrap().as_i64().unwrap(), 4000);
         assert_eq!(second.get("min_timestamp").unwrap().as_i64().unwrap(), 1000);
         assert_eq!(second.get("record_count").unwrap().as_i64().unwrap(), 200);
+    }
+
+    #[tokio::test]
+    async fn unsigned_and_null_values_preserve_schema_types() {
+        let (pool, _container) = setup_db_with_table("test_query_decode").await;
+        sqlx::query(
+            "INSERT INTO test_query_decode \
+             (min_timestamp,max_timestamp,state,record_count,retention_days,file_size_bytes,\
+             archive_path,raw_size_bytes,expires_at) VALUES \
+             (1,2,'IR_CLOSED',4294967295,65535,NULL,NULL,NULL,0),(2,3,'IR_CLOSED',7,30,4000000000,\
+             'archive-b',123,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let engine = SplitQueryEngine::new(pool);
+        let rows = engine
+            .execute_page(
+                "test_query_decode",
+                &[],
+                "",
+                &["min_timestamp ASC".into()],
+                "",
+                10,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows[0]["record_count"].as_u64(), Some(4_294_967_295));
+        assert_eq!(rows[0]["retention_days"].as_u64(), Some(65_535));
+        assert!(rows[0]["archive_path"].is_null());
+        assert!(rows[0]["file_size_bytes"].is_null());
+        assert!(rows[0]["raw_size_bytes"].is_null());
+        assert_eq!(rows[1]["archive_path"].as_str(), Some("archive-b"));
+        assert_eq!(rows[1]["file_size_bytes"].as_u64(), Some(4_000_000_000));
+        assert_eq!(rows[1]["raw_size_bytes"].as_i64(), Some(123));
+    }
+
+    #[tokio::test]
+    async fn grouped_average_preserves_fraction() {
+        let (pool, _container) = setup_db_with_table("test_query_average").await;
+        sqlx::query(
+            "INSERT INTO test_query_average \
+             (min_timestamp,max_timestamp,state,record_count,archive_path,expires_at) VALUES \
+             (1,2,'ARCHIVE_CLOSED',1,'a',0),(2,3,'ARCHIVE_CLOSED',2,'a',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let rows = SplitQueryEngine::new(pool)
+            .execute_page(
+                "test_query_average",
+                &["archive_path".into(), "AVG(record_count)".into()],
+                "",
+                &["archive_path ASC".into()],
+                "",
+                10,
+                &["archive_path".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows[0]["record_count"].as_f64(), Some(1.5));
     }
 }

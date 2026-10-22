@@ -5,10 +5,15 @@ use crate::StorageError;
 
 /// Pluggable object storage backend.
 ///
-/// Implementations: FilesystemBackend (base), S3Backend (premium/separate crate),
-/// HTTPBackend (read-only, premium).
+/// Implementations include local filesystem and S3-compatible object storage.
 #[async_trait]
 pub trait Backend: Send + Sync {
+    /// Whether distinct path spellings may address the same stored object.
+    /// Native AWS S3 overrides this because its keys have literal identity.
+    fn requires_canonical_keys(&self) -> bool {
+        true
+    }
+
     /// Reads an object. Returns a reader or `StorageError::NotFound`.
     async fn get(
         &self,
@@ -24,4 +29,23 @@ pub trait Backend: Send + Sync {
 
     /// Checks if an object exists.
     async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError>;
+}
+
+/// Reject ambiguous locations without rewriting an object's identity.
+pub(crate) fn validate_canonical_location(bucket: &str, key: &str) -> Result<(), StorageError> {
+    if bucket.is_empty()
+        || matches!(bucket, "." | "..")
+        || bucket.contains(['/', '\\'])
+        || key.contains('\\')
+        || key
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+    {
+        return Err(StorageError::Other(
+            "storage location requires a single-component bucket and a relative object key \
+             without empty, dot, or backslash components"
+                .into(),
+        ));
+    }
+    Ok(())
 }

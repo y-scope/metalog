@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 
 use metalog_db::{quote_identifier, try_quote_identifier, validate_sql_identifier};
-use sqlx::{Column, MySqlPool};
+use serde_json::Value;
+use sqlx::{Column, MySqlPool, Row, TypeInfo};
 
-/// Indexed sort columns that support efficient keyset pagination.
+use crate::resolve::{hex_string, rewrite_filter_columns};
+
 const INDEXED_SORT_COLUMNS: &[&str] = &["min_timestamp", "max_timestamp"];
-
-/// Maximum query limit. Results beyond this will be capped to prevent OOM.
-/// If the client requests more than this, we cap at this value with a warning.
+/// Maximum number of rows materialized by one database page, not a stream limit.
 pub const MAX_QUERY_LIMIT: i32 = 100_000;
+/// Bounds memory and allows backpressure/cancellation between database pages.
+pub const QUERY_PAGE_SIZE: i32 = 1_000;
 
-/// Sort specification for ORDER BY.
 #[derive(Debug, Clone)]
 pub struct OrderBySpec {
     pub column: String,
     pub desc: bool,
 }
 
-/// Parameters for preparing a split query.
 #[derive(Debug)]
 pub struct QueryParams {
     pub table_name: String,
@@ -28,28 +28,22 @@ pub struct QueryParams {
     pub allow_unindexed_sort: bool,
 }
 
-/// A single result row from a split query.
-pub type SplitRow = HashMap<String, sqlx::types::JsonValue>;
+pub type SplitRow = HashMap<String, Value>;
 
-/// Executes paginated queries on metadata tables using keyset pagination.
-///
-/// The engine pre-validates queries (column names, filter safety, sort indexes)
-/// and caches rewritten filter expressions. Each page is fetched with a keyset
-/// WHERE clause built from the previous page's last row.
 pub struct SplitQueryEngine {
     db: MySqlPool,
 }
 
 impl SplitQueryEngine {
+    pub const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
+
     pub fn new(db: MySqlPool) -> Self {
         Self { db }
     }
 
-    /// Executes a single page of results with keyset pagination.
-    ///
-    /// When `group_by` is non-empty, the query is rewritten as an aggregate
-    /// query: columns in `group_by` are selected as-is, while known numeric
-    /// columns get SUM/MIN/MAX wrappers and all others default to MAX.
+    /// Returns at most `limit` rows. Streaming callers advance a keyset cursor;
+    /// grouped queries aggregate in SQL before applying ordering and the limit.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_page(
         &self,
         table_name: &str,
@@ -60,393 +54,347 @@ impl SplitQueryEngine {
         limit: i32,
         group_by: &[String],
     ) -> Result<Vec<SplitRow>, EngineError> {
-        // Validate table name before interpolating into SQL.
-        try_quote_identifier(table_name).map_err(|e| {
-            EngineError::InvalidTableName(table_name.to_string(), e.to_string())
-        })?;
+        self.execute_page_offset(
+            table_name,
+            columns,
+            filter_expr,
+            order_clauses,
+            keyset_where,
+            limit,
+            group_by,
+            0,
+        )
+        .await
+    }
 
-        let cols_sql = if !group_by.is_empty() {
-            // Streaming dedup mode: when group_by is set, we don't use SQL GROUP BY.
-            // Instead, we ensure the group_by columns are prepended to ORDER BY so that
-            // rows with the same group key are consecutive. The gRPC handler merges
-            // consecutive rows with the same group key, applying aggregations.
-            //
-            // The projection uses bare column names only (no aggregate functions in SQL).
-            // Aggregation is done in the handler during streaming merge.
-            if columns.is_empty() {
-                return Err(EngineError::GroupByRequiresProjection);
-            }
-            for col in group_by {
-                validate_sql_identifier(col)
-                    .map_err(|_| EngineError::InvalidGroupByColumn(col.clone()))?;
-            }
-            // Extract bare column names from projection expressions.
-            // "MIN(min_timestamp)" -> "min_timestamp", "archive_path" -> "archive_path"
-            columns
-                .iter()
-                .map(|c| {
-                    let col_name = Self::extract_column_name(c);
-                    validate_sql_identifier(col_name)
-                        .map_err(|_| EngineError::InvalidProjection(c.to_string()))?;
-                    Ok(quote_identifier(col_name))
-                })
-                .collect::<Result<Vec<_>, EngineError>>()?
-                .join(", ")
-        } else if columns.is_empty() {
-            "*".to_string()
-        } else {
-            columns
-                .iter()
-                .map(|c| quote_identifier(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
+    /// Offset is used only for grouped streams, whose public API has no cursor.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_page_offset(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        filter_expr: &str,
+        order_clauses: &[String],
+        keyset_where: &str,
+        limit: i32,
+        group_by: &[String],
+        offset: u64,
+    ) -> Result<Vec<SplitRow>, EngineError> {
+        let table = try_quote_identifier(table_name)
+            .map_err(|e| EngineError::InvalidTableName(table_name.into(), e.to_string()))?;
+        let filter_expr = rewrite_filter_columns(filter_expr, None)
+            .map_err(|e| EngineError::InvalidFilter(e.to_string()))?;
+        let keyset_where = rewrite_filter_columns(keyset_where, None)
+            .map_err(|e| EngineError::InvalidCursor(e.to_string()))?;
+        if limit < 0 {
+            return Err(EngineError::InvalidLimit);
+        }
+        if !group_by.is_empty() && !keyset_where.is_empty() {
+            return Err(EngineError::InvalidCursor(
+                "group_by cannot be combined with a cursor".into(),
+            ));
+        }
+        let cols_sql = Self::projection_sql(columns, group_by)?;
+        let order_sql = order_clauses
+            .iter()
+            .map(|clause| {
+                let mut parts = clause.split_whitespace();
+                let column = parts.next().unwrap_or("").trim_matches('`');
+                let direction = parts.next().unwrap_or("ASC").to_ascii_uppercase();
+                if parts.next().is_some() || !matches!(direction.as_str(), "ASC" | "DESC") {
+                    return Err(EngineError::InvalidSort(clause.clone()));
+                }
+                let column = try_quote_identifier(column)
+                    .map_err(|_| EngineError::InvalidSort(clause.clone()))?;
+                Ok(format!("{column} {direction}"))
+            })
+            .collect::<Result<Vec<_>, EngineError>>()?;
         use std::fmt::Write;
-        let mut sql = format!("SELECT {cols_sql} FROM `{table_name}`");
-
-        // WHERE clauses.
+        let mut sql = format!("SELECT {cols_sql} FROM {table}");
         let mut conditions = Vec::new();
-        if !filter_expr.is_empty() {
+        if !filter_expr.trim().is_empty() {
             conditions.push(format!("({filter_expr})"));
         }
-        if !keyset_where.is_empty() {
+        if !keyset_where.trim().is_empty() {
             conditions.push(format!("({keyset_where})"));
         }
         if !conditions.is_empty() {
             write!(sql, " WHERE {}", conditions.join(" AND ")).unwrap();
         }
-
-        // Note: when group_by is set, the caller must prepend group_by columns to order_clauses
-        // so that rows with the same group key are consecutive. No SQL GROUP BY is used —
-        // aggregation happens in the gRPC handler via streaming merge.
-
-        // ORDER BY.
-        if !order_clauses.is_empty() {
-            write!(sql, " ORDER BY {}", order_clauses.join(", ")).unwrap();
+        if !group_by.is_empty() {
+            let group = group_by
+                .iter()
+                .map(|c| {
+                    try_quote_identifier(c)
+                        .map_err(|_| EngineError::InvalidGroupByColumn(c.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            write!(sql, " GROUP BY {}", group.join(", ")).unwrap();
         }
-
-        // LIMIT: cap at MAX_QUERY_LIMIT to prevent OOM. If the client requests more,
-        // we still fetch limit+1 for truncation detection but warn about the cap.
-        let capped_limit = if limit > 0 {
-            if limit > MAX_QUERY_LIMIT {
-                tracing::warn!(
-                    requested = limit,
-                    capped = MAX_QUERY_LIMIT,
-                    "query limit exceeded, capping result limit"
-                );
-                MAX_QUERY_LIMIT
-            } else {
-                limit
-            }
-        } else {
+        if !order_sql.is_empty() {
+            write!(sql, " ORDER BY {}", order_sql.join(", ")).unwrap();
+        }
+        let page_limit = if limit == 0 {
             MAX_QUERY_LIMIT
+        } else {
+            limit.min(MAX_QUERY_LIMIT)
         };
-        let fetch_limit = capped_limit + 1;
-        write!(sql, " LIMIT {fetch_limit}").unwrap();
-
-        tracing::info!(sql = %sql, "executing split query");
-
+        write!(sql, " LIMIT {page_limit}").unwrap();
+        if offset > 0 {
+            write!(sql, " OFFSET {offset}").unwrap();
+        }
+        tracing::debug!(sql = %sql, "executing split query page");
         let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
-
-        let mut results = Vec::with_capacity(rows.len());
-
-        // Detect column types from the first row, then reuse for subsequent rows.
-        // Avoids repeated try_get failures (each creates a discarded error).
-        let mut col_types: Vec<ColType> = Vec::new();
-
-        for (row_idx, row) in rows.iter().enumerate() {
-            use sqlx::Row;
-            let mut split_row = SplitRow::new();
-
-            if row_idx == 0 {
-                // First row: detect types via try cascade, cache the result.
-                col_types.reserve(row.columns().len());
-                for col in row.columns() {
-                    let name = col.name().to_string();
-                    let (val, typ) = detect_column_value(row, col.ordinal());
-                    tracing::debug!(column = %name, ?typ, value = %val, "detected column");
-                    col_types.push(typ);
-                    split_row.insert(name, val);
-                }
-            } else {
-                // Subsequent rows: use cached types directly.
-                for (col, typ) in row.columns().iter().zip(col_types.iter()) {
-                    let name = col.name().to_string();
-                    let val = extract_by_type(row, col.ordinal(), *typ);
-                    split_row.insert(name, val);
-                }
-            }
-
-            results.push(split_row);
-        }
-
-        Ok(results)
+        rows.iter()
+            .map(|row| {
+                row.columns()
+                    .iter()
+                    .map(|column| {
+                        Ok((
+                            column.name().to_string(),
+                            decode_column(row, column.ordinal())?,
+                        ))
+                    })
+                    .collect::<Result<SplitRow, sqlx::Error>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(EngineError::Sql)
     }
 
-    /// Allowed aggregate functions in projection expressions.
-    pub const ALLOWED_AGGREGATES: &[&str] = &["MIN", "MAX", "SUM", "COUNT", "AVG", "ANY_VALUE"];
-
-    /// Extracts the bare column name from a projection expression.
-    ///
-    /// - `"archive_path"` → `"archive_path"`
-    /// - `"MIN(min_timestamp)"` → `"min_timestamp"`
-    /// - `"SUM(record_count)"` → `"record_count"`
     pub fn extract_column_name(expr: &str) -> &str {
-        if let Some(paren_start) = expr.find('(') {
+        let expr = expr.trim();
+        if let Some(start) = expr.find('(') {
             if expr.ends_with(')') {
-                return expr[paren_start + 1..expr.len() - 1].trim();
+                return expr[start + 1..expr.len() - 1].trim();
             }
         }
-        expr.trim()
+        expr
     }
 
-    /// Parses an aggregate function name from a projection expression.
-    /// Returns None for bare column names.
-    ///
-    /// - `"MIN(min_timestamp)"` → `Some("MIN")`
-    /// - `"archive_path"` → `None`
     pub fn parse_aggregate_func(expr: &str) -> Option<String> {
-        if let Some(paren_start) = expr.find('(') {
-            if expr.ends_with(')') {
-                let func = expr[..paren_start].trim().to_uppercase();
-                if Self::ALLOWED_AGGREGATES.contains(&func.as_str()) {
-                    return Some(func);
-                }
-            }
+        let expr = expr.trim();
+        let start = expr.find('(')?;
+        if !expr.ends_with(')') {
+            return None;
         }
-        None
+        let function = expr[..start].trim().to_ascii_uppercase();
+        Self::ALLOWED_AGGREGATES
+            .contains(&function.as_str())
+            .then_some(function)
     }
 
-    /// Validates that all ORDER BY columns are indexed (unless `allow_unindexed` is set).
+    /// Validate grouping before spawning a streaming task, including empty projection.
+    pub fn projection_sql(columns: &[String], group_by: &[String]) -> Result<String, EngineError> {
+        if columns.is_empty() {
+            return if group_by.is_empty() {
+                Ok("*".into())
+            } else {
+                Err(EngineError::GroupByRequiresProjection)
+            };
+        }
+        columns
+            .iter()
+            .map(|projection| {
+                let column = Self::extract_column_name(projection);
+                if let Some(function) = Self::parse_aggregate_func(projection) {
+                    if group_by.is_empty() {
+                        return Err(EngineError::InvalidProjection(projection.clone()));
+                    }
+                    let (argument, alias) = if column == "*" && function == "COUNT" {
+                        ("*".into(), "record_count".into())
+                    } else {
+                        (
+                            try_quote_identifier(column)
+                                .map_err(|_| EngineError::InvalidProjection(projection.clone()))?,
+                            column.to_string(),
+                        )
+                    };
+                    // MariaDB 10.6 has no ANY_VALUE. MIN selects a valid representative
+                    // and has the same result where archive metadata is constant per group.
+                    let function = if function == "ANY_VALUE" {
+                        "MIN"
+                    } else {
+                        function.as_str()
+                    };
+                    Ok(format!(
+                        "{function}({argument}) AS {}",
+                        quote_identifier(&alias)
+                    ))
+                } else {
+                    let quoted = try_quote_identifier(projection)
+                        .map_err(|_| EngineError::InvalidProjection(projection.clone()))?;
+                    if !group_by.is_empty() && !group_by.contains(projection) {
+                        return Err(EngineError::InvalidProjection(projection.clone()));
+                    }
+                    Ok(quoted)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|parts| parts.join(", "))
+    }
+
     pub fn validate_sort_columns(
         order_by: &[OrderBySpec],
         allow_unindexed: bool,
     ) -> Result<(), EngineError> {
-        if !allow_unindexed {
-            for ob in order_by {
-                if !INDEXED_SORT_COLUMNS.contains(&ob.column.as_str()) {
-                    return Err(EngineError::UnindexedSort(ob.column.clone()));
-                }
+        for order in order_by {
+            validate_sql_identifier(&order.column)
+                .map_err(|_| EngineError::InvalidSort(order.column.clone()))?;
+            if !allow_unindexed && !INDEXED_SORT_COLUMNS.contains(&order.column.as_str()) {
+                return Err(EngineError::UnindexedSort(order.column.clone()));
             }
         }
         Ok(())
     }
 
-    /// Builds the ORDER BY clause with id tiebreaker.
-    ///
-    /// The id tiebreaker direction matches the primary sort direction to allow
-    /// the database to use a composite index scan instead of a filesort.
     pub fn build_order_clauses(order_by: &[OrderBySpec]) -> Vec<String> {
-        let mut clauses: Vec<String> = order_by
+        let mut clauses: Vec<_> = order_by
             .iter()
-            .map(|ob| {
-                let dir = if ob.desc { "DESC" } else { "ASC" };
-                format!("{} {dir}", quote_identifier(&ob.column))
+            .map(|order| {
+                let direction = if order.desc { "DESC" } else { "ASC" };
+                format!("{} {direction}", quote_identifier(&order.column))
             })
             .collect();
-
-        // Id tiebreaker matches primary sort direction.
-        let id_dir = if order_by.first().is_some_and(|ob| ob.desc) {
-            "DESC"
-        } else {
-            "ASC"
-        };
-        clauses.push(format!("`id` {id_dir}"));
-
+        if !order_by.iter().any(|order| order.column == "id") {
+            let direction = if order_by.first().is_some_and(|order| order.desc) {
+                "DESC"
+            } else {
+                "ASC"
+            };
+            clauses.push(format!("`id` {direction}"));
+        }
         clauses
     }
 
-    /// Builds the keyset WHERE clause for cursor-based pagination.
-    ///
-    /// For ORDER BY c1 DESC, c2 ASC, id DESC with cursor (v1, v2, vid):
-    /// ```sql
-    /// (c1 < v1)
-    ///   OR (c1 = v1 AND c2 > v2)
-    ///   OR (c1 = v1 AND c2 IS NULL)
-    ///   OR (c1 = v1 AND c2 = v2 AND id < vid)
-    /// ```
-    pub fn build_keyset_where(
-        order_by: &[OrderBySpec],
-        cursor_values: &[String],
-        cursor_id: i64,
-    ) -> String {
-        if order_by.is_empty() || cursor_values.is_empty() {
+    /// Compatibility helper for callers that provide string cursor values.
+    /// Invalid arity fails closed instead of indexing beyond the supplied slice.
+    pub fn build_keyset_where(order_by: &[OrderBySpec], values: &[String], id: i64) -> String {
+        if order_by.is_empty() && values.is_empty() {
             return String::new();
         }
-
-        let mut conditions = Vec::new();
-
-        for i in 0..order_by.len() {
-            let ob = &order_by[i];
-            let col = quote_identifier(&ob.column);
-            let op = if ob.desc { "<" } else { ">" };
-            let val = escape_sql_value(&cursor_values[i]);
-
-            if i == 0 {
-                conditions.push(format!("({col} {op} {val})"));
-            } else {
-                let mut prefix_parts = Vec::new();
-                for j in 0..i {
-                    let prev_col = quote_identifier(&order_by[j].column);
-                    let prev_val = escape_sql_value(&cursor_values[j]);
-                    prefix_parts.push(format!("{prev_col} = {prev_val}"));
-                }
-                let prefix = prefix_parts.join(" AND ");
-                conditions.push(format!("({prefix} AND {col} {op} {val})"));
-            }
-        }
-
-        // Id tiebreaker.
-        let id_op = if order_by.first().is_some_and(|ob| ob.desc) {
-            "<"
-        } else {
-            ">"
-        };
-        let mut id_prefix_parts = Vec::new();
-        for (j, ob) in order_by.iter().enumerate() {
-            let col = quote_identifier(&ob.column);
-            let val = escape_sql_value(&cursor_values[j]);
-            id_prefix_parts.push(format!("{col} = {val}"));
-        }
-        let id_prefix = id_prefix_parts.join(" AND ");
-        conditions.push(format!("({id_prefix} AND `id` {id_op} {cursor_id})"));
-
-        conditions.join(" OR ")
+        Self::build_typed_keyset_where(
+            order_by,
+            &values
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect::<Vec<_>>(),
+            id,
+        )
+        .unwrap_or_else(|_| "0 = 1".into())
     }
-}
 
-/// Column type detected from the first row, cached for subsequent rows.
-#[derive(Debug, Clone, Copy)]
-enum ColType {
-    Int,
-    Str,
-    Float,
-    Decimal,
-    Null,
-}
-
-/// Detects the column type using the database column type metadata.
-///
-/// We use the column type name from the database rather than try-cast, because MySQL/MariaDB
-/// will silently cast VARCHAR values like "5075fd79-..." to integer 5075, giving wrong results.
-fn detect_column_value(
-    row: &sqlx::mysql::MySqlRow,
-    ordinal: usize,
-) -> (serde_json::Value, ColType) {
-    use sqlx::{Column, Row, TypeInfo};
-
-    let col = &row.columns()[ordinal];
-    let type_name = col.type_info().name();
-    match type_name {
-        // Integer types
-        "BIGINT" | "INT" | "MEDIUMINT" | "SMALLINT" | "TINYINT" | "BIGINT UNSIGNED"
-        | "INT UNSIGNED" | "MEDIUMINT UNSIGNED" | "SMALLINT UNSIGNED" | "TINYINT UNSIGNED" => {
-            if let Ok(v) = row.try_get::<i64, _>(ordinal) {
-                (serde_json::json!(v), ColType::Int)
-            } else {
-                (serde_json::Value::Null, ColType::Null)
-            }
+    /// Lexicographic keyset predicate matching MySQL's ASC NULL-first and
+    /// DESC NULL-last ordering. Equality prefixes use the NULL-safe operator.
+    pub fn build_typed_keyset_where(
+        order_by: &[OrderBySpec],
+        values: &[Value],
+        id: i64,
+    ) -> Result<String, EngineError> {
+        if values.len() != order_by.len() || id < 0 {
+            return Err(EngineError::InvalidCursor(
+                "cursor must have one value per sort column and a nonnegative id".into(),
+            ));
         }
-        // DECIMAL is returned by SUM/AVG aggregates in MariaDB.
-        // Use rust_decimal to read natively, then convert to i64 or f64.
-        "DECIMAL" | "NEWDECIMAL" => {
-            if let Ok(v) = row.try_get::<rust_decimal::Decimal, _>(ordinal) {
-                use rust_decimal::prelude::ToPrimitive;
-                if let Some(n) = v.to_i64() {
-                    (serde_json::json!(n), ColType::Decimal)
-                } else if let Some(n) = v.to_f64() {
-                    (serde_json::json!(n), ColType::Decimal)
+        Self::validate_sort_columns(order_by, true)?;
+        let mut columns: Vec<_> = order_by
+            .iter()
+            .map(|o| (o.column.clone(), o.desc))
+            .collect();
+        let mut values = values.to_vec();
+        if !order_by.iter().any(|o| o.column == "id") {
+            columns.push(("id".into(), order_by.first().is_some_and(|o| o.desc)));
+            values.push(Value::from(id));
+        }
+        let mut equal = Vec::new();
+        let mut branches = Vec::new();
+        for ((column, desc), value) in columns.iter().zip(values.iter()) {
+            let column = quote_identifier(column);
+            let literal = sql_literal(value)?;
+            let after = if value.is_null() {
+                if *desc {
+                    None
                 } else {
-                    (serde_json::json!(v.to_string()), ColType::Decimal)
+                    Some(format!("{column} IS NOT NULL"))
                 }
+            } else if *desc {
+                Some(format!("({column} < {literal} OR {column} IS NULL)"))
             } else {
-                (serde_json::Value::Null, ColType::Null)
+                Some(format!("{column} > {literal}"))
+            };
+            if let Some(after) = after {
+                let mut parts = equal.clone();
+                parts.push(after);
+                branches.push(format!("({})", parts.join(" AND ")));
             }
+            equal.push(format!("{column} <=> {literal}"));
         }
-        "FLOAT" | "DOUBLE" => {
-            if let Ok(v) = row.try_get::<f64, _>(ordinal) {
-                (serde_json::json!(v), ColType::Float)
-            } else {
-                (serde_json::Value::Null, ColType::Null)
-            }
-        }
-        // Everything else (VARCHAR, TEXT, ENUM, VARBINARY, etc.) -> String
-        _ => {
-            // For VARBINARY columns (utf8mb4_bin collation), try_get::<String> may fail.
-            // Fall back to reading raw bytes and converting to String.
-            if let Ok(v) = row.try_get::<String, _>(ordinal) {
-                (serde_json::json!(v), ColType::Str)
-            } else if let Ok(v) = row.try_get::<Vec<u8>, _>(ordinal) {
-                let s = String::from_utf8_lossy(&v).to_string();
-                (serde_json::json!(s), ColType::Str)
-            } else {
-                (serde_json::Value::Null, ColType::Null)
-            }
-        }
+        Ok(if branches.is_empty() {
+            "0 = 1".into()
+        } else {
+            branches.join(" OR ")
+        })
     }
 }
 
-/// Extracts a value using the cached column type, avoiding failed try_get calls.
-fn extract_by_type(
-    row: &sqlx::mysql::MySqlRow,
-    ordinal: usize,
-    typ: ColType,
-) -> serde_json::Value {
-    use sqlx::Row;
-    match typ {
-        ColType::Int => row
-            .try_get::<i64, _>(ordinal)
-            .map(|v| serde_json::json!(v))
-            .unwrap_or(serde_json::Value::Null),
-        ColType::Str => row
-            .try_get::<String, _>(ordinal)
-            .or_else(|_| {
-                row.try_get::<Vec<u8>, _>(ordinal)
-                    .map(|v| String::from_utf8_lossy(&v).to_string())
-            })
-            .map(|v| serde_json::json!(v))
-            .unwrap_or(serde_json::Value::Null),
-        ColType::Float => row
-            .try_get::<f64, _>(ordinal)
-            .map(|v| serde_json::json!(v))
-            .unwrap_or(serde_json::Value::Null),
-        ColType::Decimal => row
-            .try_get::<rust_decimal::Decimal, _>(ordinal)
+fn sql_literal(value: &Value) -> Result<String, EngineError> {
+    match value {
+        Value::Null => Ok("NULL".into()),
+        Value::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.into()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) => Ok(format!("_utf8mb4 X'{}'", hex_string(value))),
+        _ => Err(EngineError::InvalidCursor(
+            "cursor values must be scalar".into(),
+        )),
+    }
+}
+
+/// Decode from schema metadata for every row; an initial NULL does not change
+/// the type of later rows, and UNSIGNED columns use sqlx's unsigned decoder.
+fn decode_column(row: &sqlx::mysql::MySqlRow, ordinal: usize) -> Result<Value, sqlx::Error> {
+    let kind = row.columns()[ordinal].type_info().name();
+    match kind {
+        "BIGINT UNSIGNED" | "INT UNSIGNED" | "MEDIUMINT UNSIGNED" | "SMALLINT UNSIGNED"
+        | "TINYINT UNSIGNED" => row
+            .try_get::<Option<u64>, _>(ordinal)
+            .map(|v| v.map(Value::from).unwrap_or(Value::Null)),
+        "BIGINT" | "INT" | "MEDIUMINT" | "SMALLINT" | "TINYINT" => row
+            .try_get::<Option<i64>, _>(ordinal)
+            .map(|v| v.map(Value::from).unwrap_or(Value::Null)),
+        "FLOAT" => row
+            .try_get::<Option<f32>, _>(ordinal)
+            .map(|v| v.map(|n| Value::from(f64::from(n))).unwrap_or(Value::Null)),
+        "DOUBLE" => row
+            .try_get::<Option<f64>, _>(ordinal)
+            .map(|v| v.map(Value::from).unwrap_or(Value::Null)),
+        "DECIMAL" | "NEWDECIMAL" => row
+            .try_get::<Option<rust_decimal::Decimal>, _>(ordinal)
             .map(|v| {
                 use rust_decimal::prelude::ToPrimitive;
-                if let Some(n) = v.to_i64() {
-                    serde_json::json!(n)
-                } else if let Some(n) = v.to_f64() {
-                    serde_json::json!(n)
-                } else {
-                    serde_json::json!(v.to_string())
-                }
+                v.map(|v| {
+                    if v.fract().is_zero() {
+                        if let Some(n) = v.to_i64() {
+                            return Value::from(n);
+                        }
+                        if let Some(n) = v.to_u64() {
+                            return Value::from(n);
+                        }
+                    }
+                    v.to_f64()
+                        .map(Value::from)
+                        .unwrap_or_else(|| Value::String(v.to_string()))
+                })
+                .unwrap_or(Value::Null)
+            }),
+        "NULL" => Ok(Value::Null),
+        _ => row
+            .try_get::<Option<String>, _>(ordinal)
+            .or_else(|_| {
+                row.try_get::<Option<Vec<u8>>, _>(ordinal)
+                    .map(|v| v.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
             })
-            .unwrap_or(serde_json::Value::Null),
-        ColType::Null => serde_json::Value::Null,
+            .map(|v| v.map(Value::String).unwrap_or(Value::Null)),
     }
-}
-
-/// Escapes a value for safe SQL embedding in keyset WHERE clauses.
-/// Wraps in single quotes with backslash/quote escaping.
-/// Escapes a value for safe SQL embedding. Handles all MySQL-special characters.
-fn escape_sql_value(val: &str) -> String {
-    let mut escaped = String::with_capacity(val.len() + 2);
-    escaped.push('\'');
-    for c in val.chars() {
-        match c {
-            '\'' => escaped.push_str("\\'"),
-            '\\' => escaped.push_str("\\\\"),
-            '\0' => escaped.push_str("\\0"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\x1a' => escaped.push_str("\\Z"),
-            _ => escaped.push(c),
-        }
-    }
-    escaped.push('\'');
-    escaped
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -456,23 +404,25 @@ pub enum EngineError {
          allow_unindexed_sort=true"
     )]
     UnindexedSort(String),
-
     #[error("invalid table name {0:?}: {1}")]
     InvalidTableName(String, String),
-
-    #[error("group_by requires an explicit projection (columns must not be empty)")]
+    #[error("group_by requires an explicit projection")]
     GroupByRequiresProjection,
-
     #[error("invalid group_by column: {0:?}")]
     InvalidGroupByColumn(String),
-
-    #[error("invalid projection expression: {0:?} (use bare column names or FUNC(column))")]
+    #[error("invalid projection {0:?}; grouped columns require a group key or FUNC(column)")]
     InvalidProjection(String),
-
+    #[error("invalid sort column: {0:?}")]
+    InvalidSort(String),
+    #[error("invalid filter: {0}")]
+    InvalidFilter(String),
+    #[error("invalid cursor: {0}")]
+    InvalidCursor(String),
+    #[error("limit must be nonnegative")]
+    InvalidLimit,
     #[error("sql: {0}")]
     Sql(#[from] sqlx::Error),
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,7 +501,7 @@ mod tests {
         }];
         let cursor = vec!["5000".to_string()];
         let sql = SplitQueryEngine::build_keyset_where(&order, &cursor, 42);
-        assert!(sql.contains("`max_timestamp` < '5000'"));
+        assert!(sql.contains("`max_timestamp` < _utf8mb4 X'35303030'"));
         assert!(sql.contains("`id` < 42"));
     }
 
@@ -563,7 +513,7 @@ mod tests {
         }];
         let cursor = vec!["1000".to_string()];
         let sql = SplitQueryEngine::build_keyset_where(&order, &cursor, 10);
-        assert!(sql.contains("`min_timestamp` > '1000'"));
+        assert!(sql.contains("`min_timestamp` > _utf8mb4 X'31303030'"));
         assert!(sql.contains("`id` > 10"));
     }
 
@@ -588,7 +538,7 @@ mod tests {
         // otherwise `a = 1 OR b = 2 AND keyset` is parsed as
         // `a = 1 OR (b = 2 AND keyset)` — wrong results.
         let filter = "state = 1 OR state = 2".to_string();
-        let keyset = "`min_timestamp` > '1000'".to_string();
+        let keyset = "`min_timestamp` > _utf8mb4 X'31303030'".to_string();
         // Replicate the condition-joining logic from execute_page.
         let mut conditions = Vec::new();
         if !filter.is_empty() {
@@ -600,10 +550,10 @@ mod tests {
         let where_clause = conditions.join(" AND ");
         assert_eq!(
             where_clause,
-            "(state = 1 OR state = 2) AND (`min_timestamp` > '1000')"
+            "(state = 1 OR state = 2) AND (`min_timestamp` > _utf8mb4 X'31303030')"
         );
         // Without the fix, this would produce:
-        // "state = 1 OR state = 2 AND (`min_timestamp` > '1000')"
+        // "state = 1 OR state = 2 AND (`min_timestamp` > _utf8mb4 X'31303030')"
     }
 
     #[test]

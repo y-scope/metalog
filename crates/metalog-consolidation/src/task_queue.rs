@@ -88,12 +88,12 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// Maximum rows per multi-row INSERT to stay within `max_allowed_packet`.
+    const MAX_ROWS_PER_INSERT: usize = 100;
+
     pub fn new(db: MySqlPool) -> Self {
         Self { db }
     }
-
-    /// Maximum rows per multi-row INSERT to stay within `max_allowed_packet`.
-    const MAX_ROWS_PER_INSERT: usize = 100;
 
     /// Creates tasks in batch (all pending) using multi-row INSERT.
     pub async fn create_tasks(

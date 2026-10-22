@@ -1,8 +1,8 @@
-use sqlx::mysql::MySqlDatabaseError;
-use sqlx::Error as SqlxError;
+use sqlx::{mysql::MySqlDatabaseError, Error as SqlxError};
 
 // MySQL/MariaDB error codes.
 const ERR_DUPLICATE_KEY: u16 = 1062;
+const ERR_DUPLICATE_INDEX: u16 = 1061;
 const ERR_DEADLOCK: u16 = 1213;
 const ERR_LOCK_WAIT_TIMEOUT: u16 = 1205;
 const ERR_DUPLICATE_COLUMN: u16 = 1060;
@@ -28,6 +28,11 @@ pub fn is_deadlock(err: &SqlxError) -> bool {
 /// Returns true if the error is a duplicate key violation (MySQL 1062).
 pub fn is_duplicate_key(err: &SqlxError) -> bool {
     is_mysql_error(err, ERR_DUPLICATE_KEY)
+}
+
+/// Returns true if an index with this name already exists (MySQL 1061).
+pub fn is_duplicate_index(err: &SqlxError) -> bool {
+    is_mysql_error(err, ERR_DUPLICATE_INDEX)
 }
 
 /// Returns true if the error is a lock wait timeout (MySQL 1205).

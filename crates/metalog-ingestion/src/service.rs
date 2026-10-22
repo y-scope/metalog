@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use metalog_metastore::validate_file_record;
 use metalog_types::FileRecord;
 
 use crate::batching_writer::BatchingWriter;
@@ -38,22 +37,17 @@ impl IngestionService {
         Self { writer, blocking }
     }
 
-    /// Ingests a record. Validates, then submits to the writer.
-    ///
-    /// In blocking mode, waits for channel space. In non-blocking mode,
-    /// returns immediately with an error if the channel is full.
+    /// Ingests a record and acknowledges only after its database statement commits.
+    /// Non-blocking mode rejects a full queue immediately; accepted submissions in
+    /// either mode wait for their durability receipt.
     pub async fn ingest(&self, table_name: &str, rec: FileRecord) -> IngestionResult {
-        if let Err(e) = validate_file_record(&rec) {
-            return IngestionResult {
-                accepted: false,
-                error: Some(e.to_string()),
-            };
-        }
-
-        let result = if self.blocking {
-            self.writer.submit_wait(table_name, rec).await
-        } else {
-            self.writer.submit(table_name, rec).await
+        let result = match self
+            .writer
+            .submit_confirmed(table_name, rec, self.blocking)
+            .await
+        {
+            Ok(receipt) => receipt.wait().await,
+            Err(error) => Err(error),
         };
 
         match result {
@@ -68,9 +62,8 @@ impl IngestionService {
         }
     }
 
-    /// Ingests a batch of records. Validates each record, then submits via
-    /// `submit_wait` (blocking until channel has space). Returns per-record
-    /// failures only; accepted records are not included in the result.
+    /// Enqueues all valid records with backpressure, then waits for their commits.
+    /// Per-record failures preserve the input indices, including failures during flush.
     pub async fn batch_ingest(
         &self,
         table_name: &str,
@@ -78,23 +71,25 @@ impl IngestionService {
     ) -> BatchIngestionResult {
         let total = records.len() as i32;
         let mut failures = Vec::new();
-
+        let mut receipts = Vec::new();
         for (i, rec) in records.into_iter().enumerate() {
-            if let Err(e) = validate_file_record(&rec) {
-                failures.push(RecordFailure {
+            match self.writer.submit_confirmed(table_name, rec, true).await {
+                Ok(receipt) => receipts.push((i as i32, receipt)),
+                Err(error) => failures.push(RecordFailure {
                     index: i as i32,
-                    error: e.to_string(),
-                });
-                continue;
+                    error: error.to_string(),
+                }),
             }
-
-            if let Err(e) = self.writer.submit_wait(table_name, rec).await {
+        }
+        for (index, receipt) in receipts {
+            if let Err(error) = receipt.wait().await {
                 failures.push(RecordFailure {
-                    index: i as i32,
-                    error: e.to_string(),
+                    index,
+                    error: error.to_string(),
                 });
             }
         }
+        failures.sort_by_key(|failure| failure.index);
 
         let rejected_count = failures.len() as i32;
         BatchIngestionResult {

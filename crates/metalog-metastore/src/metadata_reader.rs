@@ -52,8 +52,8 @@ impl MetadataReader {
         table_name: &str,
     ) -> Result<Vec<DimensionInfo>, sqlx::Error> {
         let rows: Vec<(String, String, Option<String>, Option<i32>)> = sqlx::query_as(
-            "SELECT dim_key, base_type, alias_column, width FROM _dim_registry WHERE table_name = \
-             ? AND state = 'ACTIVE' ORDER BY dim_key",
+            "SELECT dim_key, base_type, alias_column, CAST(width AS SIGNED) FROM _dim_registry \
+             WHERE table_name = ? AND state = 'ACTIVE' ORDER BY dim_key",
         )
         .bind(table_name)
         .fetch_all(&self.db)

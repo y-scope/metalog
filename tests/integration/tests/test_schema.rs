@@ -3,8 +3,7 @@ mod tests {
     use std::{collections::HashSet, sync::Arc};
 
     use metalog_it::helpers::setup_db;
-    use metalog_schema::{ColumnRegistry, ensure_table};
-    use sqlx::MySqlPool;
+    use metalog_schema::{ensure_table, ColumnRegistry};
 
     // ── ensure_table ─────────────────────────────────────────────────────────
 
@@ -85,11 +84,12 @@ mod tests {
             .await
             .unwrap();
 
-        let stored: String =
-            sqlx::query_scalar("SELECT config FROM _table_config WHERE table_name = 'test_schema_cfg'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let stored: String = sqlx::query_scalar(
+            "SELECT config FROM _table_config WHERE table_name = 'test_schema_cfg'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(stored, cfg);
     }
 
@@ -124,10 +124,7 @@ mod tests {
         let mut slots: HashSet<String> = HashSet::new();
         while let Some(res) = set.join_next().await {
             let col = res.expect("task must not panic");
-            assert!(
-                slots.insert(col.clone()),
-                "duplicate slot assigned: {col}"
-            );
+            assert!(slots.insert(col.clone()), "duplicate slot assigned: {col}");
         }
 
         assert_eq!(slots.len(), N, "each dim key must get its own slot");
@@ -186,4 +183,58 @@ mod tests {
             assert_eq!(col, format!("dim_f{i:02}"), "slot {i} must be dim_f{i:02}");
         }
     }
+}
+
+#[tokio::test]
+async fn provisioning_repairs_a_partial_registration_with_one_connection() {
+    let (pool, _container) = metalog_it::helpers::setup_db().await;
+    sqlx::query(
+        "INSERT INTO _table(table_name, display_name, active) VALUES('partial_table', 'partial', \
+         TRUE)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let single = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        metalog_schema::ensure_table(&single, "partial_table", None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let configs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM _table_config WHERE table_name = 'partial_table'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(configs, 1);
+    sqlx::query("SELECT id FROM partial_table LIMIT 1")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn table_names_at_mysql_identifier_limit_can_be_provisioned() {
+    let (pool, _db) = metalog_it::helpers::setup_db().await;
+    let name = "t".repeat(64);
+    metalog_schema::ensure_table(&pool, &name, None)
+        .await
+        .unwrap();
+    let registry = metalog_schema::ColumnRegistry::new(pool.clone(), &name)
+        .await
+        .unwrap();
+    registry
+        .resolve_or_allocate_dim("host", "str", 64)
+        .await
+        .unwrap();
+    metalog_schema::PartitionManager::new(pool, &name, 7)
+        .run_maintenance()
+        .await
+        .unwrap();
 }

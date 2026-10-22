@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use metalog_config::{CoordinatorConfig, HAStrategy};
 use metalog_logutil::FailureLogger;
@@ -6,29 +6,28 @@ use tokio_util::sync::CancellationToken;
 
 use crate::NodeRegistry;
 
-/// Reconciliation loop: periodically claims tables and verifies ownership.
-///
-/// 4 steps per cycle (each tolerates failure independently):
-/// 1. Claim orphans — adopt tables from dead nodes
-/// 2. Claim unassigned — pick up newly registered tables (fair-share)
-/// 3. Watchdog — detect and restart stalled coordinators
-/// 4. Ownership verification — stop coordinators for lost assignments
+/// A coordinator transition completes before reconciliation updates local ownership.
+pub type CoordinatorFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+pub type CoordinatorCallback = Arc<dyn Fn(String) -> CoordinatorFuture + Send + Sync>;
+pub type StallChecker = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Reconciles ownership and coordinator lifecycle. Node membership is heartbeated in
+/// both strategies; leases additionally fence ownership of individual tables.
 pub struct ReconciliationLoop {
     registry: Arc<NodeRegistry>,
     config: CoordinatorConfig,
-    on_start: Arc<dyn Fn(&str) + Send + Sync>,
-    on_stop: Arc<dyn Fn(&str) + Send + Sync>,
-    /// Returns true if the coordinator for a given table has stalled.
-    stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    on_start: CoordinatorCallback,
+    on_stop: CoordinatorCallback,
+    stall_checker: StallChecker,
 }
 
 impl ReconciliationLoop {
     pub fn new(
         registry: Arc<NodeRegistry>,
         config: CoordinatorConfig,
-        on_start: Arc<dyn Fn(&str) + Send + Sync>,
-        on_stop: Arc<dyn Fn(&str) + Send + Sync>,
-        stall_checker: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        on_start: CoordinatorCallback,
+        on_stop: CoordinatorCallback,
+        stall_checker: StallChecker,
     ) -> Self {
         Self {
             registry,
@@ -39,137 +38,150 @@ impl ReconciliationLoop {
         }
     }
 
-    /// Runs until cancelled.
     pub async fn run(&self, token: CancellationToken) {
         let fl = FailureLogger::new(Duration::from_secs(60));
-        let interval = Duration::from_secs(self.config.reconciliation_interval_secs);
+        let interval = Duration::from_secs(self.config.reconciliation_interval_secs.max(1));
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        tracing::info!(
-            interval_secs = interval.as_secs(),
-            "reconciliation loop started"
-        );
-
-        // Track locally running tables.
-        let mut running: HashSet<String> = HashSet::new();
+        let mut running = HashSet::new();
 
         loop {
             tokio::select! {
-                _ = token.cancelled() => {
-                    tracing::info!("reconciliation loop stopped");
-                    return;
-                }
+                _ = token.cancelled() => break,
                 _ = ticker.tick() => {
-                    match self.reconcile_once(&mut running).await {
+                    let result = tokio::select! {
+                        _ = token.cancelled() => break,
+                        result = self.reconcile_once(&mut running) => result,
+                    };
+                    match result {
                         Ok(()) => fl.ok(),
-                        Err(e) => fl.fail(&format!("reconciliation failed: {e}")),
+                        Err(e) => {
+                            fl.fail(&format!("reconciliation failed: {e}"));
+                            // Without an authoritative ownership check, stop local work.
+                            // The next successful cycle can restart still-owned tables.
+                            self.stop_running(&mut running).await;
+                        }
                     }
                 }
             }
         }
+
+        self.stop_running(&mut running).await;
+        // Also release a claim whose startup was cancelled before it entered `running`.
+        if let Ok(tables) = self.registry.get_my_tables().await {
+            for table in tables {
+                if let Err(e) = self.registry.release_table(&table).await {
+                    tracing::warn!(table, error = %e, "failed to release table during shutdown");
+                }
+            }
+        }
+        // A stopped node must no longer dilute its replacements' fair share.
+        // Liveness uses UPDATE, so an in-flight heartbeat cannot resurrect it.
+        if let Err(e) = self.registry.unregister_node().await {
+            tracing::warn!(error = %e, "failed to deregister node during shutdown");
+        }
     }
 
-    async fn reconcile_once(&self, running: &mut HashSet<String>) -> Result<(), sqlx::Error> {
-        let dead_threshold =
-            Duration::from_secs(self.config.dead_node_threshold_secs).as_nanos() as i64;
+    async fn stop_running(&self, running: &mut HashSet<String>) {
+        for table in running.drain() {
+            if let Err(e) = (self.on_stop)(table.clone()).await {
+                tracing::error!(table, error = %e, "coordinator stop failed");
+            }
+        }
+    }
 
-        // Step 1: Claim orphans.
-        let orphaned = match self.config.ha_strategy {
+    /// Performs one reconciliation cycle; public for deterministic cluster tests.
+    pub async fn reconcile_once(&self, running: &mut HashSet<String>) -> Result<(), sqlx::Error> {
+        self.registry.release_inactive_tables().await?;
+        let dead_threshold = Duration::from_secs(self.config.dead_node_threshold_secs)
+            .as_nanos()
+            .min(i64::MAX as u128) as i64;
+        let lease_ttl = match self.config.ha_strategy {
             HAStrategy::Heartbeat => {
                 self.registry
                     .claim_orphans_heartbeat(dead_threshold)
-                    .await?
+                    .await?;
+                None
             }
-            HAStrategy::Lease => self.registry.claim_orphans_lease().await?,
+            HAStrategy::Lease => {
+                self.registry.claim_orphans_lease().await?;
+                Some(
+                    Duration::from_secs(self.config.lease_ttl_secs)
+                        .as_nanos()
+                        .min(i64::MAX as u128) as i64,
+                )
+            }
         };
-        if orphaned > 0 {
-            tracing::info!(orphaned, "claimed orphaned tables");
+
+        // Stop lost ownership before starting or restarting any local work.
+        let mut owned: HashSet<String> = match self.config.ha_strategy {
+            HAStrategy::Heartbeat => self.registry.get_my_tables().await?,
+            HAStrategy::Lease => self.registry.get_my_leased_tables().await?,
+        }
+        .into_iter()
+        .collect();
+        let lost: Vec<String> = running.difference(&owned).cloned().collect();
+        for table in lost {
+            match (self.on_stop)(table.clone()).await {
+                Ok(()) => {
+                    running.remove(&table);
+                }
+                Err(e) => tracing::error!(table, error = %e, "coordinator stop failed"),
+            }
         }
 
-        // Step 2: Claim unassigned (fair-share).
+        let unassigned = self.registry.get_unassigned_tables().await?;
         let active_nodes = self
             .registry
             .count_active_nodes_heartbeat(dead_threshold)
             .await?
             .max(1);
-        let assigned = self.registry.count_assigned_tables().await?;
-        let my_count = self.registry.count_my_tables().await?;
-        let fair_share = (assigned + active_nodes - 1) / active_nodes; // ceil division
+        let total = self.registry.count_assigned_tables().await? + unassigned.len() as i64;
+        let fair_share = (total + active_nodes - 1) / active_nodes;
+        let mut my_count = owned.len() as i64;
+        for table in unassigned {
+            if my_count >= fair_share {
+                break;
+            }
+            if self
+                .registry
+                .claim_table_with_lease(&table, lease_ttl)
+                .await?
+            {
+                my_count += 1;
+                owned.insert(table);
+            }
+        }
 
-        if my_count < fair_share {
-            let unassigned = self.registry.get_unassigned_tables().await?;
-            for table in unassigned {
-                if my_count >= fair_share {
-                    break;
+        for table in owned {
+            if running.contains(&table) && (self.stall_checker)(&table) {
+                tracing::warn!(table, "coordinator stalled, restarting");
+                if let Err(e) = (self.on_stop)(table.clone()).await {
+                    tracing::error!(table, error = %e, "coordinator stop failed");
+                    continue;
                 }
-                if self.registry.claim_table(&table).await? {
-                    tracing::info!(table = %table, "claimed table");
-                    (self.on_start)(&table);
+                running.remove(&table);
+            }
+            // An idempotent ensure-start callback also refreshes stored table
+            // configuration for an already running coordinator.
+            match (self.on_start)(table.clone()).await {
+                Ok(()) => {
                     running.insert(table);
                 }
+                Err(e) => {
+                    tracing::error!(
+                        table, error = %e, "coordinator start failed; releasing assignment"
+                    );
+                    if let Err(stop_error) = (self.on_stop)(table.clone()).await {
+                        tracing::error!(table, error = %stop_error, "coordinator cleanup failed");
+                        continue;
+                    }
+                    running.remove(&table);
+                    // A failed startup must not strand the table behind a live owner.
+                    self.registry.release_table(&table).await?;
+                }
             }
         }
-
-        // Step 3: Watchdog — restart coordinators that have stalled.
-        let stalled: Vec<String> = running
-            .iter()
-            .filter(|t| (self.stall_checker)(t))
-            .cloned()
-            .collect();
-        for table in stalled {
-            tracing::warn!(table = %table, "coordinator stalled, restarting");
-            (self.on_stop)(&table);
-            running.remove(&table);
-            (self.on_start)(&table);
-            running.insert(table);
-        }
-
-        // Step 4: Ownership verification — stop coordinators for lost assignments.
-        let my_tables: HashSet<String> = self.registry.get_my_tables().await?.into_iter().collect();
-
-        // Stop tables we're running but no longer own.
-        let to_stop: Vec<String> = running
-            .iter()
-            .filter(|t| !my_tables.contains(*t))
-            .cloned()
-            .collect();
-        for table in &to_stop {
-            tracing::warn!(table = %table, "lost table assignment, stopping");
-            (self.on_stop)(table);
-            running.remove(table);
-        }
-
-        // Start tables we own but aren't running.
-        for table in &my_tables {
-            if !running.contains(table) {
-                tracing::info!(table = %table, "starting coordinator for assigned table");
-                (self.on_start)(table);
-                running.insert(table.clone());
-            }
-        }
-
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn fair_share_calculation() {
-        // 10 tables, 3 nodes → ceil(10/3) = 4
-        let assigned = 10i64;
-        let active = 3i64;
-        let fair = (assigned + active - 1) / active;
-        assert_eq!(fair, 4);
-    }
-
-    #[test]
-    fn fair_share_single_node() {
-        let assigned = 5i64;
-        let active = 1i64;
-        let fair = (assigned + active - 1) / active;
-        assert_eq!(fair, 5);
     }
 }

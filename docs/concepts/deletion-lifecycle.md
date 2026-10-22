@@ -125,36 +125,37 @@ Deletions are row-level, driven by `idx_expiration` (scan `expires_at ASC`, batc
 
 ## Retention Strategy
 
-Each coordinator runs a **Retention Strategy** goroutine per table when `retention.enabled` is `true` in the table config (default: enabled). The strategy type is configured per-table via `retention.type` in the `_table_config` config blob (default: `"default"`). See [Config Schema](../guides/configure-tables.md#config-schema).
+The Rust coordinator runs a retention task when `retention.enabled` is `true` in the stored table configuration. Retention is disabled by default. The supported strategy is `"default"` (an empty type also selects it). Enabling retention requires configured storage backends. Configuration changes take effect when the owning node next reconciles the table.
 
 ### How It Works
 
 The default retention strategy runs a three-phase cleanup cycle every 60 seconds:
 
-1. **Phase 1 — Transition**: Scan for expired rows (`expires_at < now`, state = `IR_CLOSED` or `ARCHIVE_CLOSED`) and mark them `PURGING` (`IR_PURGING` or `ARCHIVE_PURGING`). This is a crash-safe marker — the transition is durable in the database.
-2. **Phase 2 — Delete metadata**: Delete `PURGING` rows from the database, collecting storage paths (IR and archive) for cleanup.
-3. **Phase 3 — Delete storage**: Remove files from object storage at a rate-limited pace (best-effort, idempotent).
+1. **Mark expired rows**: Transition files past `expires_at + grace_period_secs` to `IR_PURGING` or `ARCHIVE_PURGING`. The row remains durable deletion work.
+2. **Retire and delete objects**: For each original-file and archive location, check both storage fields across all registered tables. A live reference protects the object. Otherwise, record its retirement in `_storage_tombstone`, then delete the storage object. Requests are rate limited and bounded to 30 seconds.
+3. **Remove completed metadata**: Delete the expired row only when each object was successfully deleted, was already absent, or is still represented by a live reference elsewhere. Use the complete `(min_timestamp, id)` primary key.
+
+The database-scoped `StorageMutationGuard` serializes each ingestion chunk's tombstone check and commit with retention's reference check and tombstone insertion. It is released before storage I/O; no SQL transaction spans a storage request. This prevents an ingestion request from creating a new reference between the last-reference check and deletion. It also serializes metadata commit sections across tables, so throughput should be measured with representative batch sizes and storage-location counts.
+
+Before each cycle, retention audits both storage fields in every registered table, including inactive tables. Missing backend or bucket identities block deletion globally, including for native AWS S3, because a legacy default bucket may alias an explicit bucket. For configured backends that require canonical keys (filesystem and custom S3 endpoints), leading, repeated, or trailing slashes, dot components, backslashes, and ambiguous bucket values also block the cycle before metadata changes or deletions. This protects legacy references such as `/a` when an endpoint resolves them to the same object as `a`. Existing keys are never silently rewritten; native AWS S3 keys remain verbatim. The audit uses database predicates rather than loading all records into memory, but it can scan metadata across all tables once per table retention cycle. Account for that database cost when setting scan intervals. Audit results are not cached.
 
 ### Crash Safety via PURGING States
 
 The three-phase process provides crash safety:
 
-- If the coordinator crashes after marking `PURGING` but before storage deletion, the next owner's retention strategy finds all `PURGING` rows and retries from Phase 2.
-- If the coordinator crashes after storage deletion but before row deletion, recovery deletes the orphan row (the storage file is already gone).
-- The `PURGING` state is durable in the database, so no deletion is lost across restarts or HA failover.
+- A crash, cancellation, missing backend, or failed storage request leaves the `PURGING` row for retry by the next cycle or owner.
+- If storage deletion succeeded before a crash, the next retry treats the missing object as success and removes the row.
+- A tombstone is written before issuing a deletion request. Ingestion rejects subsequent references to that retired location, including after its metadata row is gone. **Object names are immutable and must not be reused after retirement.** Tombstones are retained permanently and require storage capacity planning; deleting them manually removes this protection.
+- Storage identity is the exact `(backend name, bucket, object key)` tuple. Every node must map backend names consistently to physical storage. Producers must provide explicit backend and bucket values; unresolved legacy records remain pending instead of relying on implicit defaults. Different names must not alias the same physical storage location. Direct SQL writes that bypass the mutation guard are outside this concurrency protocol.
+- Failed rows do not monopolize the next scan: the scanner pages through pending work and wraps to retry earlier failures.
 
 ### Rate Limiting
 
-Storage deletion is rate-limited to 500 operations per second to avoid overwhelming object storage during bulk expiration events. This is an internal parameter — not exposed to users.
+Storage deletion defaults to 500 operations per second per table coordinator. Set `retention.delete_rate`, `retention.scan_interval_secs`, and `retention.grace_period_secs` in the table configuration to adjust this behavior. These limits are per coordinator, not a cluster-wide storage limit.
 
 ### Extensibility
 
-Retention strategies use a two-level registry pattern (same as storage backends):
-
-1. **Compile-time registration** — each strategy implementation registers itself via `init()` with a type name and factory function.
-2. **Runtime instantiation** — when a coordinator starts, it reads `retention.type` from the `_table_config` config blob and creates the corresponding strategy instance.
-
-Custom strategies can implement throttling, grace periods, or alternative cleanup policies by registering a new type and setting `retention.type` on the table.
+The Rust `RetentionPolicy` trait allows alternate implementations in code. Runtime configuration currently accepts only the built-in default strategy; unsupported strategy names produce an error.
 
 ---
 

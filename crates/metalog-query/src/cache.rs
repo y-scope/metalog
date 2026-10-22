@@ -61,15 +61,12 @@ impl Cache {
 
     /// Inserts or updates a cache entry.
     pub fn set(&mut self, key: String, value: String) {
-        if self.entries.contains_key(&key) {
+        if let Some(entry) = self.entries.get_mut(&key) {
             // Update existing — no order change needed.
-            self.entries.insert(
-                key,
-                CacheEntry {
-                    value,
-                    inserted_at: Instant::now(),
-                },
-            );
+            *entry = CacheEntry {
+                value,
+                inserted_at: Instant::now(),
+            };
             return;
         }
 

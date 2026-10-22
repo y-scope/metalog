@@ -1,43 +1,33 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use metalog_config::{NodeConfig, DEFAULT_PROGRESS_STALL_TIMEOUT};
-use metalog_consolidation::{InFlightSet, Planner, PlannerConfig, Queue, TimeWindowPolicy};
 use metalog_ingestion::BatchingWriter;
-use metalog_metastore::FileRecords;
 use metalog_schema::{ensure_table, execute_ddl_statements, ColumnRegistry, SCHEMA_SQL};
-use metalog_types::file_state::FileState;
+use metalog_storage::Registry as StorageRegistry;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    run_periodic,
-    CoordinatorUnit,
-    Resources,
-    ALIAS_REFRESH_INTERVAL,
-};
+use crate::{run_periodic, CoordinatorUnit, Resources, ALIAS_REFRESH_INTERVAL};
 
-/// Default planner interval (10 seconds).
-const DEFAULT_PLANNER_INTERVAL: Duration = Duration::from_secs(10);
+pub type CoordinatorFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+pub type CoordinatorCallback = Arc<dyn Fn(String) -> CoordinatorFuture + Send + Sync>;
+pub type StallChecker = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// Default stale buffering threshold (60 minutes).
-const DEFAULT_STALE_THRESHOLD: Duration = Duration::from_secs(3600);
-
-/// Top-level node orchestrator.
-///
-/// Community edition: starts coordinators for all configured tables directly.
-/// Enterprise (with HAProvider): coordinators managed by reconciliation loop via
-/// [`Node::ha_callbacks`].
+/// Owns coordinator tasks and shared ingestion resources for one process.
 pub struct Node {
     config: NodeConfig,
     shared: Arc<Resources>,
     writer: Option<Arc<BatchingWriter>>,
+    storage: Option<Arc<StorageRegistry>>,
     token: CancellationToken,
+    tasks: Vec<JoinHandle<()>>,
 }
 
-/// Builder for constructing a Node with optional premium providers.
 pub struct NodeBuilder {
     config: NodeConfig,
     shared: Arc<Resources>,
     writer: Option<Arc<BatchingWriter>>,
+    storage: Option<Arc<StorageRegistry>>,
 }
 
 impl NodeBuilder {
@@ -46,12 +36,17 @@ impl NodeBuilder {
             config,
             shared,
             writer: None,
+            storage: None,
         }
     }
 
-    /// Sets the BatchingWriter (required for ingestion).
     pub fn with_writer(mut self, writer: Arc<BatchingWriter>) -> Self {
         self.writer = Some(writer);
+        self
+    }
+
+    pub fn with_storage(mut self, storage: Arc<StorageRegistry>) -> Self {
+        self.storage = Some(storage);
         self
     }
 
@@ -60,12 +55,18 @@ impl NodeBuilder {
             config: self.config,
             shared: self.shared,
             writer: self.writer,
+            storage: self.storage,
             token: CancellationToken::new(),
+            tasks: Vec::new(),
         }
     }
 }
 
 impl Node {
+    pub fn config(&self) -> &NodeConfig {
+        &self.config
+    }
+
     pub fn shared(&self) -> &Arc<Resources> {
         &self.shared
     }
@@ -74,243 +75,215 @@ impl Node {
         &self.token
     }
 
-    /// Starts the node: ensures schema, starts coordinators for configured tables.
-    ///
-    /// In community edition, call with the full table list. In enterprise (HA) mode,
-    /// call with an empty slice — the reconciliation loop drives table assignment via
-    /// [`Node::ha_callbacks`].
-    pub async fn start(&mut self, tables: &[String]) -> Result<(), NodeError> {
-        // Ensure system tables exist.
-        execute_ddl_statements(&self.shared.db, SCHEMA_SQL).await?;
-        tracing::info!("schema ready");
+    /// Retains node-level tasks, including HA, for graceful shutdown.
+    pub fn track_background_task(&mut self, task: JoinHandle<()>) {
+        self.tasks.push(task);
+    }
 
-        // Start coordinators for each table.
+    /// Ensures schema and starts the supplied table coordinators. HA callers pass
+    /// an empty list and let reconciliation drive the awaitable callbacks.
+    pub async fn start(&mut self, tables: &[String]) -> Result<(), NodeError> {
+        execute_ddl_statements(&self.shared.db, SCHEMA_SQL).await?;
         for table_name in tables {
-            start_coordinator(
+            if let Err(error) = start_coordinator(
                 table_name,
-                &self.config,
                 self.shared.clone(),
                 self.writer.clone(),
+                self.storage.clone(),
                 &self.token,
             )
-            .await?;
+            .await
+            {
+                self.stop().await;
+                return Err(error);
+            }
         }
-
         tracing::info!(tables = tables.len(), "node started");
         Ok(())
     }
 
-    /// Returns the three closures needed to wire HA reconciliation.
-    ///
-    /// - `on_start(table)` — spawns a coordinator for the table (fire-and-forget)
-    /// - `on_stop(table)` — cancels and removes the coordinator
-    /// - `stall_checker(table)` — returns true if the coordinator's [`ProgressTracker`] has
-    ///   exceeded its stall timeout
-    ///
-    /// Pass these directly to [`HAModule::start_reconciliation`].
-    ///
-    /// [`ProgressTracker`]: metalog_coordinator::ProgressTracker
-    pub fn ha_callbacks(
-        &self,
-    ) -> (
-        Arc<dyn Fn(&str) + Send + Sync>,
-        Arc<dyn Fn(&str) + Send + Sync>,
-        Arc<dyn Fn(&str) -> bool + Send + Sync>,
-    ) {
-        let config = Arc::new(self.config.clone());
+    /// Startup/stop completes before HA changes its local running set. Startup
+    /// errors are returned to reconciliation so the claim can be released/retried.
+    pub fn ha_callbacks(&self) -> (CoordinatorCallback, CoordinatorCallback, StallChecker) {
         let shared = self.shared.clone();
         let writer = self.writer.clone();
-        let parent_token = self.token.clone();
-
-        let on_start = {
-            let config = config.clone();
+        let storage = self.storage.clone();
+        let token = self.token.clone();
+        let on_start: CoordinatorCallback = Arc::new(move |table: String| {
             let shared = shared.clone();
             let writer = writer.clone();
-            let token = parent_token.clone();
-            Arc::new(move |table: &str| {
-                let table = table.to_string();
-                let config = config.clone();
-                let shared = shared.clone();
-                let writer = writer.clone();
-                let token = token.clone();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        start_coordinator(&table, &config, shared, writer, &token).await
-                    {
-                        tracing::error!(error = %e, table = %table, "coordinator start failed");
-                    }
-                });
-            }) as Arc<dyn Fn(&str) + Send + Sync>
-        };
-
-        let on_stop = {
+            let storage = storage.clone();
+            let token = token.clone();
+            Box::pin(async move {
+                start_coordinator(&table, shared, writer, storage, &token)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        });
+        let shared = self.shared.clone();
+        let on_stop: CoordinatorCallback = Arc::new(move |table: String| {
             let shared = shared.clone();
-            Arc::new(move |table: &str| {
-                shared.stop_coordinator(table);
-            }) as Arc<dyn Fn(&str) + Send + Sync>
-        };
-
-        let stall_checker = {
-            Arc::new(move |table: &str| -> bool { shared.is_coordinator_stalled(table) })
-                as Arc<dyn Fn(&str) -> bool + Send + Sync>
-        };
-
-        (on_start, on_stop, stall_checker)
+            Box::pin(async move {
+                shared.stop_coordinator(&table).await;
+                Ok(())
+            })
+        });
+        let shared = self.shared.clone();
+        let stalled: StallChecker = Arc::new(move |table| shared.is_coordinator_stalled(table));
+        (on_start, on_stop, stalled)
     }
 
-    /// Stops the node: cancels all coordinator tokens, drains the writer.
+    /// Cancels and joins background work before draining ingestion.
     pub async fn stop(&mut self) {
-        tracing::info!("stopping node");
-        // Cancels all coordinator child tokens (partition maintenance, alias refresh, planner).
         self.token.cancel();
-
-        // Drain the BatchingWriter before exit.
+        for mut handle in self.tasks.drain(..) {
+            if tokio::time::timeout(Duration::from_secs(10), &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+        self.shared.stop_coordinators().await;
         if let Some(writer) = &self.writer {
             writer.stop().await;
         }
-
         tracing::info!("node stopped");
     }
 }
 
-/// Ensures a table is provisioned, creates its column registry, and spawns its background tasks.
-///
-/// The coordinator unit's cancellation token is created as a child of `parent_token` so that
-/// cancelling the node token (on shutdown) propagates to all coordinator tasks.
 async fn start_coordinator(
     table_name: &str,
-    config: &NodeConfig,
     shared: Arc<Resources>,
     writer: Option<Arc<BatchingWriter>>,
+    storage: Option<Arc<StorageRegistry>>,
     parent_token: &CancellationToken,
 ) -> Result<(), NodeError> {
-    // Ensure the table is provisioned.
-    ensure_table(&shared.db, table_name, None).await?;
-
-    // Create column registry.
-    let registry = Arc::new(ColumnRegistry::new(shared.db.clone(), table_name).await?);
-
-    // Cache registry in shared resources (synchronous with parking_lot).
-    shared.set_column_registry(table_name, registry.clone());
-
-    // Register with BatchingWriter if available.
-    if let Some(writer) = &writer {
-        writer.set_registry(table_name, registry.clone()).await;
+    // Serialize startup with stop so duplicate callbacks cannot leak tasks or
+    // replace the registered unit while an earlier instance is still running.
+    let _guard = shared.coordinator_lifecycle.lock().await;
+    if parent_token.is_cancelled() {
+        return Err(NodeError::ShuttingDown);
+    }
+    let existing = shared.coordinator(table_name);
+    if existing.is_none() {
+        ensure_table(&shared.db, table_name, None).await?;
     }
 
-    // Create coordinator unit with a child token so node shutdown cascades.
-    let table_cfg = metalog_metastore::default_table_config();
-    let consolidation_cfg = table_cfg.consolidation.clone();
+    let (config_json,): (Option<String>,) =
+        sqlx::query_as("SELECT CAST(config AS CHAR) FROM _table_config WHERE table_name = ?")
+            .bind(table_name)
+            .fetch_one(&shared.db)
+            .await?;
+    let table_cfg =
+        metalog_metastore::decode_table_config(config_json.as_deref()).map_err(|e| {
+            NodeError::TableConfig {
+                table: table_name.to_string(),
+                message: e.to_string(),
+            }
+        })?;
+    // Do not accept a configured lifecycle until its archive/storage path is
+    // available. Silently replacing these values with defaults loses user intent.
+    if table_cfg.consolidation.enabled {
+        return Err(NodeError::UnsupportedFeature {
+            table: table_name.to_string(),
+            feature: "consolidation requires a configured archive executor",
+        });
+    }
+    if table_cfg.retention.enabled && storage.is_none() {
+        return Err(NodeError::UnsupportedFeature {
+            table: table_name.to_string(),
+            feature: "retention requires configured storage backends",
+        });
+    }
+    if table_cfg.retention.enabled
+        && (!matches!(table_cfg.retention.type_name.as_str(), "" | "default")
+            || table_cfg.retention.scan_interval_secs == 0
+            || table_cfg.retention.scan_interval_secs > i64::MAX as u64 / 1_000_000_000
+            || table_cfg.retention.delete_rate == 0
+            || table_cfg.retention.grace_period_secs > i64::MAX as u64 / 1_000_000_000)
+    {
+        return Err(NodeError::TableConfig {
+            table: table_name.to_string(),
+            message: "retention requires the default strategy, positive scan interval/delete \
+                      rate, and intervals representable in nanoseconds"
+                .into(),
+        });
+    }
+    if let Some(existing) = existing {
+        let encoded = |config: &metalog_types::config::TableConfig| {
+            metalog_metastore::encode_table_config(config).map_err(|error| NodeError::TableConfig {
+                table: table_name.to_string(),
+                message: error.to_string(),
+            })
+        };
+        if encoded(existing.table_config())? == encoded(&table_cfg)? {
+            return Ok(());
+        }
+        tracing::info!(
+            table = table_name,
+            "table configuration changed, restarting coordinator"
+        );
+        shared.remove_coordinator(table_name);
+        existing.stop().await;
+    }
+
+    let registry = Arc::new(ColumnRegistry::new(shared.db.clone(), table_name).await?);
     let unit = Arc::new(CoordinatorUnit::new_with_token(
         table_name,
         table_cfg,
         registry.clone(),
         shared.db.clone(),
-        None, // TODO: pass storage registry when wired
+        storage,
         DEFAULT_PROGRESS_STALL_TIMEOUT,
         parent_token,
     ));
-    let unit_token = unit.token().clone();
-
-    // Store unit so HA watchdog can inspect stall status and stop it.
+    unit.ensure_partitions_ready().await?;
+    if parent_token.is_cancelled() {
+        return Err(NodeError::ShuttingDown);
+    }
+    shared.set_column_registry(table_name, registry.clone());
+    if let Some(writer) = &writer {
+        writer.set_registry(table_name, registry.clone()).await;
+    }
     shared.store_coordinator_unit(table_name, unit.clone());
-
-    // Blocking: ensure daily partitions exist before proceeding.
-    unit.ensure_partitions_ready().await;
-
-    // Spawn partition maintenance + retention scanner (records progress for
-    // HA stall detection).
     unit.spawn_background_tasks();
 
-    // Spawn alias refresh task.
-    let reg = registry.clone();
-    let ar_token = unit_token.clone();
-    tokio::spawn(async move {
-        run_periodic(ar_token, ALIAS_REFRESH_INTERVAL, || async {
-            if let Err(e) = reg.refresh_aliases().await {
-                tracing::warn!(error = %e, "alias refresh failed");
+    let alias_token = unit.token().clone();
+    let progress_unit = unit.clone();
+    unit.spawn_task(async move {
+        run_periodic(alias_token, ALIAS_REFRESH_INTERVAL, || async {
+            if let Err(error) = registry.refresh_aliases().await {
+                tracing::warn!(error = %error, "alias refresh failed");
             }
+            // This loop runs every minute. Hourly partition maintenance has its
+            // own progress deadline, so idle tables do not trip the watchdog.
+            progress_unit.record_progress();
         })
         .await;
     });
-
-    // Spawn consolidation planner if enabled in table config.
-    if consolidation_cfg.enabled {
-        let archive_backend = config.storage.default_backend.clone();
-        let archive_bucket = config
-            .storage
-            .backends
-            .get(&archive_backend)
-            .map(|b| b.bucket.clone())
-            .unwrap_or_default();
-
-        let stale_threshold = if consolidation_cfg.stale_buffering_mins > 0 {
-            Duration::from_secs(consolidation_cfg.stale_buffering_mins as u64 * 60)
-        } else if consolidation_cfg.stale_buffering_mins < 0 {
-            Duration::ZERO
-        } else {
-            DEFAULT_STALE_THRESHOLD
-        };
-
-        let file_recs = Arc::new(FileRecords::new(shared.db.clone(), table_name));
-        let queue = Arc::new(Queue::new(shared.db.clone()));
-        let in_flight = Arc::new(InFlightSet::new());
-        let policy: Arc<dyn metalog_consolidation::Policy> =
-            Arc::new(TimeWindowPolicy::new(Duration::from_secs(3600), 2, 100));
-
-        let planner = Planner::new(PlannerConfig {
-            file_recs,
-            queue,
-            policy,
-            in_flight,
-            table_name: table_name.to_string(),
-            archive_backend,
-            archive_bucket,
-            interval: DEFAULT_PLANNER_INTERVAL,
-            stale_threshold,
-            buffering_state: FileState::IrArchiveBuffering,
-            pending_state: FileState::IrArchiveConsolidationPending,
-        });
-
-        let planner_token = unit_token.clone();
-        tokio::spawn(async move {
-            planner.run(planner_token).await;
-        });
-
-        tracing::info!(table = table_name, "consolidation planner started");
-    }
-
     tracing::info!(table = table_name, "coordinator started");
     Ok(())
 }
 
-/// Errors from node lifecycle operations.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
     #[error("sql: {0}")]
     Sql(#[from] sqlx::Error),
-
     #[error("schema: {0}")]
     Schema(#[from] metalog_schema::EnsureTableError),
-
     #[error("registry: {0}")]
     Registry(#[from] metalog_schema::RegistryError),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn node_builder_compiles() {
-        assert!(std::mem::size_of::<NodeBuilder>() > 0);
-    }
-
-    #[tokio::test]
-    async fn cancellation_token_works() {
-        let token = CancellationToken::new();
-        assert!(!token.is_cancelled());
-        token.cancel();
-        assert!(token.is_cancelled());
-    }
+    #[error("partition: {0}")]
+    Partition(#[from] metalog_schema::PartitionError),
+    #[error("invalid config for table {table}: {message}")]
+    TableConfig { table: String, message: String },
+    #[error("table {table}: {feature}")]
+    UnsupportedFeature {
+        table: String,
+        feature: &'static str,
+    },
+    #[error("node is shutting down")]
+    ShuttingDown,
 }

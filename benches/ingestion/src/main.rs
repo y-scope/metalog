@@ -1,16 +1,14 @@
 //! Ingestion benchmark for metalog.
 //!
-//! Measures gRPC ingestion throughput with optional MariaDB backend.
+//! Measures confirmed gRPC ingestion throughput with disposable MariaDB.
+//! Docker must be available; acknowledgments include the database commit.
 //!
 //! Usage:
-//!   # Channel-only (no DB):
+//!   # Single-record API with MariaDB (testcontainers):
 //!   cargo run -p metalog-bench-ingestion --release
 //!
-//!   # Full pipeline with MariaDB (testcontainers):
-//!   cargo run -p metalog-bench-ingestion --release -- --with-db
-//!
 //!   # Batch API mode (sends records in BatchIngest RPCs):
-//!   cargo run -p metalog-bench-ingestion --release -- --with-db --batch-rpc 500
+//!   cargo run -p metalog-bench-ingestion --release -- --batch-rpc 500
 
 use std::{
     net::SocketAddr,
@@ -26,14 +24,11 @@ use metalog_ingestion::{BatchingWriter, IngestionService};
 use metalog_proto::{
     coordinator::{
         dimension_value,
-        ingest_agg_entry,
         BatchIngestRequest,
         DimEntry,
         DimensionValue,
         FileFields,
         FileInfo,
-        IngestAggEntry,
-        IngestAggType,
         MetadataRecord,
         StringDimension,
     },
@@ -66,9 +61,9 @@ struct Args {
     #[arg(long, default_value_t = 5000)]
     concurrency_per_client: usize,
 
-    /// Use a real MariaDB via testcontainers.
-    #[arg(long)]
-    with_db: bool,
+    /// Compatibility flag: disposable MariaDB is now always used.
+    #[arg(long = "with-db")]
+    _with_db: bool,
 
     /// Batch size for the BatchingWriter.
     #[arg(long, default_value_t = 5_000)]
@@ -106,16 +101,13 @@ async fn main() {
             "Ingest (single)".into()
         }
     );
-    println!("  With DB     : {}", args.with_db);
+    println!("  Database    : disposable MariaDB (confirmed commits)");
     println!("  Table       : {}", args.table);
+    println!("  Payload     : file metadata and dimensions");
     println!("========================================");
     println!();
 
-    if args.with_db {
-        run_with_db(&args).await;
-    } else {
-        run_channel_only(&args).await;
-    }
+    run_with_db(&args).await;
 }
 
 /// Runs benchmark with real MariaDB via testcontainers.
@@ -167,19 +159,9 @@ async fn run_with_db(args: &Args) {
         );
     }
 
-    // Create mysql_async pool for high-throughput UPSERT.
-    let mysql_dsn = format!("mysql://root@127.0.0.1:{port}/test");
-    let mysql_pool = mysql_async::Pool::new(mysql_dsn.as_str());
-
     // Start server with real DB.
-    let (addr, writer) = start_server_with_db(
-        pool.clone(),
-        mysql_pool,
-        registry.clone(),
-        &args.table,
-        args.batch_size,
-    )
-    .await;
+    let (addr, writer) =
+        start_server_with_db(pool.clone(), registry.clone(), &args.table, args.batch_size).await;
 
     // Run benchmark.
     let (accepted, rejected, elapsed) = if args.batch_rpc > 0 {
@@ -215,46 +197,11 @@ async fn run_with_db(args: &Args) {
         .await
         .unwrap();
 
-    print_results(args, accepted, rejected, elapsed, Some(row_count.0));
+    print_results(args, accepted, rejected, elapsed, row_count.0);
+    assert_eq!(row_count.0, accepted, "accepted writes must be committed");
 }
 
-/// Runs benchmark without DB (channel throughput only).
-async fn run_channel_only(args: &Args) {
-    let (addr, _writer) = start_server_no_db(args.batch_size).await;
-
-    let (accepted, rejected, elapsed) = if args.batch_rpc > 0 {
-        run_grpc_batch(
-            addr,
-            &args.table,
-            args.records,
-            args.apps,
-            args.clients,
-            args.concurrency_per_client,
-            args.batch_rpc,
-        )
-        .await
-    } else {
-        run_grpc(
-            addr,
-            &args.table,
-            args.records,
-            args.apps,
-            args.clients,
-            args.concurrency_per_client,
-        )
-        .await
-    };
-
-    print_results(args, accepted, rejected, elapsed, None);
-}
-
-fn print_results(
-    args: &Args,
-    accepted: i64,
-    rejected: i64,
-    elapsed: Duration,
-    db_rows: Option<i64>,
-) {
+fn print_results(args: &Args, accepted: i64, rejected: i64, elapsed: Duration, db_rows: i64) {
     println!();
     println!("========================================");
     println!("  RESULTS");
@@ -263,9 +210,7 @@ fn print_results(
         "  Records     : {} sent, {} accepted, {} rejected",
         args.records, accepted, rejected
     );
-    if let Some(rows) = db_rows {
-        println!("  DB rows     : {rows}");
-    }
+    println!("  DB rows     : {db_rows}");
     println!("  Duration    : {:.1}s", elapsed.as_secs_f64());
     println!(
         "  Throughput  : {:.0} rec/s",
@@ -277,42 +222,17 @@ fn print_results(
 /// Starts gRPC server backed by real MariaDB.
 async fn start_server_with_db(
     pool: MySqlPool,
-    mysql_pool: mysql_async::Pool,
     registry: Arc<metalog_schema::ColumnRegistry>,
     table_name: &str,
     batch_size: usize,
 ) -> (SocketAddr, Arc<BatchingWriter>) {
     let writer = Arc::new(
         BatchingWriter::new(pool, true)
-            .with_mysql_pool(mysql_pool)
             .with_batch_size(batch_size)
             .with_flush_interval(Duration::from_secs(1)),
     );
     writer.set_registry(table_name, registry).await;
 
-    let service = Arc::new(IngestionService::new(writer.clone(), true));
-    let handler = metalog_grpc::IngestionHandler::new(service);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
-        tonic::transport::Server::builder()
-            .add_service(MetadataIngestionServiceServer::new(handler))
-            .serve_with_incoming(incoming)
-            .await
-            .unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    (addr, writer)
-}
-
-/// Starts gRPC server without DB (channel throughput only).
-async fn start_server_no_db(batch_size: usize) -> (SocketAddr, Arc<BatchingWriter>) {
-    let pool = MySqlPool::connect_lazy("mysql://root@localhost/test").unwrap();
-    let writer = Arc::new(BatchingWriter::new(pool, true).with_batch_size(batch_size));
     let service = Arc::new(IngestionService::new(writer.clone(), true));
     let handler = metalog_grpc::IngestionHandler::new(service);
 
@@ -512,7 +432,7 @@ fn build_ingest_request(table: &str, i: usize, app_count: usize) -> IngestReques
     }
 }
 
-/// Builds a MetadataRecord matching the Go benchmark's record format.
+/// Builds the file and dimension metadata supported by the Rust server.
 fn build_record(i: usize, app_count: usize) -> MetadataRecord {
     let app_id = i % app_count;
     let hour_offset = (i % 24) as i64;
@@ -521,7 +441,7 @@ fn build_record(i: usize, app_count: usize) -> MetadataRecord {
     let service = format!("app-{app_id:03}");
     let host = format!("host-{app_id:03}.app-{app_id:03}.us-east-1a");
     let zone = format!("us-east-1{}", (b'a' + (app_id % 4) as u8) as char);
-    let ir_path = format!("s3://ir-bucket/{service}/ir-{i:09}.clp.zst");
+    let ir_path = format!("{service}/ir-{i:09}.clp.zst");
 
     const BASE_TIMESTAMP: i64 = 1_738_368_000_000_000_000;
     const HOUR: i64 = 3_600_000_000_000;
@@ -529,88 +449,53 @@ fn build_record(i: usize, app_count: usize) -> MetadataRecord {
     let max_ts = min_ts + HOUR - 1;
 
     MetadataRecord {
-            file: Some(FileFields {
-                state: "IR_CLOSED".into(),
-                min_timestamp: min_ts,
-                max_timestamp: max_ts,
-                record_count,
-                raw_size_bytes: 0,
-                retention_days: 30,
-                expires_at: 0,
-                file: Some(FileInfo {
-                    file_storage_backend: "s3".into(),
-                    file_bucket: "ir-bucket".into(),
-                    file_path: ir_path,
-                    file_size_bytes: 0,
-                }),
-                archive: None,
+        file: Some(FileFields {
+            state: "IR_CLOSED".into(),
+            min_timestamp: min_ts,
+            max_timestamp: max_ts,
+            record_count,
+            raw_size_bytes: 0,
+            retention_days: 30,
+            expires_at: 0,
+            file: Some(FileInfo {
+                file_storage_backend: "s3".into(),
+                file_bucket: "ir-bucket".into(),
+                file_path: ir_path,
+                file_size_bytes: 0,
             }),
-            dim: vec![
-                DimEntry {
-                    key: "service".into(),
-                    value: Some(DimensionValue {
-                        value: Some(dimension_value::Value::Str(StringDimension {
-                            value: service,
-                            max_length: 128,
-                        })),
-                    }),
-                },
-                DimEntry {
-                    key: "host".into(),
-                    value: Some(DimensionValue {
-                        value: Some(dimension_value::Value::Str(StringDimension {
-                            value: host,
-                            max_length: 128,
-                        })),
-                    }),
-                },
-                DimEntry {
-                    key: "zone".into(),
-                    value: Some(DimensionValue {
-                        value: Some(dimension_value::Value::Str(StringDimension {
-                            value: zone,
-                            max_length: 128,
-                        })),
-                    }),
-                },
-            ],
-            agg: vec![
-                IngestAggEntry {
-                    field: "level".into(),
-                    qualifier: "info".into(),
-                    agg_type: IngestAggType::Gte as i32,
-                    value: Some(ingest_agg_entry::Value::IntVal(record_count as i64)),
-                    alias_column: String::new(),
-                },
-                IngestAggEntry {
-                    field: "level".into(),
-                    qualifier: "warn".into(),
-                    agg_type: IngestAggType::Gte as i32,
-                    value: Some(ingest_agg_entry::Value::IntVal(
-                        (record_count as f64 * 0.05) as i64,
-                    )),
-                    alias_column: String::new(),
-                },
-                IngestAggEntry {
-                    field: "level".into(),
-                    qualifier: "error".into(),
-                    agg_type: IngestAggType::Gte as i32,
-                    value: Some(ingest_agg_entry::Value::IntVal(
-                        (record_count as f64 * 0.02) as i64,
-                    )),
-                    alias_column: String::new(),
-                },
-                IngestAggEntry {
-                    field: "level".into(),
-                    qualifier: "fatal".into(),
-                    agg_type: IngestAggType::Gte as i32,
-                    value: Some(ingest_agg_entry::Value::IntVal(
-                        (record_count as f64 * 0.002) as i64,
-                    )),
-                    alias_column: String::new(),
-                },
-            ],
-            self_describing_kv: vec![],
-            sketch: vec![],
+            archive: None,
+        }),
+        dim: vec![
+            DimEntry {
+                key: "service".into(),
+                value: Some(DimensionValue {
+                    value: Some(dimension_value::Value::Str(StringDimension {
+                        value: service,
+                        max_length: 128,
+                    })),
+                }),
+            },
+            DimEntry {
+                key: "host".into(),
+                value: Some(DimensionValue {
+                    value: Some(dimension_value::Value::Str(StringDimension {
+                        value: host,
+                        max_length: 128,
+                    })),
+                }),
+            },
+            DimEntry {
+                key: "zone".into(),
+                value: Some(DimensionValue {
+                    value: Some(dimension_value::Value::Str(StringDimension {
+                        value: zone,
+                        max_length: 128,
+                    })),
+                }),
+            },
+        ],
+        agg: vec![],
+        self_describing_kv: vec![],
+        sketch: vec![],
     }
 }

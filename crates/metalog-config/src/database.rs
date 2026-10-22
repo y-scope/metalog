@@ -5,6 +5,7 @@ use serde::Deserialize;
 /// Maps to the `database.primary` / `database.replica` sections in node.yaml.
 /// The DSN is constructed at runtime for the MySQL wire protocol driver.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -21,11 +22,11 @@ pub struct DatabaseConfig {
     pub port: u16,
 
     /// Maximum open connections in the pool.
-    #[serde(default = "default_pool_size")]
+    #[serde(default = "default_pool_size", alias = "poolSize")]
     pub pool_size: u32,
 
     /// Minimum idle connections maintained in the pool.
-    #[serde(default = "default_pool_min_idle")]
+    #[serde(default = "default_pool_min_idle", alias = "poolMinIdle")]
     pub pool_min_idle: u32,
 }
 
@@ -63,6 +64,7 @@ impl DatabaseConfig {
 
 /// Contains primary (read-write) and optional replica (read-only) database configs.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseSection {
     pub primary: DatabaseConfig,
     pub replica: Option<DatabaseConfig>,

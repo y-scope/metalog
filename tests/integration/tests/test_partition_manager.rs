@@ -44,9 +44,8 @@ mod tests {
 
         // Verify index exists.
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS \
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'test_idx' \
-             AND INDEX_NAME = 'idx_file_path'",
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() \
+             AND TABLE_NAME = 'test_idx' AND INDEX_NAME = 'idx_file_path'",
         )
         .fetch_one(&pool)
         .await
@@ -57,9 +56,8 @@ mod tests {
         im.drop_index("test_idx", "file_path").await.unwrap();
 
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS \
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'test_idx' \
-             AND INDEX_NAME = 'idx_file_path'",
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() \
+             AND TABLE_NAME = 'test_idx' AND INDEX_NAME = 'idx_file_path'",
         )
         .fetch_one(&pool)
         .await
@@ -83,9 +81,8 @@ mod tests {
 
         // Verify no index was created.
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS \
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'test_idx_invalid' \
-             AND INDEX_NAME LIKE '%DROP%'",
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() \
+             AND TABLE_NAME = 'test_idx_invalid' AND INDEX_NAME LIKE '%DROP%'",
         )
         .fetch_one(&pool)
         .await

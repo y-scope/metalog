@@ -714,3 +714,16 @@ CREATE TABLE IF NOT EXISTS _kafka_assignment (
     FOREIGN KEY (table_name, source_name)
         REFERENCES _kafka_source(table_name, source_name) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+-- Permanent object retirement records. Ingestion and retention coordinate under
+-- a database-scoped advisory lock before checking/adding these tombstones.
+-- Immutable object names must not be reused after retirement. Binary identity
+-- preserves case-sensitive backend, bucket and S3 key semantics.
+CREATE TABLE IF NOT EXISTS _storage_tombstone (
+    backend VARBINARY(128) NOT NULL,
+    bucket VARBINARY(255) NOT NULL,
+    path_hash BINARY(16) NOT NULL,
+    path TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    retired_at BIGINT NOT NULL,
+    PRIMARY KEY (backend, bucket, path_hash)
+) ENGINE=InnoDB;

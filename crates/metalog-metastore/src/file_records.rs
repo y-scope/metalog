@@ -10,20 +10,21 @@ pub struct FileRecords {
     table_name: String,
 }
 
-/// Result of a deletion operation, collecting storage paths for cleanup.
-#[derive(Debug, Default)]
-pub struct DeletionResult {
-    pub ir_paths: Vec<StoragePath>,
-    pub archive_paths: Vec<StoragePath>,
-    pub deleted_count: i64,
-}
-
 /// A storage location (backend + bucket + path) for a file to be deleted.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StoragePath {
     pub backend: String,
     pub bucket: String,
     pub path: String,
+}
+
+/// Durable retention work. A row remains PURGING until every unreferenced object
+/// has been deleted successfully; (min_timestamp, id) is its complete primary key.
+#[derive(Debug, Clone)]
+pub struct PurgingFile {
+    pub id: i64,
+    pub min_timestamp: i64,
+    pub paths: Vec<StoragePath>,
 }
 
 impl FileRecords {
@@ -38,6 +39,60 @@ impl FileRecords {
     /// Returns the table name this repository operates on.
     pub fn table_name(&self) -> &str {
         &self.table_name
+    }
+
+    /// Rejects ambiguous or unresolved legacy locations before retention changes metadata.
+    /// Some object stores normalize path syntax, so an exact-key reference check
+    /// cannot protect aliases. New ingestion rejects these locations; this audit
+    /// covers pre-existing references in both storage fields of every table.
+    pub async fn audit_canonical_storage_locations(
+        &self,
+        backend_names: &[String],
+    ) -> Result<(), sqlx::Error> {
+        let tables: Vec<(String,)> =
+            sqlx::query_as("SELECT table_name FROM _table ORDER BY table_name")
+                .fetch_all(&self.db)
+                .await?;
+        let backend_parameters = vec!["BINARY ?"; backend_names.len()].join(", ");
+        // Bind regex text separately from SQL escaping. Backslash uses LOCATE
+        // because MySQL and MariaDB regex engines differ in escape handling.
+        let key_pattern = "(^/)|(/$)|(//)|((^|/)[.]{1,2}(/|$))";
+        let bucket_pattern = "[/]|^[.]{1,2}$";
+        for (table_name,) in tables {
+            let table = metalog_db::quote_identifier(&table_name);
+            for prefix in ["file", "archive"] {
+                let canonical_backend = if backend_names.is_empty() {
+                    "FALSE".to_owned()
+                } else {
+                    format!("BINARY {prefix}_storage_backend IN ({backend_parameters})")
+                };
+                let sql = format!(
+                    "SELECT EXISTS(SELECT 1 FROM {table} WHERE {prefix}_path IS NOT NULL AND \
+                     OCTET_LENGTH({prefix}_path) > 0 AND ({prefix}_storage_backend IS NULL OR \
+                     {prefix}_storage_backend = '' OR {prefix}_bucket IS NULL OR {prefix}_bucket \
+                     = '' OR ({canonical_backend} AND ({prefix}_bucket REGEXP ? OR \
+                     LOCATE(CHAR(92), {prefix}_bucket) > 0 OR {prefix}_path REGEXP ? OR \
+                     LOCATE(CHAR(92), {prefix}_path) > 0))))"
+                );
+                let mut query = sqlx::query_as::<_, (i64,)>(&sql);
+                for backend in backend_names {
+                    query = query.bind(backend);
+                }
+                let (ambiguous,) = query
+                    .bind(bucket_pattern)
+                    .bind(key_pattern)
+                    .fetch_one(&self.db)
+                    .await?;
+                if ambiguous != 0 {
+                    return Err(sqlx::Error::Protocol(format!(
+                        "retention blocked: {table_name}.{prefix} contains a noncanonical storage \
+                         location or unresolved backend/bucket; resolve legacy aliases before \
+                         enabling deletion"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Finds files in a consolidation-pending state with required dimension/agg
@@ -56,9 +111,9 @@ impl FileRecords {
             "id".to_string(),
             "min_timestamp".to_string(),
             "max_timestamp".to_string(),
-            "file_storage_backend".to_string(),
-            "file_bucket".to_string(),
-            "file_path".to_string(),
+            "CAST(file_storage_backend AS CHAR) AS file_storage_backend".to_string(),
+            "CAST(file_bucket AS CHAR) AS file_bucket".to_string(),
+            "CAST(file_path AS CHAR) AS file_path".to_string(),
         ];
 
         for m in dim_mappings {
@@ -83,12 +138,12 @@ impl FileRecords {
         for row in &rows {
             use sqlx::Row;
             results.push(PendingFile {
-                id: row.get("id"),
-                min_timestamp: row.get("min_timestamp"),
-                max_timestamp: row.get("max_timestamp"),
-                file_storage_backend: row.get("file_storage_backend"),
-                file_bucket: row.get("file_bucket"),
-                file_path: row.get("file_path"),
+                id: row.try_get("id")?,
+                min_timestamp: row.try_get("min_timestamp")?,
+                max_timestamp: row.try_get("max_timestamp")?,
+                file_storage_backend: row.try_get("file_storage_backend")?,
+                file_bucket: row.try_get("file_bucket")?,
+                file_path: row.try_get("file_path")?,
             });
         }
         Ok(results)
@@ -127,6 +182,7 @@ impl FileRecords {
     /// The caller specifies which consolidation-pending state the files are
     /// transitioning from (e.g., `IrArchiveConsolidationPending` or
     /// `FileArchiveConsolidationPending`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn mark_archive_closed(
         &self,
         from_state: FileState,
@@ -178,13 +234,9 @@ impl FileRecords {
         current_nanos: i64,
     ) -> Result<u64, sqlx::Error> {
         let sql = format!(
-            "UPDATE `{}` SET state = CASE \
-             WHEN state IN (?, ?) THEN ? \
-             WHEN state IN (?, ?, ?, ?, ?) THEN ? \
-             ELSE state END \
-             WHERE expires_at > 0 AND expires_at < ? \
-             AND state IN (?, ?, ?, ?, ?, ?, ?) \
-             LIMIT 1000",
+            "UPDATE `{}` SET state = CASE WHEN state IN (?, ?) THEN ? WHEN state IN (?, ?, ?, ?, \
+             ?) THEN ? ELSE state END WHERE expires_at > 0 AND expires_at < ? AND state IN (?, ?, \
+             ?, ?, ?, ?, ?) LIMIT 1000",
             self.table_name,
         );
         let result = sqlx::query(&sql)
@@ -213,86 +265,121 @@ impl FileRecords {
         Ok(result.rows_affected())
     }
 
-    /// Deletes PURGING files and returns their storage paths (retention phase 2).
-    ///
-    /// Uses a transaction to ensure the SELECT and DELETE operate on the same
-    /// row set, preventing TOCTOU races where rows could be deleted without
-    /// their storage paths being returned for cleanup.
-    pub async fn delete_expired_files(
+    /// Reads one page of durable deletion work without deleting its retry state.
+    pub async fn find_purging_files(
         &self,
-        current_nanos: i64,
-    ) -> Result<DeletionResult, sqlx::Error> {
-        let mut conn = self.db.acquire().await?;
-
-        sqlx::query("START TRANSACTION")
-            .execute(&mut *conn)
-            .await?;
-
-        // Select paths within the transaction (CAST needed: ascii_bin → VARBINARY in sqlx).
-        let select_sql = format!(
-            "SELECT id, CAST(file_storage_backend AS CHAR) AS file_storage_backend, \
+        cutoff: i64,
+        after: Option<(i64, i64)>,
+    ) -> Result<Vec<PurgingFile>, sqlx::Error> {
+        use sqlx::Row;
+        let table = metalog_db::quote_identifier(&self.table_name);
+        let cursor = if after.is_some() {
+            "AND (min_timestamp > ? OR (min_timestamp = ? AND id > ?))"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT id, min_timestamp, CAST(file_storage_backend AS CHAR) AS file_backend, \
              CAST(file_bucket AS CHAR) AS file_bucket, CAST(file_path AS CHAR) AS file_path, \
-             CAST(archive_storage_backend AS CHAR) AS archive_storage_backend, \
-             CAST(archive_bucket AS CHAR) AS archive_bucket, CAST(archive_path AS CHAR) AS \
-             archive_path FROM `{}` WHERE state IN (?, ?) AND expires_at > 0 AND expires_at < ? \
-             LIMIT 1000 FOR UPDATE",
-            self.table_name,
+             CAST(archive_storage_backend AS CHAR) AS archive_backend, CAST(archive_bucket AS \
+             CHAR) AS archive_bucket, CAST(archive_path AS CHAR) AS archive_path FROM {table} \
+             WHERE state IN ('IR_PURGING', 'ARCHIVE_PURGING') AND expires_at > 0 AND expires_at < \
+             ? {cursor} ORDER BY min_timestamp, id LIMIT 1000"
         );
-        let rows: Vec<(i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> =
-            sqlx::query_as(&select_sql)
-                .bind(FileState::IrPurging.as_db_str())
-                .bind(FileState::ArchivePurging.as_db_str())
-                .bind(current_nanos)
-                .fetch_all(&mut *conn)
+        let mut query = sqlx::query(&sql).bind(cutoff);
+        if let Some((timestamp, id)) = after {
+            query = query.bind(timestamp).bind(timestamp).bind(id);
+        }
+        let rows = query.fetch_all(&self.db).await?;
+        rows.iter()
+            .map(|row| {
+                let mut paths = Vec::new();
+                for prefix in ["file", "archive"] {
+                    let path: Option<String> = row.try_get(format!("{prefix}_path").as_str())?;
+                    if let Some(path) = path.filter(|path| !path.is_empty()) {
+                        let backend: Option<String> =
+                            row.try_get(format!("{prefix}_backend").as_str())?;
+                        let bucket: Option<String> =
+                            row.try_get(format!("{prefix}_bucket").as_str())?;
+                        let location = StoragePath {
+                            backend: backend.unwrap_or_default(),
+                            bucket: bucket.unwrap_or_default(),
+                            path,
+                        };
+                        if !paths.contains(&location) {
+                            paths.push(location);
+                        }
+                    }
+                }
+                Ok(PurgingFile {
+                    id: row.try_get("id")?,
+                    min_timestamp: row.try_get("min_timestamp")?,
+                    paths,
+                })
+            })
+            .collect()
+    }
+
+    /// Atomically decides retirement relative to ingestion. Returns true only
+    /// after recording a durable tombstone; the guard is released before the
+    /// caller performs storage I/O. Live references in any table prevent retirement.
+    /// Callers must first audit legacy locations for the configured backend policy.
+    pub async fn retire_storage_path(
+        &self,
+        path: &StoragePath,
+        cutoff: i64,
+    ) -> Result<bool, crate::StorageMutationError> {
+        let mut guard = crate::StorageMutationGuard::acquire(&self.db).await?;
+        let tables: Vec<(String,)> =
+            sqlx::query_as("SELECT table_name FROM _table ORDER BY table_name")
+                .fetch_all(guard.connection())
                 .await?;
-
-        if rows.is_empty() {
-            sqlx::query("COMMIT").execute(&mut *conn).await?;
-            return Ok(DeletionResult::default());
-        }
-
-        let mut result = DeletionResult::default();
-        let mut ids = Vec::with_capacity(rows.len());
-        for (id, ir_backend, ir_bucket, ir_path, arch_backend, arch_bucket, arch_path) in &rows {
-            ids.push(*id);
-            if let (Some(backend), Some(bucket), Some(path)) = (ir_backend, ir_bucket, ir_path) {
-                if !path.is_empty() {
-                    result.ir_paths.push(StoragePath {
-                        backend: backend.clone(),
-                        bucket: bucket.clone(),
-                        path: path.clone(),
-                    });
-                }
-            }
-            if let (Some(backend), Some(bucket), Some(path)) =
-                (arch_backend, arch_bucket, arch_path)
-            {
-                if !path.is_empty() {
-                    result.archive_paths.push(StoragePath {
-                        backend: backend.clone(),
-                        bucket: bucket.clone(),
-                        path: path.clone(),
-                    });
-                }
+        for (table_name,) in tables {
+            let table = metalog_db::quote_identifier(&table_name);
+            let sql = format!(
+                "SELECT EXISTS(SELECT 1 FROM {table} WHERE (state NOT IN ('IR_PURGING', \
+                 'ARCHIVE_PURGING') OR expires_at <= 0 OR expires_at >= ?) AND ((file_path_hash = \
+                 UNHEX(MD5(?)) AND BINARY file_storage_backend = BINARY ? AND BINARY file_bucket \
+                 = BINARY ? AND BINARY file_path = BINARY ?) OR (archive_path_hash = \
+                 UNHEX(MD5(?)) AND BINARY archive_storage_backend = BINARY ? AND BINARY \
+                 archive_bucket = BINARY ? AND BINARY archive_path = BINARY ?)))"
+            );
+            let (exists,): (i64,) = sqlx::query_as(&sql)
+                .bind(cutoff)
+                .bind(&path.path)
+                .bind(&path.backend)
+                .bind(&path.bucket)
+                .bind(&path.path)
+                .bind(&path.path)
+                .bind(&path.backend)
+                .bind(&path.bucket)
+                .bind(&path.path)
+                .fetch_one(guard.connection())
+                .await?;
+            if exists != 0 {
+                guard.release().await?;
+                return Ok(false);
             }
         }
+        guard.retire(path).await?;
+        guard.release().await?;
+        Ok(true)
+    }
 
-        // Delete the exact rows we selected (by id, within same transaction).
-        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let delete_sql = format!(
-            "DELETE FROM `{}` WHERE id IN ({placeholders})",
-            self.table_name,
+    /// Removes the durable work only after all required object deletions succeed.
+    pub async fn finish_purge(&self, file: &PurgingFile, cutoff: i64) -> Result<u64, sqlx::Error> {
+        let table = metalog_db::quote_identifier(&self.table_name);
+        let sql = format!(
+            "DELETE FROM {table} WHERE min_timestamp = ? AND id = ? AND state IN ('IR_PURGING', \
+             'ARCHIVE_PURGING') AND expires_at > 0 AND expires_at < ?"
         );
-        let mut query = sqlx::query(&delete_sql);
-        for id in &ids {
-            query = query.bind(id);
-        }
-        let delete_result = query.execute(&mut *conn).await?;
-
-        sqlx::query("COMMIT").execute(&mut *conn).await?;
-
-        result.deleted_count = delete_result.rows_affected() as i64;
-        Ok(result)
+        Ok(sqlx::query(&sql)
+            .bind(file.min_timestamp)
+            .bind(file.id)
+            .bind(cutoff)
+            .execute(&self.db)
+            .await?
+            .rows_affected())
     }
 }
 
@@ -310,14 +397,6 @@ pub struct PendingFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn deletion_result_default() {
-        let r = DeletionResult::default();
-        assert!(r.ir_paths.is_empty());
-        assert!(r.archive_paths.is_empty());
-        assert_eq!(r.deleted_count, 0);
-    }
 
     #[test]
     fn storage_path_fields() {

@@ -51,7 +51,14 @@ impl LivenessLoop {
                     let result = match self.strategy {
                         HAStrategy::Heartbeat => self.registry.send_heartbeat().await,
                         HAStrategy::Lease => {
-                            self.registry.renew_leases(self.lease_ttl.as_nanos() as i64).await
+                            // Membership must include healthy nodes with no assigned tables.
+                            // Table leases determine ownership, not cluster membership.
+                            match self.registry.send_heartbeat().await {
+                                Ok(()) => self.registry.renew_leases(
+                                    self.lease_ttl.as_nanos().min(i64::MAX as u128) as i64,
+                                ).await,
+                                Err(e) => Err(e),
+                            }
                         }
                     };
                     match result {

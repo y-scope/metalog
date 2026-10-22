@@ -19,22 +19,46 @@ impl FilesystemBackend {
 
     /// Constructs a safe path, preventing directory traversal.
     fn safe_path(&self, bucket: &str, key: &str) -> Result<PathBuf, StorageError> {
-        let path = self
-            .base_path
-            .join(bucket)
-            .join(key.strip_prefix('/').unwrap_or(key));
-        // Verify the resolved path is under base_path.
-        let _canonical_base = self
-            .base_path
-            .canonicalize()
-            .unwrap_or(self.base_path.clone());
-        // Note: we can't canonicalize the target path if it doesn't exist yet.
-        // Instead, verify no ".." components.
-        if key.contains("..") {
-            return Err(StorageError::AccessDenied {
-                bucket: bucket.into(),
-                key: key.into(),
-            });
+        use std::path::Component;
+        let denied = || StorageError::AccessDenied {
+            bucket: bucket.into(),
+            key: key.into(),
+        };
+        // Object identity must be one-to-one with metadata/tombstones. Reject
+        // aliases such as /a, a//b, a/./b, or a nested bucket instead of silently
+        // normalizing them to another object's path.
+        if bucket.is_empty()
+            || bucket.contains('/')
+            || bucket.contains('\\')
+            || key
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            || key.contains('\\')
+        {
+            return Err(denied());
+        }
+        let key_path = std::path::Path::new(key);
+        let bucket_path = std::path::Path::new(bucket);
+        if key_path.as_os_str().is_empty()
+            || bucket_path
+                .components()
+                .chain(key_path.components())
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err(denied());
+        }
+        let path = self.base_path.join(bucket_path).join(key_path);
+        // This directory is controlled by the server administrator. Never follow
+        // a symlink in an object path, including the final component.
+        let mut current = self.base_path.clone();
+        for part in bucket_path.components().chain(key_path.components()) {
+            current.push(part);
+            match std::fs::symlink_metadata(&current) {
+                Ok(meta) if meta.file_type().is_symlink() => return Err(denied()),
+                Ok(_) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(e) => return Err(e.into()),
+            }
         }
         Ok(path)
     }
@@ -66,10 +90,23 @@ impl Backend for FilesystemBackend {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        // Write to temp file + rename for crash safety.
-        let tmp = path.with_extension("tmp");
-        tokio::fs::write(&tmp, data).await?;
-        tokio::fs::rename(&tmp, &path).await?;
+        // Unique sibling + atomic replacement avoids cross-request temporary
+        // file collisions. fsync both file and directory before acknowledging.
+        let data = data.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<(), StorageError> {
+            use std::io::Write;
+            let parent = path
+                .parent()
+                .ok_or_else(|| StorageError::Other("missing parent directory".into()))?;
+            let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+            tmp.write_all(&data)?;
+            tmp.as_file().sync_all()?;
+            tmp.persist(&path).map_err(|e| StorageError::Io(e.error))?;
+            std::fs::File::open(parent)?.sync_all()?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StorageError::Other(e.to_string()))??;
         Ok(())
     }
 
@@ -84,7 +121,11 @@ impl Backend for FilesystemBackend {
 
     async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError> {
         let path = self.safe_path(bucket, key)?;
-        Ok(path.exists())
+        match tokio::fs::metadata(path).await {
+            Ok(meta) => Ok(meta.is_file()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -138,5 +179,32 @@ mod tests {
         let backend = FilesystemBackend::new(dir.path().to_str().unwrap());
         let result = backend.get("bucket", "../../../etc/passwd").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn ambiguous_object_identities_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = FilesystemBackend::new(dir.path().to_str().unwrap());
+        for (bucket, key) in [
+            ("bucket", "/a"),
+            ("bucket", "a//b"),
+            ("bucket", "a/./b"),
+            ("bucket/sub", "a"),
+            ("..", "a"),
+        ] {
+            assert!(backend.put(bucket, key, b"data").await.is_err());
+            assert!(backend.delete(bucket, key).await.is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_cannot_escape_the_storage_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("bucket")).unwrap();
+        let backend = FilesystemBackend::new(dir.path().to_str().unwrap());
+        assert!(backend.put("bucket", "a", b"data").await.is_err());
+        assert!(backend.delete("bucket", "a").await.is_err());
     }
 }

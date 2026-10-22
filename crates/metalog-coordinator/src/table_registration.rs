@@ -28,14 +28,89 @@ impl TableRegistration {
     pub async fn register_table(
         &self,
         table_name: &str,
-        _display_name: &str,
+        display_name: &str,
         opts: RegisterTableOpts,
     ) -> Result<bool, TableRegistrationError> {
+        if display_name.chars().count() > 255 {
+            return Err(TableRegistrationError::InvalidConfig(
+                "display_name is too long".into(),
+            ));
+        }
+        if let Some(json) = &opts.config_json {
+            validate_supported_config(json)?;
+        }
         let created = ensure_table(&self.db, table_name, opts.config_json.as_deref())
             .await
             .map_err(TableRegistrationError::Provision)?;
 
+        // Provisioning is already committed and independently restartable. Retry
+        // only this atomic, idempotent display/config patch so `created` retains
+        // its original meaning and retries do not repeat DDL.
+        metalog_db::with_deadlock_retry(3, || async {
+            match self
+                .update_registration(table_name, display_name, opts.config_json.as_deref())
+                .await
+            {
+                Err(TableRegistrationError::Sql(error)) => Err(error),
+                result => Ok(result),
+            }
+        })
+        .await
+        .map_err(TableRegistrationError::Sql)??;
+
         Ok(created)
+    }
+
+    async fn update_registration(
+        &self,
+        table_name: &str,
+        display_name: &str,
+        config_patch: Option<&str>,
+    ) -> Result<(), TableRegistrationError> {
+        let mut tx = self.db.begin().await.map_err(TableRegistrationError::Sql)?;
+        // Lock parent before child, matching provisioning's FK lock order.
+        // Taking _table_config first deadlocks with another node's INSERT IGNORE:
+        // its FK check holds _table S while waiting for our _table_config X lock.
+        if !display_name.is_empty() {
+            sqlx::query("UPDATE _table SET display_name = ? WHERE table_name = ?")
+                .bind(display_name)
+                .bind(table_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(TableRegistrationError::Sql)?;
+        } else {
+            sqlx::query("SELECT table_name FROM _table WHERE table_name = ? FOR UPDATE")
+                .bind(table_name)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(TableRegistrationError::Sql)?;
+        }
+        if let Some(patch) = config_patch.filter(|s| !s.is_empty()) {
+            let stored: Option<String> = sqlx::query_scalar(
+                "SELECT CAST(config AS CHAR) FROM _table_config WHERE table_name = ? FOR UPDATE",
+            )
+            .bind(table_name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(TableRegistrationError::Sql)?;
+            let mut merged: serde_json::Value =
+                serde_json::from_str(stored.as_deref().unwrap_or("{}"))
+                    .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+            let patch = serde_json::from_str(patch)
+                .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+            merge_config(&mut merged, patch);
+            let encoded = merged.to_string();
+            validate_supported_config(&encoded)?;
+            sqlx::query("UPDATE _table_config SET config = ? WHERE table_name = ?")
+                .bind(encoded)
+                .bind(table_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(TableRegistrationError::Sql)?;
+        }
+        tx.commit().await.map_err(TableRegistrationError::Sql)?;
+
+        Ok(())
     }
 
     /// Sets or clears the alias for a dimension or aggregation column.
@@ -128,6 +203,44 @@ impl TableRegistration {
     }
 }
 
+fn merge_config(stored: &mut serde_json::Value, patch: serde_json::Value) {
+    if let (Some(target), Some(patch)) = (stored.as_object_mut(), patch.as_object()) {
+        for (key, value) in patch {
+            merge_config(
+                target.entry(key).or_insert(serde_json::Value::Null),
+                value.clone(),
+            );
+        }
+    } else {
+        *stored = patch;
+    }
+}
+
+fn validate_supported_config(json: &str) -> Result<(), TableRegistrationError> {
+    let cfg = metalog_metastore::decode_table_config(Some(json))
+        .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+    if cfg.consolidation.enabled {
+        return Err(TableRegistrationError::InvalidConfig(
+            "consolidation is not implemented in the Rust server".into(),
+        ));
+    }
+    let r = cfg.retention;
+    if r.enabled
+        && ((!r.type_name.is_empty() && r.type_name != "default")
+            || r.scan_interval_secs == 0
+            || r.scan_interval_secs > i64::MAX as u64 / 1_000_000_000
+            || r.delete_rate == 0
+            || r.grace_period_secs > i64::MAX as u64 / 1_000_000_000)
+    {
+        return Err(TableRegistrationError::InvalidConfig(
+            "retention requires default strategy, positive scan_interval_secs/delete_rate and a \
+             valid grace period"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_registry_table(column_name: &str) -> Result<&'static str, TableRegistrationError> {
     if column_name.starts_with("dim_") {
         Ok("_dim_registry")
@@ -160,6 +273,8 @@ fn validate_alias(alias: &str) -> Result<(), TableRegistrationError> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TableRegistrationError {
+    #[error("invalid table configuration: {0}")]
+    InvalidConfig(String),
     #[error("provision: {0}")]
     Provision(#[source] metalog_schema::EnsureTableError),
 

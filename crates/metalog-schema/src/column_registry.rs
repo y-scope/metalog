@@ -1,7 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use parking_lot::RwLock;
-
 use metalog_metastore::AdvisoryLock;
 use metalog_types::column::{
     DEFAULT_VARCHAR_WIDTH,
@@ -9,6 +7,7 @@ use metalog_types::column::{
     MAX_DIM_SLOTS,
     MIN_VARCHAR_WIDTH,
 };
+use parking_lot::RwLock;
 use sqlx::MySqlPool;
 
 /// Maps physical `dim_fNN` columns to logical dimension keys.
@@ -28,7 +27,6 @@ struct RegistryCache {
     /// Arc-wrapped for O(1) snapshot cloning (pointer bump, not data copy).
     dim_cache: Arc<HashMap<String, String>>,
     dim_entries: Vec<DimRegistryEntry>,
-    next_dim_slot: u32,
 }
 
 /// A single row from `_dim_registry`.
@@ -62,6 +60,9 @@ impl RegistrySnapshot {
 /// Errors from column registry operations.
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
+    #[error("invalid dimension definition: {0}")]
+    InvalidDefinition(String),
+
     #[error("slot exhausted: all {MAX_DIM_SLOTS} dim slots are in use")]
     SlotExhausted,
 
@@ -89,15 +90,16 @@ pub fn validate_dim_base_type(base_type: &str) -> Result<(), RegistryError> {
 impl ColumnRegistry {
     /// Creates a new `ColumnRegistry`, loading all ACTIVE entries from the database.
     pub async fn new(db: MySqlPool, table_name: &str) -> Result<Self, RegistryError> {
+        metalog_db::validate_sql_identifier(table_name)
+            .map_err(|e| RegistryError::InvalidDefinition(e.to_string()))?;
         let entries = load_dim_entries(&db, table_name).await?;
 
         let mut dim_cache = HashMap::new();
-        let mut max_slot: u32 = 0;
 
         for entry in &entries {
             dim_cache.insert(entry.dim_key.clone(), entry.column_name.clone());
-            if let Some(slot) = parse_slot_number(&entry.column_name) {
-                max_slot = max_slot.max(slot);
+            if let Some(alias) = &entry.alias_col {
+                dim_cache.insert(alias.clone(), entry.column_name.clone());
             }
         }
 
@@ -107,7 +109,6 @@ impl ColumnRegistry {
             cache: Arc::new(RwLock::new(RegistryCache {
                 dim_cache: Arc::new(dim_cache),
                 dim_entries: entries,
-                next_dim_slot: max_slot + 1,
             })),
             alloc_lock: tokio::sync::Mutex::new(()),
         })
@@ -150,8 +151,12 @@ impl ColumnRegistry {
     ) -> Result<String, RegistryError> {
         validate_dim_base_type(base_type)?;
 
-        // Fast path: sync read lock.
-        if let Some(col) = self.resolve_dim(dim_key) {
+        if dim_key.is_empty() || dim_key.chars().count() > 1024 || !(0..=16383).contains(&width) {
+            return Err(RegistryError::InvalidDefinition(
+                "invalid dimension key or width".into(),
+            ));
+        }
+        if let Some(col) = self.cached_compatible_dim(dim_key, base_type, width)? {
             return Ok(col);
         }
 
@@ -169,35 +174,69 @@ impl ColumnRegistry {
         let _alloc_guard = self.alloc_lock.lock().await;
 
         // Re-check cache (another task may have allocated while we waited).
-        if let Some(col) = self.resolve_dim(dim_key) {
+        if let Some(col) = self.cached_compatible_dim(dim_key, base_type, width)? {
             return Ok(col);
         }
 
-        let lock_name = format!("metalog_dim_alloc_{}", self.table_name);
-        let mut advisory = AdvisoryLock::acquire(&self.db, &lock_name, 10).await?;
+        let mut advisory =
+            AdvisoryLock::acquire_scoped(&self.db, "dim_alloc", &self.table_name, 10).await?;
 
-        // Re-check DB (another node may have allocated).
-        let fresh_entries = load_dim_entries(&self.db, &self.table_name).await?;
-        let found = fresh_entries
+        // Re-check authoritative rows on the lock connection. Include inactive
+        // slots so they cannot be reused while old files still reference them.
+        let fresh_entries = load_all_dim_entries(advisory.connection(), &self.table_name).await?;
+        if let Some(entry) = fresh_entries
             .iter()
-            .find(|e| e.dim_key == dim_key)
-            .map(|e| e.column_name.clone());
-        if let Some(col_name) = found {
+            .find(|e| e.dim_key == dim_key && e.status == "ACTIVE")
+        {
+            if entry.base_type != base_type {
+                return Err(RegistryError::InvalidDefinition(format!(
+                    "dimension {dim_key} already has type {}",
+                    entry.base_type,
+                )));
+            }
+            let col_name = entry.column_name.clone();
+            if matches!(base_type, "str" | "str_utf8")
+                && width > i32::from(entry.width.unwrap_or(0))
             {
-                let mut cache = self.cache.write();
-                Arc::make_mut(&mut cache.dim_cache)
-                    .insert(dim_key.to_string(), col_name.clone());
-                cache.dim_entries = fresh_entries;
-            } // write guard dropped before await
+                let effective_width = width.max(MIN_VARCHAR_WIDTH);
+                let sql_type = dim_sql_type(base_type, effective_width);
+                let alter = format!(
+                    "ALTER TABLE `{}` MODIFY COLUMN `{col_name}` {sql_type} NULL",
+                    self.table_name
+                );
+                sqlx::query(&alter).execute(advisory.connection()).await?;
+                sqlx::query(
+                    "UPDATE _dim_registry SET width = ? WHERE table_name = ? AND column_name = ?",
+                )
+                .bind(effective_width)
+                .bind(&self.table_name)
+                .bind(&col_name)
+                .execute(advisory.connection())
+                .await?;
+            }
+            let entries = load_dim_entries(advisory.connection(), &self.table_name).await?;
+            self.replace_entries(entries);
             advisory.release().await?;
             return Ok(col_name);
         }
-
-        // Allocate new slot.
-        let slot = {
-            let cache = self.cache.read();
-            cache.next_dim_slot
-        };
+        // ALTER TABLE commits independently of registry INSERT. A crash can
+        // leave an unregistered physical column; never assign that column to
+        // another key/type on retry.
+        let physical_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() \
+             AND TABLE_NAME = ?",
+        )
+        .bind(&self.table_name)
+        .fetch_all(advisory.connection())
+        .await?;
+        let slot = fresh_entries
+            .iter()
+            .map(|e| e.column_name.as_str())
+            .chain(physical_columns.iter().map(String::as_str))
+            .filter_map(parse_slot_number)
+            .max()
+            .unwrap_or(0)
+            + 1;
         if slot > MAX_DIM_SLOTS {
             advisory.release().await?;
             return Err(RegistryError::SlotExhausted);
@@ -212,7 +251,7 @@ impl ColumnRegistry {
             "ALTER TABLE `{}` ADD COLUMN `{col_name}` {sql_type} NULL",
             self.table_name
         );
-        match sqlx::query(&alter).execute(&self.db).await {
+        match sqlx::query(&alter).execute(advisory.connection()).await {
             Ok(_) => {}
             Err(e) if metalog_db::is_duplicate_column(&e) => {}
             Err(e) => {
@@ -233,18 +272,12 @@ impl ColumnRegistry {
         .bind(dim_key)
         .bind(effective_width)
         .bind(now)
-        .execute(&self.db)
+        .execute(advisory.connection())
         .await?;
 
         // Load fresh entries BEFORE acquiring write lock (no await under lock).
-        let updated_entries = load_dim_entries(&self.db, &self.table_name).await?;
-        {
-            let mut cache = self.cache.write();
-            Arc::make_mut(&mut cache.dim_cache)
-                .insert(dim_key.to_string(), col_name.clone());
-            cache.next_dim_slot = slot + 1;
-            cache.dim_entries = updated_entries;
-        }
+        let updated_entries = load_dim_entries(advisory.connection(), &self.table_name).await?;
+        self.replace_entries(updated_entries);
 
         advisory.release().await?;
 
@@ -261,14 +294,43 @@ impl ColumnRegistry {
     /// Re-reads alias columns from the database, evicts invalidated entries.
     pub async fn refresh_aliases(&self) -> Result<(), RegistryError> {
         let fresh = load_dim_entries(&self.db, &self.table_name).await?;
-        let mut new_map = HashMap::with_capacity(fresh.len());
-        for entry in &fresh {
-            new_map.insert(entry.dim_key.clone(), entry.column_name.clone());
+        self.replace_entries(fresh);
+        Ok(())
+    }
+
+    fn replace_entries(&self, entries: Vec<DimRegistryEntry>) {
+        let mut map = HashMap::new();
+        for entry in &entries {
+            map.insert(entry.dim_key.clone(), entry.column_name.clone());
+            if let Some(alias) = &entry.alias_col {
+                map.insert(alias.clone(), entry.column_name.clone());
+            }
         }
         let mut cache = self.cache.write();
-        cache.dim_cache = Arc::new(new_map);
-        cache.dim_entries = fresh;
-        Ok(())
+        cache.dim_cache = Arc::new(map);
+        cache.dim_entries = entries;
+    }
+
+    fn cached_compatible_dim(
+        &self,
+        key: &str,
+        base_type: &str,
+        width: i32,
+    ) -> Result<Option<String>, RegistryError> {
+        let cache = self.cache.read();
+        let Some(entry) = cache.dim_entries.iter().find(|e| e.dim_key == key) else {
+            return Ok(None);
+        };
+        if entry.base_type != base_type {
+            return Err(RegistryError::InvalidDefinition(format!(
+                "dimension {key} already has type {}",
+                entry.base_type
+            )));
+        }
+        if matches!(base_type, "str" | "str_utf8") && width > i32::from(entry.width.unwrap_or(0)) {
+            return Ok(None);
+        }
+        Ok(Some(entry.column_name.clone()))
     }
 }
 
@@ -285,13 +347,26 @@ fn dim_sql_type(base_type: &str, width: i32) -> String {
 }
 
 /// Loads all ACTIVE dim entries from `_dim_registry` for a table.
-async fn load_dim_entries(
-    db: &MySqlPool,
+async fn load_dim_entries<'e, E: sqlx::Executor<'e, Database = sqlx::MySql>>(
+    db: E,
     table_name: &str,
 ) -> Result<Vec<DimRegistryEntry>, sqlx::Error> {
     sqlx::query_as::<_, DimRegistryEntry>(
         "SELECT table_name, column_name, base_type, dim_key, alias_column, state, width FROM \
          _dim_registry WHERE table_name = ? AND state = 'ACTIVE' ORDER BY column_name",
+    )
+    .bind(table_name)
+    .fetch_all(db)
+    .await
+}
+
+async fn load_all_dim_entries(
+    db: &mut sqlx::MySqlConnection,
+    table_name: &str,
+) -> Result<Vec<DimRegistryEntry>, sqlx::Error> {
+    sqlx::query_as::<_, DimRegistryEntry>(
+        "SELECT table_name, column_name, base_type, dim_key, alias_column, state, width FROM \
+         _dim_registry WHERE table_name = ? ORDER BY column_name",
     )
     .bind(table_name)
     .fetch_all(db)

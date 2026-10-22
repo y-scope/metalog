@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use metalog_it::helpers::setup_db_with_table;
     use metalog_query::SplitQueryEngine;
     use metalog_schema::ColumnRegistry;
@@ -12,17 +10,6 @@ mod tests {
         sqlx::query(&format!(
             "INSERT INTO `{table}` (min_timestamp, max_timestamp, state, record_count, \
              retention_days, expires_at) VALUES ({min_ts}, {max_ts}, '{state}', 1, 30, 0)"
-        ))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    async fn insert_archive(pool: &MySqlPool, table: &str, path: &str, min_ts: i64, max_ts: i64) {
-        sqlx::query(&format!(
-            "INSERT INTO `{table}` (min_timestamp, max_timestamp, state, archive_path, \
-             record_count, retention_days, expires_at) \
-             VALUES ({min_ts}, {max_ts}, 'ARCHIVE_CLOSED', '{path}', 10, 30, 0)"
         ))
         .execute(pool)
         .await
@@ -162,7 +149,9 @@ mod tests {
             let last = results.last().unwrap();
             let last_ts = last["min_timestamp"].as_i64().unwrap();
             let last_id = last["id"].as_i64().unwrap();
-            cursor = format!("(min_timestamp > {last_ts}) OR (min_timestamp = {last_ts} AND id > {last_id})");
+            cursor = format!(
+                "(min_timestamp > {last_ts}) OR (min_timestamp = {last_ts} AND id > {last_id})"
+            );
 
             if results.len() < page_size as usize {
                 break;
@@ -209,14 +198,20 @@ mod tests {
         let (pool, _c) = setup_db_with_table("test_qf_dim").await;
 
         // Allocate a dim slot for "env" → should become dim_f01.
-        let registry = ColumnRegistry::new(pool.clone(), "test_qf_dim").await.unwrap();
-        let col = registry.resolve_or_allocate_dim("env", "str", 64).await.unwrap();
+        let registry = ColumnRegistry::new(pool.clone(), "test_qf_dim")
+            .await
+            .unwrap();
+        let col = registry
+            .resolve_or_allocate_dim("env", "str", 64)
+            .await
+            .unwrap();
         assert_eq!(col, "dim_f01");
 
         // Insert rows with different env values via the physical column.
         sqlx::query(
             "INSERT INTO `test_qf_dim` (min_timestamp, max_timestamp, state, record_count, \
-             retention_days, expires_at, dim_f01) VALUES (1000, 2000, 'IR_BUFFERING', 1, 30, 0, 'prod')",
+             retention_days, expires_at, dim_f01) VALUES (1000, 2000, 'IR_BUFFERING', 1, 30, 0, \
+             'prod')",
         )
         .execute(&pool)
         .await
@@ -224,7 +219,8 @@ mod tests {
 
         sqlx::query(
             "INSERT INTO `test_qf_dim` (min_timestamp, max_timestamp, state, record_count, \
-             retention_days, expires_at, dim_f01) VALUES (3000, 4000, 'IR_BUFFERING', 1, 30, 0, 'staging')",
+             retention_days, expires_at, dim_f01) VALUES (3000, 4000, 'IR_BUFFERING', 1, 30, 0, \
+             'staging')",
         )
         .execute(&pool)
         .await

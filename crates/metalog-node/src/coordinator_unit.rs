@@ -1,13 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use metalog_coordinator::ProgressTracker;
 use metalog_logutil::FailureLogger;
 use metalog_metastore::{FileRecords, TableConfig};
-use metalog_retention::{RetentionPolicy, RetentionModule};
+use metalog_retention::{RetentionModule, RetentionPolicy};
 use metalog_schema::{ColumnRegistry, PartitionManager};
 use metalog_storage::Registry as StorageRegistry;
 use metalog_timeutil::NANOS_PER_SECOND;
+use parking_lot::Mutex;
 use sqlx::MySqlPool;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Partition maintenance interval (1 hour).
@@ -32,7 +34,9 @@ pub struct CoordinatorUnit {
     storage: Option<Arc<StorageRegistry>>,
     _registry: Arc<ColumnRegistry>,
     progress: Arc<ProgressTracker>,
+    partition_progress: ProgressTracker,
     token: CancellationToken,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl CoordinatorUnit {
@@ -64,7 +68,11 @@ impl CoordinatorUnit {
             storage,
             _registry: registry,
             progress: Arc::new(ProgressTracker::new(stall_timeout)),
+            partition_progress: ProgressTracker::new(
+                PARTITION_MAINTENANCE_INTERVAL + stall_timeout,
+            ),
             token: CancellationToken::new(),
+            tasks: Mutex::new(Vec::new()),
         }
     }
 
@@ -100,7 +108,11 @@ impl CoordinatorUnit {
             storage,
             _registry: registry,
             progress: Arc::new(ProgressTracker::new(stall_timeout)),
+            partition_progress: ProgressTracker::new(
+                PARTITION_MAINTENANCE_INTERVAL + stall_timeout,
+            ),
             token: parent_token.child_token(),
+            tasks: Mutex::new(Vec::new()),
         }
     }
 
@@ -116,7 +128,7 @@ impl CoordinatorUnit {
 
     /// Returns true if the coordinator has stalled.
     pub fn is_stalled(&self) -> bool {
-        self.progress.is_stalled()
+        self.progress.is_stalled() || self.partition_progress.is_stalled()
     }
 
     /// Returns the cancellation token for this unit.
@@ -130,9 +142,24 @@ impl CoordinatorUnit {
     }
 
     /// Stops the coordinator by cancelling its token.
-    pub fn stop(&self) {
+    pub async fn stop(&self) {
         tracing::info!(table = %self.table_name, "stopping coordinator unit");
         self.token.cancel();
+        let tasks = std::mem::take(&mut *self.tasks.lock());
+        for mut handle in tasks {
+            if tokio::time::timeout(Duration::from_secs(10), &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+    }
+
+    /// Keeps each task owned by the unit so stop waits for cancellation to finish.
+    pub fn spawn_task(&self, future: impl Future<Output = ()> + Send + 'static) {
+        self.tasks.lock().push(tokio::spawn(future));
     }
 
     /// Blocking startup: ensures daily partitions exist before returning.
@@ -140,24 +167,12 @@ impl CoordinatorUnit {
     /// Must be called before spawning background tasks. Blocks until the
     /// table has daily partitions for the next `lookahead_days` — either
     /// created here or already created by another node.
-    pub async fn ensure_partitions_ready(&self) {
-        match self.partition.ensure_lookahead_partitions().await {
-            Ok(created) => {
-                tracing::info!(
-                    table = %self.table_name,
-                    created,
-                    "partitions ready"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    table = %self.table_name,
-                    error = %e,
-                    "startup partition creation failed, will retry in background"
-                );
-            }
-        }
+    pub async fn ensure_partitions_ready(&self) -> Result<(), metalog_schema::PartitionError> {
+        let created = self.partition.ensure_lookahead_partitions().await?;
+        tracing::info!(table = %self.table_name, created, "partitions ready");
         self.progress.record_progress();
+        self.partition_progress.record_progress();
+        Ok(())
     }
 
     /// Runs the partition maintenance cycle once.
@@ -169,7 +184,7 @@ impl CoordinatorUnit {
                 "partition maintenance failed"
             );
         }
-        self.progress.record_progress();
+        self.partition_progress.record_progress();
     }
 
     /// Runs one retention cycle using the policy trait.
@@ -178,8 +193,8 @@ impl CoordinatorUnit {
             return;
         };
         let file_recs = FileRecords::new(self.db.clone(), &self.table_name);
-        let grace_period_nanos = (self.table_cfg.retention.grace_period_secs as i64)
-            .saturating_mul(NANOS_PER_SECOND);
+        let grace_period_nanos =
+            (self.table_cfg.retention.grace_period_secs as i64).saturating_mul(NANOS_PER_SECOND);
         match retention
             .run_once(
                 &file_recs,
@@ -212,7 +227,7 @@ impl CoordinatorUnit {
         // Partition maintenance (hourly).
         let pm_token = token.clone();
         let pm_unit = Arc::clone(&unit);
-        tokio::spawn(async move {
+        self.spawn_task(async move {
             run_periodic(pm_token, PARTITION_MAINTENANCE_INTERVAL, || {
                 let u = Arc::clone(&pm_unit);
                 async move { u.run_partition_maintenance().await }
@@ -224,10 +239,9 @@ impl CoordinatorUnit {
         if self.retention.is_some() {
             let ret_unit = Arc::clone(&unit);
             let ret_token = token.clone();
-            let scan_interval =
-                Duration::from_secs(self.table_cfg.retention.scan_interval_secs);
+            let scan_interval = Duration::from_secs(self.table_cfg.retention.scan_interval_secs);
             let fl = Arc::new(FailureLogger::new(Duration::from_secs(60)));
-            tokio::spawn(async move {
+            self.spawn_task(async move {
                 run_periodic(ret_token, scan_interval, move || {
                     let u = Arc::clone(&ret_unit);
                     let fl = Arc::clone(&fl);
@@ -246,8 +260,7 @@ impl CoordinatorUnit {
 pub async fn run_periodic<F, Fut>(token: CancellationToken, interval: Duration, f: F)
 where
     F: Fn() -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
+    Fut: std::future::Future<Output = ()>, {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Skip first immediate tick.
@@ -256,7 +269,12 @@ where
     loop {
         tokio::select! {
             _ = token.cancelled() => return,
-            _ = ticker.tick() => f().await,
+            _ = ticker.tick() => {
+                tokio::select! {
+                    _ = token.cancelled() => return,
+                    _ = f() => {},
+                }
+            },
         }
     }
 }

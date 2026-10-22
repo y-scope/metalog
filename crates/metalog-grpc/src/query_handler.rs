@@ -1,68 +1,46 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use metalog_db::validate_sql_identifier;
 use metalog_proto::query::{
+    cursor_value,
     split_query_service_server::SplitQueryService,
+    CursorValue,
     FileInfo,
+    KeysetCursor,
     QueryStats,
     Split,
     StreamSplitsRequest,
     StreamSplitsResponse,
 };
-use metalog_db::validate_sql_identifier;
 use metalog_query::{
-    rewrite_filter_columns, validate_filter_expression, OrderBySpec, SplitQueryEngine, SplitRow,
+    resolve_column_ref,
+    resolve_projection_columns,
+    rewrite_filter_columns,
+    OrderBySpec,
+    SplitQueryEngine,
+    SplitRow,
+    QUERY_PAGE_SIZE,
 };
 use metalog_schema::ColumnRegistry;
+use serde_json::Value;
 use sqlx::MySqlPool;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-/// gRPC handler for the SplitQueryService (StreamSplits).
-///
-/// Holds a lazy-loaded registry cache keyed by table name so that
-/// `__DIM.<key>` references in filter expressions can be resolved to
-/// physical column names (e.g. `dim_f01`) before the query reaches the DB.
 pub struct QueryHandler {
     engine: Arc<SplitQueryEngine>,
     db: MySqlPool,
-    registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
 }
 
 impl QueryHandler {
     pub fn new(engine: Arc<SplitQueryEngine>, db: MySqlPool) -> Self {
-        Self {
-            engine,
-            db,
-            registries: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { engine, db }
     }
+}
 
-    /// Returns the `ColumnRegistry` for `table_name`, loading it from the DB
-    /// on the first call and caching it for subsequent ones.
-    async fn get_or_load_registry(
-        &self,
-        table_name: &str,
-    ) -> Result<Arc<ColumnRegistry>, Status> {
-        // Fast path: registry already cached.
-        {
-            let cache = self.registries.read().await;
-            if let Some(reg) = cache.get(table_name) {
-                return Ok(Arc::clone(reg));
-            }
-        }
-
-        // Slow path: load from DB and cache.
-        let registry = ColumnRegistry::new(self.db.clone(), table_name)
-            .await
-            .map_err(|e| Status::internal(format!("load registry for {table_name}: {e}")))?;
-        let registry = Arc::new(registry);
-        self.registries
-            .write()
-            .await
-            .insert(table_name.to_string(), Arc::clone(&registry));
-        Ok(registry)
-    }
+fn invalid(error: impl std::fmt::Display) -> Status {
+    Status::invalid_argument(error.to_string())
 }
 
 #[tonic::async_trait]
@@ -74,286 +52,305 @@ impl SplitQueryService for QueryHandler {
         request: Request<StreamSplitsRequest>,
     ) -> Result<Response<Self::StreamSplitsStream>, Status> {
         let req = request.into_inner();
-
-        // Validate required fields.
-        if req.table.is_empty() {
-            return Err(Status::invalid_argument("table is required"));
-        }
+        validate_sql_identifier(&req.table).map_err(invalid)?;
         if req.order_by.is_empty() {
-            return Err(Status::invalid_argument("order_by is required"));
+            return Err(invalid("order_by is required"));
+        }
+        if req.limit < 0 || req.stream_idle_timeout_ms < 0 {
+            return Err(invalid(
+                "limit and stream_idle_timeout_ms must be nonnegative",
+            ));
+        }
+        if !req.sketch_expression.is_empty() {
+            return Err(Status::unimplemented("sketch filtering is not implemented"));
+        }
+        if !req.group_by.is_empty() && req.cursor.is_some() {
+            return Err(invalid("group_by and cursor are mutually exclusive"));
         }
 
-        // Validate filter expression (raw, before __DIM rewrite).
-        if !req.filter_expression.is_empty() {
-            validate_filter_expression(&req.filter_expression)
-                .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        }
-
-        // Rewrite __DIM.<key> references to physical column names.
-        // Load the registry for this table only when the filter contains __DIM references.
-        let filter = if req.filter_expression.contains("__DIM.") {
-            let registry = self.get_or_load_registry(&req.table).await?;
-            rewrite_filter_columns(&req.filter_expression, Some(&registry))
-                .map_err(|e| Status::invalid_argument(format!("filter column resolution: {e}")))?
-        } else {
-            req.filter_expression.clone()
-        };
-
-        // Extract and validate group_by columns.
-        let group_by = req.group_by.clone();
-        for col in &group_by {
-            validate_sql_identifier(col)
-                .map_err(|e| Status::invalid_argument(format!("invalid group_by column: {e}")))?;
-        }
-
-        // Build ORDER BY specs.
-        let order_by: Vec<OrderBySpec> = req
+        // Read a consistent registry per request. An independently cached registry
+        // would miss dimensions and aliases created by another node indefinitely.
+        let registry = ColumnRegistry::new(self.db.clone(), &req.table)
+            .await
+            .map_err(|e| Status::internal(format!("load column registry: {e}")))?;
+        let filter =
+            rewrite_filter_columns(&req.filter_expression, Some(&registry)).map_err(invalid)?;
+        let mut columns =
+            resolve_projection_columns(&req.projection, Some(&registry)).map_err(invalid)?;
+        let group_by = req
+            .group_by
+            .iter()
+            .map(|c| resolve_column_ref(c, Some(&registry)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
+        let order_by = req
             .order_by
             .iter()
-            .map(|ob| OrderBySpec {
-                column: ob.column.clone(),
-                desc: ob.order == metalog_proto::query::Order::Desc as i32,
+            .map(|order| {
+                if !matches!(order.order, 0..=2) {
+                    return Err(invalid("unknown sort direction"));
+                }
+                Ok(OrderBySpec {
+                    column: resolve_column_ref(&order.column, Some(&registry)).map_err(invalid)?,
+                    desc: order.order == 2,
+                })
             })
-            .collect();
-
-        // Validate sort columns.
+            .collect::<Result<Vec<_>, Status>>()?;
         SplitQueryEngine::validate_sort_columns(
             &order_by,
             req.allow_unindexed_sort || !group_by.is_empty(),
         )
-        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        .map_err(invalid)?;
+        let mut seen_orders = std::collections::HashSet::new();
+        if order_by.iter().any(|o| !seen_orders.insert(&o.column)) {
+            return Err(invalid("duplicate sort column"));
+        }
 
-        // Build ORDER BY clauses. When group_by is set, prepend group columns so
-        // rows with the same group key are consecutive (streaming dedup).
         let order_clauses = if group_by.is_empty() {
-            SplitQueryEngine::build_order_clauses(&order_by)
-        } else {
-            let mut clauses: Vec<String> = group_by
-                .iter()
-                .map(|c| format!("{} ASC", metalog_db::quote_identifier(c)))
-                .collect();
-            for ob in &order_by {
-                let dir = if ob.desc { "DESC" } else { "ASC" };
-                let clause = format!("{} {dir}", metalog_db::quote_identifier(&ob.column));
-                if !clauses.contains(&clause) {
-                    clauses.push(clause);
+            // System fields preserve the Go API contract, including when clients
+            // project only dimensions. Sort keys and id are needed for paging.
+            if !columns.is_empty() {
+                for col in ["id", "min_timestamp", "max_timestamp", "state"]
+                    .into_iter()
+                    .chain(order_by.iter().map(|o| o.column.as_str()))
+                {
+                    if !columns.iter().any(|c| c == col) {
+                        columns.push(col.into());
+                    }
                 }
             }
-            // Add id tiebreaker for keyset pagination.
-            clauses.push("`id` ASC".to_string());
-            clauses
-        };
-
-        // Build keyset WHERE from cursor.
-        let keyset_where = if let Some(ref cursor) = req.cursor {
-            let cursor_values: Vec<String> = cursor
-                .values
+            SplitQueryEngine::build_order_clauses(&order_by)
+        } else {
+            let projected: Vec<_> = columns
                 .iter()
-                .map(|cv| match &cv.value {
-                    Some(metalog_proto::query::cursor_value::Value::IntVal(v)) => v.to_string(),
-                    Some(metalog_proto::query::cursor_value::Value::FloatVal(v)) => v.to_string(),
-                    Some(metalog_proto::query::cursor_value::Value::StrVal(v)) => v.clone(),
-                    None => String::new(),
+                .map(|c| {
+                    if c == "COUNT(*)" {
+                        "record_count"
+                    } else {
+                        SplitQueryEngine::extract_column_name(c)
+                    }
                 })
                 .collect();
-            SplitQueryEngine::build_keyset_where(&order_by, &cursor_values, cursor.id)
-        } else {
-            String::new()
+            if order_by
+                .iter()
+                .any(|o| !projected.contains(&o.column.as_str()) && !group_by.contains(&o.column))
+            {
+                return Err(invalid(
+                    "grouped sort columns must be projected aggregates or group keys",
+                ));
+            }
+            let mut clauses: Vec<_> = order_by
+                .iter()
+                .map(|o| format!("`{}` {}", o.column, if o.desc { "DESC" } else { "ASC" }))
+                .collect();
+            for col in &group_by {
+                if !order_by.iter().any(|o| &o.column == col) {
+                    clauses.push(format!("`{col}` ASC"));
+                }
+            }
+            clauses
         };
-
-        let columns = req.projection.clone();
-        let table = req.table.clone();
-        let limit = req.limit;
-
-        let engine = self.engine.clone();
-
-        // Parse aggregation specs from projection when group_by is active.
-        let agg_specs: Vec<(String, Option<String>)> = columns
-            .iter()
-            .map(|c| {
-                let col_name = SplitQueryEngine::extract_column_name(c).to_string();
-                let func = SplitQueryEngine::parse_aggregate_func(c);
-                (col_name, func)
-            })
+        SplitQueryEngine::projection_sql(&columns, &group_by).map_err(invalid)?;
+        let mut keyset_where = match &req.cursor {
+            Some(cursor) => {
+                let values = cursor
+                    .values
+                    .iter()
+                    .map(proto_cursor_value)
+                    .collect::<Result<Vec<_>, _>>()?;
+                SplitQueryEngine::build_typed_keyset_where(&order_by, &values, cursor.id)
+                    .map_err(invalid)?
+            }
+            None => String::new(),
+        };
+        let dimension_names: HashMap<_, _> = registry
+            .all_dim_entries()
+            .into_iter()
+            .map(|entry| (entry.column_name, entry.dim_key))
             .collect();
-
-        // Stream results via channel.
+        let timeout = Duration::from_millis(if req.stream_idle_timeout_ms == 0 {
+            60_000
+        } else {
+            req.stream_idle_timeout_ms as u64
+        });
+        let engine = self.engine.clone();
         let (tx, rx) = mpsc::channel(128);
 
         tokio::spawn(async move {
-            let mut sequence = 0i32;
-            let splits_scanned;
-
-            match engine
-                .execute_page(
-                    &table,
-                    &columns,
-                    &filter,
-                    &order_clauses,
-                    &keyset_where,
-                    limit,
-                    &group_by,
+            let result: Result<(), Status> = async {
+                let mut matched = 0i64;
+                let mut scanned = 0i64;
+                let mut last_cursor = None;
+                let truncated;
+                let mut offset = 0u64;
+                loop {
+                    let remaining = if req.limit == 0 {
+                        i64::MAX
+                    } else {
+                        i64::from(req.limit) - matched
+                    };
+                    // One lookahead row identifies truncation without losing it: the
+                    // next page always starts after the last row actually emitted.
+                    let fetch_limit =
+                        i64::from(QUERY_PAGE_SIZE).min(remaining.saturating_add(1)) as i32;
+                    let query = engine.execute_page_offset(
+                        &req.table,
+                        &columns,
+                        &filter,
+                        &order_clauses,
+                        &keyset_where,
+                        fetch_limit,
+                        &group_by,
+                        offset,
+                    );
+                    let rows = tokio::select! {
+                        _ = tx.closed() => return Ok(()),
+                        result = tokio::time::timeout(timeout, query) => result
+                            .map_err(|_| Status::deadline_exceeded("query page timeout"))?
+                            .map_err(|e| Status::internal(e.to_string()))?,
+                    };
+                    scanned += rows.len() as i64;
+                    let emit = rows.len().min(remaining as usize);
+                    let page_truncated = rows.len() > emit;
+                    for row in &rows[..emit] {
+                        matched += 1;
+                        if matched > i64::from(i32::MAX) {
+                            return Err(Status::out_of_range(
+                                "stream sequence exceeds protocol range",
+                            ));
+                        }
+                        if group_by.is_empty() {
+                            last_cursor = Some(row_cursor(row, &order_by)?);
+                        }
+                        let mut split = row_to_split(row);
+                        split.dimensions = split
+                            .dimensions
+                            .into_iter()
+                            .map(|(physical, value)| {
+                                (
+                                    dimension_names.get(&physical).cloned().unwrap_or(physical),
+                                    value,
+                                )
+                            })
+                            .collect();
+                        let response = StreamSplitsResponse {
+                            split: Some(split),
+                            sequence: matched as i32,
+                            stats: None,
+                            done: false,
+                            cursor: if req.include_cursor {
+                                last_cursor.clone()
+                            } else {
+                                None
+                            },
+                        };
+                        send_response(&tx, response, timeout).await?;
+                    }
+                    if page_truncated || rows.len() < fetch_limit as usize {
+                        truncated = page_truncated;
+                        break;
+                    }
+                    if group_by.is_empty() {
+                        let cursor = last_cursor
+                            .as_ref()
+                            .ok_or_else(|| Status::internal("missing page cursor"))?;
+                        let values = cursor
+                            .values
+                            .iter()
+                            .map(proto_cursor_value)
+                            .collect::<Result<Vec<_>, _>>()?;
+                        keyset_where = SplitQueryEngine::build_typed_keyset_where(
+                            &order_by, &values, cursor.id,
+                        )
+                        .map_err(invalid)?;
+                    } else {
+                        offset += emit as u64;
+                    }
+                }
+                send_response(
+                    &tx,
+                    StreamSplitsResponse {
+                        split: None,
+                        sequence: (matched + 1).min(i64::from(i32::MAX)) as i32,
+                        stats: Some(QueryStats {
+                            splits_scanned: scanned,
+                            splits_matched: matched,
+                            truncated,
+                        }),
+                        done: true,
+                        cursor: if req.include_cursor {
+                            last_cursor
+                        } else {
+                            None
+                        },
+                    },
+                    timeout,
                 )
                 .await
-            {
-                Ok(rows) => {
-                    let truncated = limit > 0 && rows.len() as i32 > limit;
-                    let result_rows = if truncated {
-                        &rows[..limit as usize]
-                    } else {
-                        &rows
-                    };
-
-                    splits_scanned = rows.len() as i64;
-
-                    if group_by.is_empty() {
-                        // No grouping — emit each row directly.
-                        for row in result_rows {
-                            sequence += 1;
-                            let split = row_to_split(row);
-                            let resp = StreamSplitsResponse {
-                                split: Some(split),
-                                sequence,
-                                stats: None,
-                                done: false,
-                                cursor: None,
-                            };
-                            if tx.send(Ok(resp)).await.is_err() {
-                                return;
-                            }
-                        }
-                    } else {
-                        // Streaming merge: consecutive rows with the same group key are merged.
-                        let mut current_group: Option<SplitRow> = None;
-                        let mut current_key = String::new();
-
-                        for row in result_rows {
-                            let row_key = group_by
-                                .iter()
-                                .map(|g| {
-                                    row.get(g.as_str())
-                                        .map(|v| v.to_string())
-                                        .unwrap_or_default()
-                                })
-                                .collect::<Vec<_>>()
-                                .join("|");
-
-                            if row_key != current_key {
-                                // Emit previous group.
-                                if let Some(group) = current_group.take() {
-                                    sequence += 1;
-                                    let split = row_to_split(&group);
-                                    if tx
-                                        .send(Ok(StreamSplitsResponse {
-                                            split: Some(split),
-                                            sequence,
-                                            stats: None,
-                                            done: false,
-                                            cursor: None,
-                                        }))
-                                        .await
-                                        .is_err()
-                                    {
-                                        return;
-                                    }
-                                }
-                                current_key = row_key;
-                                current_group = Some(row.clone());
-                            } else {
-                                // Merge into current group.
-                                if let Some(ref mut group) = current_group {
-                                    merge_row_into_group(group, row, &agg_specs);
-                                }
-                            }
-                        }
-
-                        // Emit last group.
-                        if let Some(group) = current_group {
-                            sequence += 1;
-                            let split = row_to_split(&group);
-                            let _ = tx
-                                .send(Ok(StreamSplitsResponse {
-                                    split: Some(split),
-                                    sequence,
-                                    stats: None,
-                                    done: false,
-                                    cursor: None,
-                                }))
-                                .await;
-                        }
-                    }
-
-                    // Final response with stats.
-                    let _ = tx
-                        .send(Ok(StreamSplitsResponse {
-                            split: None,
-                            sequence: sequence + 1,
-                            stats: Some(QueryStats {
-                                splits_scanned,
-                                splits_matched: sequence as i64,
-                                truncated,
-                            }),
-                            done: true,
-                            cursor: None,
-                        }))
-                        .await;
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(Status::internal(e.to_string()))).await;
-                }
+            }
+            .await;
+            if let Err(status) = result {
+                let _ = tokio::time::timeout(timeout, tx.send(Err(status))).await;
             }
         });
-
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
-/// Merges a new row into an existing group, applying aggregation functions.
-fn merge_row_into_group(
-    group: &mut SplitRow,
-    row: &SplitRow,
-    agg_specs: &[(String, Option<String>)],
-) {
-    for (col_name, func) in agg_specs {
-        let Some(new_val) = row.get(col_name.as_str()) else {
-            continue;
-        };
-        let Some(func) = func else {
-            // No aggregate (group_by column or ANY_VALUE) — keep first value.
-            continue;
-        };
+async fn send_response(
+    tx: &mpsc::Sender<Result<StreamSplitsResponse, Status>>,
+    response: StreamSplitsResponse,
+    timeout: Duration,
+) -> Result<(), Status> {
+    tokio::time::timeout(timeout, tx.send(Ok(response)))
+        .await
+        .map_err(|_| Status::deadline_exceeded("stream idle timeout"))?
+        .map_err(|_| Status::cancelled("client closed stream"))
+}
 
-        let cur_val = group.get(col_name.as_str()).cloned();
-        let merged = match func.as_str() {
-            "MIN" => match (&cur_val, new_val) {
-                (Some(c), n) if n.as_i64() < c.as_i64() => new_val.clone(),
-                (None, _) => new_val.clone(),
-                _ => cur_val.unwrap_or_else(|| new_val.clone()),
-            },
-            "MAX" => match (&cur_val, new_val) {
-                (Some(c), n) if n.as_i64() > c.as_i64() => new_val.clone(),
-                (None, _) => new_val.clone(),
-                _ => cur_val.unwrap_or_else(|| new_val.clone()),
-            },
-            "SUM" | "COUNT" => {
-                let cur = cur_val.and_then(|v| v.as_i64()).unwrap_or(0);
-                let add = new_val.as_i64().unwrap_or(0);
-                serde_json::json!(cur + add)
-            }
-            "AVG" => {
-                // For streaming AVG we'd need count tracking. Fall back to last value.
-                new_val.clone()
-            }
-            "ANY_VALUE" => {
-                // Keep first value.
-                cur_val.unwrap_or_else(|| new_val.clone())
-            }
-            _ => new_val.clone(),
-        };
-        group.insert(col_name.clone(), merged);
+fn proto_cursor_value(value: &CursorValue) -> Result<Value, Status> {
+    match &value.value {
+        Some(cursor_value::Value::IntVal(value)) => Ok(Value::from(*value)),
+        Some(cursor_value::Value::FloatVal(value)) if value.is_finite() => Ok(Value::from(*value)),
+        Some(cursor_value::Value::FloatVal(_)) => Err(invalid("cursor floats must be finite")),
+        Some(cursor_value::Value::StrVal(value)) => Ok(Value::String(value.clone())),
+        None => Ok(Value::Null),
     }
 }
 
+fn row_cursor(row: &SplitRow, order_by: &[OrderBySpec]) -> Result<KeysetCursor, Status> {
+    let id = row
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| Status::out_of_range("row id cannot be represented in cursor"))?;
+    let values = order_by
+        .iter()
+        .map(|order| {
+            let value = row
+                .get(&order.column)
+                .ok_or_else(|| Status::internal("sort column missing from result"))?;
+            let value = match value {
+                Value::Null => None,
+                Value::String(value) => Some(cursor_value::Value::StrVal(value.clone())),
+                Value::Bool(value) => Some(cursor_value::Value::IntVal(i64::from(*value))),
+                Value::Number(value) => {
+                    if let Some(value) = value.as_i64() {
+                        Some(cursor_value::Value::IntVal(value))
+                    } else if value.is_f64() {
+                        Some(cursor_value::Value::FloatVal(value.as_f64().unwrap()))
+                    } else {
+                        return Err(Status::out_of_range(
+                            "sort value exceeds cursor integer range",
+                        ));
+                    }
+                }
+                _ => return Err(Status::internal("unsupported cursor value")),
+            };
+            Ok(CursorValue { value })
+        })
+        .collect::<Result<Vec<_>, Status>>()?;
+    Ok(KeysetCursor { values, id })
+}
 /// Converts a SplitRow (HashMap) to a proto Split message.
 fn row_to_split(row: &metalog_query::SplitRow) -> Split {
     let file = FileInfo {
@@ -431,17 +428,21 @@ fn row_to_split(row: &metalog_query::SplitRow) -> Split {
     // at this layer; return physical column names as-is for now).
     let mut dimensions = std::collections::HashMap::new();
     for (key, value) in row {
-        if key.starts_with("dim_f") {
-            if let Some(s) = value.as_str() {
-                dimensions.insert(key.clone(), s.to_string());
-            }
+        if key.starts_with("dim_f") && !value.is_null() {
+            dimensions.insert(
+                key.clone(),
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string()),
+            );
         }
     }
 
     Split {
         file: Some(file),
         dimensions,
-        aggs: vec! [], // Premium feature.
+        aggs: vec![], // Premium feature.
     }
 }
 

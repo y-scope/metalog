@@ -143,36 +143,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_expired_files() {
+    async fn finish_purge_uses_the_complete_partitioned_primary_key() {
+        use metalog_storage::{Backend, FilesystemBackend};
+
         let (pool, _container) = setup_db_with_table("test_delete").await;
-
+        let dir = tempfile::tempdir().unwrap();
+        let storage = FilesystemBackend::new(dir.path().to_str().unwrap());
         let now = epoch_nanos();
-        let expired_ts = now - 1_000_000_000;
-
-        // Insert an IR_PURGING file.
-        sqlx::query(
-            "INSERT INTO `test_delete` (min_timestamp, max_timestamp, state, \
-             file_storage_backend, file_bucket, file_path, record_count, retention_days, \
-             expires_at) VALUES (?, ?, 'IR_PURGING', 's3', 'logs', '/data/test.ir', 10, 30, ?)",
-        )
-        .bind(expired_ts)
-        .bind(expired_ts + 1000)
-        .bind(expired_ts)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let fr = FileRecords::new(pool.clone(), "test_delete");
-        let result = fr.delete_expired_files(now).await.unwrap();
-        assert_eq!(result.deleted_count, 1);
-        assert_eq!(result.ir_paths.len(), 1);
-        assert_eq!(result.ir_paths[0].path, "/data/test.ir");
-
-        // Verify deleted.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM `test_delete`")
+        for (offset, path) in [(2, "first.ir"), (1, "second.ir")] {
+            let timestamp = now - offset * 1_000_000_000;
+            sqlx::query(
+                "INSERT INTO test_delete (id, min_timestamp, max_timestamp, state, \
+                 file_storage_backend, file_bucket, file_path, record_count, retention_days, \
+                 expires_at) VALUES (42, ?, ?, 'IR_PURGING', 'fs', 'logs', ?, 10, 30, ?)",
+            )
+            .bind(timestamp)
+            .bind(timestamp)
+            .bind(path)
+            .bind(timestamp)
+            .execute(&pool)
+            .await
+            .unwrap();
+            storage.put("logs", path, b"data").await.unwrap();
+        }
+        let files = FileRecords::new(pool.clone(), "test_delete");
+        let pending = files.find_purging_files(now, None).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].id, pending[1].id);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM test_delete")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(
+            count, 2,
+            "reading deletion work must preserve retry metadata"
+        );
+        for path in &pending[0].paths {
+            assert!(files.retire_storage_path(path, now).await.unwrap());
+            storage.delete(&path.bucket, &path.path).await.unwrap();
+        }
+        assert_eq!(files.finish_purge(&pending[0], now).await.unwrap(), 1);
+        let remaining = files.find_purging_files(now, None).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].min_timestamp, pending[1].min_timestamp);
+        assert!(storage.exists("logs", "second.ir").await.unwrap());
+        assert!(!storage.exists("logs", "first.ir").await.unwrap());
     }
 }

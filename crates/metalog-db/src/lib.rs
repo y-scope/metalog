@@ -10,6 +10,7 @@ pub use errors::{
     is_cant_drop_key,
     is_deadlock,
     is_duplicate_column,
+    is_duplicate_index,
     is_duplicate_key,
     is_duplicate_partition,
     is_lock_wait_timeout,

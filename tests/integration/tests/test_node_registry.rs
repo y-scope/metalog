@@ -19,7 +19,10 @@ mod tests {
                 .await
                 .unwrap();
         let now = epoch_nanos();
-        assert!(now - ts < 5_000_000_000, "heartbeat should be within last 5s");
+        assert!(
+            now - ts < 5_000_000_000,
+            "heartbeat should be within last 5s"
+        );
     }
 
     #[tokio::test]
@@ -102,14 +105,22 @@ mod tests {
         let reg_a = NodeRegistry::new(pool.clone(), "node-a");
 
         reg_a.register_node().await.unwrap();
-        reg_a.claim_table("test_orphan_lease").await.unwrap();
+        reg_a
+            .claim_table_with_lease("test_orphan_lease", Some(180_000_000_000))
+            .await
+            .unwrap();
 
         // Renew lease with a very short TTL (1 second in nanos).
         let short_ttl = 1_000_000_000i64;
         reg_a.renew_leases(short_ttl).await.unwrap();
 
-        // Wait for lease to expire.
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Expire it deterministically without a wall-clock sleep.
+        sqlx::query(
+            "UPDATE _table_assignment SET lease_expiry = 1 WHERE table_name = 'test_orphan_lease'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // Claim orphans by lease.
         let orphaned = reg_a.claim_orphans_lease().await.unwrap();

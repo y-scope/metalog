@@ -1,58 +1,24 @@
-.PHONY: all build test test-integration proto clean lint
+.PHONY: all build test test-integration test-storage-image lint fmt clean
 
-# Go parameters
-GOCMD=go
-GOBUILD=$(GOCMD) build
-GOTEST=$(GOCMD) test
-GOVET=$(GOCMD) vet
-BINARY_DIR=bin
+all: build
 
-# Proto parameters
-PROTO_DIR=proto
-GEN_DIR=gen/proto
-PROTOC=protoc
-
-all: proto build
-
-# Build all binaries
 build:
-	$(GOBUILD) -o $(BINARY_DIR)/metalog ./cmd/metalog
+	cargo build --locked --release --bin metalog
 
-# Generate protobuf/gRPC Go code
-proto:
-	$(PROTOC) \
-		--proto_path=$(PROTO_DIR) \
-		--go_out=$(GEN_DIR)/splitspb --go_opt=paths=source_relative \
-		--go-grpc_out=$(GEN_DIR)/splitspb --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/splits.proto
-	$(PROTOC) \
-		--proto_path=$(PROTO_DIR) \
-		--go_out=$(GEN_DIR)/ingestionpb --go_opt=paths=source_relative \
-		--go-grpc_out=$(GEN_DIR)/ingestionpb --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/ingestion.proto
-	$(PROTOC) \
-		--proto_path=$(PROTO_DIR) \
-		--go_out=$(GEN_DIR)/metadatapb --go_opt=paths=source_relative \
-		--go-grpc_out=$(GEN_DIR)/metadatapb --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/metadata.proto
-	$(PROTOC) \
-		--proto_path=$(PROTO_DIR) \
-		--go_out=$(GEN_DIR)/coordinatorpb --go_opt=paths=source_relative \
-		--go-grpc_out=$(GEN_DIR)/coordinatorpb --go-grpc_opt=paths=source_relative \
-		$(PROTO_DIR)/admin.proto
-
-# Run unit tests
 test:
-	$(GOTEST) ./...
+	cargo test --locked --workspace --all-features --exclude metalog-integration-tests
 
-# Run integration tests (requires Docker)
-test-integration:
-	$(GOTEST) -tags=integration -timeout 300s ./...
+test-storage-image:
+	docker build -t metalog-minio-test:2025-10-15 -f docker/Dockerfile.minio-test docker
 
-# Lint
+test-integration: test-storage-image
+	cargo test --locked -p metalog-integration-tests -- --test-threads=4
+
 lint:
-	$(GOVET) ./...
+	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-# Clean build artifacts
+fmt:
+	cargo +nightly-2026-08-30 fmt --all -- --check
+
 clean:
-	rm -rf $(BINARY_DIR) $(GEN_DIR)
+	cargo clean

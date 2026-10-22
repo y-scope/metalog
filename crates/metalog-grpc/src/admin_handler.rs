@@ -109,7 +109,15 @@ impl AdminService for AdminHandler {
             .registration
             .register_table(&req.table_name, display_name, opts)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| match &e {
+                metalog_coordinator::TableRegistrationError::InvalidConfig(_) => {
+                    Status::invalid_argument(e.to_string())
+                }
+                metalog_coordinator::TableRegistrationError::Provision(
+                    metalog_schema::EnsureTableError::Validation(_),
+                ) => Status::invalid_argument(e.to_string()),
+                _ => Status::internal(e.to_string()),
+            })?;
 
         Ok(Response::new(RegisterTableResponse {
             table_name: req.table_name,
@@ -121,10 +129,9 @@ impl AdminService for AdminHandler {
         &self,
         request: Request<RegisterKafkaSourceRequest>,
     ) -> Result<Response<RegisterKafkaSourceResponse>, Status> {
-        let kafka = self
-            .kafka
-            .as_ref()
-            .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
+        let kafka = self.kafka.as_ref().ok_or_else(|| {
+            Status::unimplemented("Kafka ingestion is not implemented in the Rust server")
+        })?;
 
         let req = request.into_inner();
         validate_register_kafka_source_req(&req)?;
@@ -153,10 +160,9 @@ impl AdminService for AdminHandler {
         &self,
         request: Request<DeleteKafkaSourceRequest>,
     ) -> Result<Response<DeleteKafkaSourceResponse>, Status> {
-        let kafka = self
-            .kafka
-            .as_ref()
-            .ok_or_else(|| Status::unimplemented("Kafka ingestion requires premium edition"))?;
+        let kafka = self.kafka.as_ref().ok_or_else(|| {
+            Status::unimplemented("Kafka ingestion is not implemented in the Rust server")
+        })?;
 
         let req = request.into_inner();
         validate_delete_kafka_source_req(&req)?;

@@ -97,6 +97,8 @@ axum = "0.8"
 
 # Async traits
 async-trait = "0.1"
+aws-config = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "credentials-process"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "rustls", "default-https-client"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -104,7 +106,7 @@ clap = { version = "4", features = ["derive"] }
 # Testing
 tempfile = "3"
 testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["mariadb"] }
+testcontainers-modules = { version = "0.11", features = ["mariadb", "minio"] }
 
 # System
 hostname = "0.4"

@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use metalog_metastore::{DeletionResult, FileRecords, StoragePath};
+use metalog_metastore::FileRecords;
+#[cfg(test)]
+use metalog_metastore::StoragePath;
 use metalog_storage::Registry as StorageRegistry;
 use metalog_timeutil::epoch_nanos;
 use metalog_types::processors::RetentionProvider;
@@ -34,13 +36,14 @@ pub trait RetentionPolicy: Send + Sync {
 
 /// Premium retention lifecycle module.
 ///
-/// 3-phase retention:
+/// Crash-recoverable retention:
 /// 1. Transition expired files to PURGING state
-/// 2. Delete PURGING metadata rows, collect storage paths
-/// 3. Delete from object storage (rate-limited, best-effort)
+/// 2. Delete objects not referenced by live metadata
+/// 3. Remove PURGING rows only after all required deletions succeeded
 pub struct RetentionModule {
     scan_interval: Duration,
     delete_rate: u32,
+    cursor: tokio::sync::Mutex<Option<(i64, i64)>>,
 }
 
 impl RetentionModule {
@@ -48,6 +51,7 @@ impl RetentionModule {
         Self {
             scan_interval: DEFAULT_SCAN_INTERVAL,
             delete_rate: DEFAULT_DELETE_RATE,
+            cursor: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -60,6 +64,7 @@ impl RetentionModule {
             } else {
                 DEFAULT_DELETE_RATE
             },
+            cursor: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -71,6 +76,7 @@ impl RetentionModule {
     /// Deletes storage paths from their respective backends, rate-limited.
     ///
     /// Respects cancellation via `token` between deletions.
+    #[cfg(test)]
     pub(crate) async fn delete_storage_paths(
         &self,
         token: &CancellationToken,
@@ -132,35 +138,125 @@ impl RetentionPolicy for RetentionModule {
         grace_period_nanos: i64,
         token: &CancellationToken,
     ) -> Result<u64, sqlx::Error> {
+        let storage = storage.ok_or_else(|| {
+            sqlx::Error::Protocol("retention requires configured storage backends".into())
+        })?;
+        if token.is_cancelled() {
+            return Ok(0);
+        }
+        // Fail closed for legacy aliases before marking rows or deleting objects.
+        // Never cache this result: other registered tables can contain references
+        // to the same storage location, including inactive tables.
+        file_recs
+            .audit_canonical_storage_locations(&storage.canonical_backend_names())
+            .await?;
         let now = epoch_nanos();
 
         // Phase 1: transition expired → PURGING.
         // Grace period: files with expires_at between (now - grace) and now
         // are spared — they get extra time before purging.
         let cutoff = now.saturating_sub(grace_period_nanos);
-        let transitioned = file_recs.transition_expired_to_purging(cutoff).await?;
-        if transitioned > 0 {
-            tracing::debug!(transitioned, "transitioned to PURGING");
-        }
-
-        // Phase 2: delete PURGING rows, collect paths.
-        let result: DeletionResult = file_recs.delete_expired_files(cutoff).await?;
-
-        // Phase 3: delete from object storage (rate-limited, best-effort).
-        let mut storage_deleted = 0u64;
-        if let Some(reg) = storage {
+        // Page past failures, and process enough pages to use the configured
+        // deletion rate instead of limiting a 60-second cycle to 1000 rows.
+        let mut cursor = self.cursor.lock().await;
+        let budget = self
+            .scan_interval
+            .as_secs()
+            .max(1)
+            .saturating_mul(u64::from(self.delete_rate));
+        let page_budget = budget.div_ceil(1000).clamp(1, 128);
+        let throttle = Duration::from_secs_f64(1.0 / self.delete_rate as f64);
+        let mut deleted = 0;
+        let mut attempted = false;
+        for page in 0..page_budget {
             if token.is_cancelled() {
-                return Ok(storage_deleted);
+                break;
             }
-            storage_deleted += self
-                .delete_storage_paths(token, reg, &result.ir_paths)
-                .await;
-            storage_deleted += self
-                .delete_storage_paths(token, reg, &result.archive_paths)
-                .await;
+            let transitioned = file_recs.transition_expired_to_purging(cutoff).await?;
+            let mut files = file_recs.find_purging_files(cutoff, *cursor).await?;
+            if page == 0 && files.is_empty() && cursor.is_some() {
+                *cursor = None;
+                files = file_recs.find_purging_files(cutoff, None).await?;
+            }
+            if files.is_empty() {
+                *cursor = None;
+                break;
+            }
+            let page_len = files.len();
+            for file in files {
+                if token.is_cancelled() {
+                    break;
+                }
+                let mut complete = true;
+                for path in &file.paths {
+                    if token.is_cancelled() {
+                        return Ok(deleted);
+                    }
+                    if path.backend.is_empty() || path.bucket.is_empty() {
+                        complete = false;
+                        tracing::warn!(path = %path.path,
+                            "retention: missing backend or bucket; retaining metadata"
+                        );
+                        continue;
+                    }
+                    let Some(backend) = storage.get(&path.backend) else {
+                        tracing::warn!(backend = %path.backend, path = %path.path,
+                            "retention: backend unavailable, retaining PURGING metadata for retry");
+                        complete = false;
+                        continue;
+                    };
+                    if !file_recs
+                        .retire_storage_path(path, cutoff)
+                        .await
+                        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?
+                    {
+                        // A remaining live row retains responsibility for this
+                        // object; removing the expired reference is safe.
+                        continue;
+                    }
+                    if attempted {
+                        tokio::select! {
+                            _ = token.cancelled() => return Ok(deleted),
+                            _ = tokio::time::sleep(throttle) => {},
+                        }
+                    }
+                    attempted = true;
+                    let deletion = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        backend.delete(&path.bucket, &path.path),
+                    );
+                    let outcome = tokio::select! {
+                        _ = token.cancelled() => return Ok(deleted),
+                        outcome = deletion => {
+                            match outcome {
+                                Ok(result) => result,
+                                Err(_) => Err(metalog_storage::StorageError::Other(
+                                    "retention deletion timed out".into(),
+                                )),
+                            }
+                        },
+                    };
+                    match outcome {
+                        Ok(()) => deleted += 1,
+                        Err(error) if error.is_not_found() => {}
+                        Err(error) => {
+                            complete = false;
+                            tracing::warn!(
+                                backend = %path.backend, path = %path.path, error = %error,
+                                "retention: deletion failed, retaining PURGING metadata for retry");
+                        }
+                    }
+                }
+                if complete {
+                    file_recs.finish_purge(&file, cutoff).await?;
+                }
+                *cursor = Some((file.min_timestamp, file.id));
+            }
+            if page_len < 1000 && transitioned < 1000 {
+                break;
+            }
         }
-
-        Ok(storage_deleted)
+        Ok(deleted)
     }
 }
 
@@ -197,9 +293,10 @@ mod tests {
         assert_eq!(module.delete_rate, DEFAULT_DELETE_RATE);
     }
 
+    use std::sync::Arc;
+
     use metalog_metastore::StoragePath;
     use metalog_storage::Registry as StorageRegistry;
-    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     /// Manual mock Backend that records delete calls.

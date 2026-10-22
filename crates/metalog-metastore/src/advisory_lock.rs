@@ -22,6 +22,24 @@ pub enum AdvisoryLockError {
 }
 
 impl AdvisoryLock {
+    /// Bounds lock names to MySQL's 64-byte limit and isolates databases.
+    pub async fn acquire_scoped(
+        pool: &MySqlPool,
+        namespace: &str,
+        resource: &str,
+        timeout_seconds: i32,
+    ) -> Result<Self, AdvisoryLockError> {
+        let name: String = sqlx::query_scalar(
+            "SELECT CONCAT('metalog_', MD5(CONCAT(DATABASE(), CHAR(0), ?, CHAR(0), ?)))",
+        )
+        .bind(namespace)
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AdvisoryLockError::Sql(namespace.into(), e))?;
+        Self::acquire(pool, &name, timeout_seconds).await
+    }
+
     /// Acquires a named advisory lock with a timeout (in seconds).
     ///
     /// Uses `pool.acquire()` to get a dedicated connection (required for lock
@@ -31,32 +49,44 @@ impl AdvisoryLock {
         name: &str,
         timeout_seconds: i32,
     ) -> Result<Self, AdvisoryLockError> {
-        let mut conn = pool
+        let conn = pool
             .acquire()
             .await
             .map_err(|e| AdvisoryLockError::Sql(name.into(), e))?;
 
+        // Construct the guard before awaiting GET_LOCK. Cancellation after the
+        // server acquires the lock must close the connection, never pool it.
+        let mut lock = Self {
+            conn,
+            name: name.to_string(),
+            held: true,
+        };
         let result: Option<i64> = sqlx::query_scalar("SELECT GET_LOCK(?, ?)")
             .bind(name)
             .bind(timeout_seconds)
-            .fetch_one(&mut *conn)
+            .fetch_one(&mut *lock.conn)
             .await
             .map_err(|e| AdvisoryLockError::Sql(name.into(), e))?;
 
         match result {
-            Some(1) => Ok(Self {
-                conn,
-                name: name.to_string(),
-                held: true,
-            }),
-            _ => Err(AdvisoryLockError::NotAcquired(name.into())),
+            Some(1) => Ok(lock),
+            _ => {
+                lock.held = false;
+                Err(AdvisoryLockError::NotAcquired(name.into()))
+            }
         }
+    }
+
+    /// Runs protected SQL on the lock's connection without acquiring a second
+    /// pool slot. This also permits schema operations with a one-connection pool.
+    pub fn connection(&mut self) -> &mut sqlx::MySqlConnection {
+        &mut self.conn
     }
 
     /// Releases the advisory lock and returns the connection to the pool.
     ///
-    /// The lock is always released when the connection closes, so `held` is set
-    /// to false after the connection is dropped to ensure consistent state.
+    /// Failed or cancelled release keeps the guard armed: dropping it closes
+    /// the connection instead of returning a still-held lock to the pool.
     pub async fn release(&mut self) -> Result<(), AdvisoryLockError> {
         if !self.held {
             return Ok(());
@@ -67,15 +97,17 @@ impl AdvisoryLock {
             .fetch_one(&mut *self.conn)
             .await;
 
-        // Mark as released regardless of RELEASE_LOCK result — dropping the
-        // connection definitively releases the lock server-side.
+        release_result.map_err(|e| AdvisoryLockError::Sql(self.name.clone(), e))?;
         self.held = false;
-
-        if let Err(e) = release_result {
-            return Err(AdvisoryLockError::Sql(self.name.clone(), e));
-        }
-
         Ok(())
+    }
+}
+
+impl Drop for AdvisoryLock {
+    fn drop(&mut self) {
+        if self.held {
+            self.conn.close_on_drop();
+        }
     }
 }
 

@@ -36,3 +36,20 @@ mod tests {
         lock.release().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn dropping_a_lock_does_not_return_a_locked_connection_to_the_pool() {
+    let (pool, _container) = metalog_it::helpers::setup_db().await;
+    let guard = metalog_metastore::AdvisoryLock::acquire(&pool, "dropped_guard", 1)
+        .await
+        .unwrap();
+    drop(guard);
+    let mut second = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        metalog_metastore::AdvisoryLock::acquire(&pool, "dropped_guard", 3),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    second.release().await.unwrap();
+}

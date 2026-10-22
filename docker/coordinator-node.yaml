@@ -72,6 +72,5 @@ coordinator:
 # periodic reconciliation. See docs/guides/configure-tables.md.
 
 worker:
-  concurrency: 4
-  # clpBinaryPath: /usr/bin/clp-s   # Optional. Auto-resolved from $PATH if omitted.
-  # clpProcessTimeoutSeconds: 300   # Default: 300
+  concurrency: 0
+  # Rust consolidation execution is not implemented. Keep workers disabled.

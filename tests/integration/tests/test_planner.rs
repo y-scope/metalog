@@ -3,14 +3,21 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use metalog_consolidation::{
-        marshal_payload, unmarshal_payload, FileGroup, InFlightSet, Planner, PlannerConfig,
-        Policy, Queue, TaskPayload, TASK_PAYLOAD_VERSION,
+        marshal_payload,
+        unmarshal_payload,
+        FileGroup,
+        InFlightSet,
+        Planner,
+        PlannerConfig,
+        Policy,
+        Queue,
+        TaskPayload,
+        TASK_PAYLOAD_VERSION,
     };
     use metalog_it::helpers::setup_db_with_table;
     use metalog_metastore::FileRecords;
     use metalog_timeutil::epoch_nanos;
-    use metalog_types::file_state::FileState;
-    use metalog_types::FileRecord;
+    use metalog_types::{file_state::FileState, FileRecord};
     use tokio_util::sync::CancellationToken;
 
     /// Test policy that groups all candidates into one FileGroup.
@@ -41,10 +48,10 @@ mod tests {
         let now = epoch_nanos();
         for (i, path) in paths.iter().enumerate() {
             sqlx::query(&format!(
-                "INSERT INTO `{table}` \
-                 (min_timestamp, max_timestamp, state, file_storage_backend, file_bucket, file_path, \
-                  file_size_bytes, raw_size_bytes, record_count, retention_days, expires_at) \
-                 VALUES (?, ?, ?, 's3', 'logs', ?, 1024, 2048, 100, 30, ?)"
+                "INSERT INTO `{table}` (min_timestamp, max_timestamp, state, \
+                 file_storage_backend, file_bucket, file_path, file_size_bytes, raw_size_bytes, \
+                 record_count, retention_days, expires_at) VALUES (?, ?, ?, 's3', 'logs', ?, \
+                 1024, 2048, 100, 30, ?)"
             ))
             .bind(now - 60_000_000_000) // min_timestamp: 1 minute ago
             .bind(now - max_ts_offset_secs * 1_000_000_000) // max_timestamp
@@ -137,7 +144,7 @@ mod tests {
         .unwrap();
         for _ in 0..101 {
             queue
-                .create_tasks("test_bp", TASK_PAYLOAD_VERSION, &[data.clone()])
+                .create_tasks("test_bp", TASK_PAYLOAD_VERSION, std::slice::from_ref(&data))
                 .await
                 .unwrap();
         }
@@ -242,15 +249,17 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "planner should create task after promoting stuck files");
+        assert!(
+            found,
+            "planner should create task after promoting stuck files"
+        );
 
         token.cancel();
         handle.await.unwrap();
 
         // Verify stuck files were promoted to consolidation-pending.
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM `test_promote` \
-             WHERE state = 'IR_ARCHIVE_CONSOLIDATION_PENDING'",
+            "SELECT COUNT(*) FROM `test_promote` WHERE state = 'IR_ARCHIVE_CONSOLIDATION_PENDING'",
         )
         .fetch_one(&pool)
         .await

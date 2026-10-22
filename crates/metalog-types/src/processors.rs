@@ -35,6 +35,7 @@ pub trait KafkaProvider: Send + Sync {
     }
 
     /// Registers a Kafka source for a table (idempotent — returns true if newly created).
+    #[allow(clippy::too_many_arguments)]
     async fn register_source(
         &self,
         table_name: &str,

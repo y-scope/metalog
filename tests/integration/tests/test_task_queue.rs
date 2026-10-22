@@ -3,7 +3,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use metalog_consolidation::{
-        marshal_payload, unmarshal_payload, ConsolidationPayload, Queue, TaskPayload,
+        marshal_payload,
+        unmarshal_payload,
+        ConsolidationPayload,
+        Queue,
+        TaskPayload,
         TASK_PAYLOAD_VERSION,
     };
     use metalog_it::helpers::setup_db_with_table;
@@ -158,12 +162,11 @@ mod tests {
         let affected = queue.complete_task(task_id, b"result").await.unwrap();
         assert_eq!(affected, 1);
 
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "completed");
     }
 
@@ -186,12 +189,11 @@ mod tests {
         let affected = queue.fail_task(task_id).await.unwrap();
         assert_eq!(affected, 1);
 
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "failed");
     }
 
@@ -219,12 +221,11 @@ mod tests {
         let affected = queue.fail_task(task_id).await.unwrap();
         assert_eq!(affected, 1);
 
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "dead_letter");
     }
 
@@ -247,12 +248,11 @@ mod tests {
         // Reclaim the task (simulates stale detection).
         queue.reclaim_task(task_id).await.unwrap();
 
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "pending");
     }
 
@@ -279,12 +279,11 @@ mod tests {
 
         queue.reclaim_task(task_id).await.unwrap();
 
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "dead_letter");
     }
 
@@ -483,7 +482,10 @@ mod tests {
             elapsed.as_millis(),
             rate
         );
-        assert!(rate > 100.0, "lifecycle throughput too low: {rate:.0} tasks/s");
+        assert!(
+            rate > 100.0,
+            "lifecycle throughput too low: {rate:.0} tasks/s"
+        );
 
         // Verify all completed.
         let active = queue.count_active_tasks("test").await.unwrap();

@@ -1,85 +1,50 @@
 # metalog
 
-CLP Metastore Service — file-level metadata catalog for
-[CLP](https://github.com/y-scope/clp). Ingests, queries, and manages
-lifecycle of compressed log file metadata at petabyte scale.
+Rust metadata catalog for [CLP](https://github.com/y-scope/clp), backed by MariaDB/MySQL.
+This branch supports gRPC ingestion/query/admin, S3/MinIO storage, retention, and multi-node
+coordinator HA. The retained Go sources provide migration reference; the default build and Docker
+image run Rust.
 
-## Architecture
+Start with the [Rust deployment and migration guide](docs/operations/rust-production.md).
+It describes acknowledgment semantics, retention safety, configuration, unsupported features, and
+rollout requirements. Historical documents describe a broader Go feature set; they are not a Rust
+feature checklist. Kafka, consolidation execution, aggregation/sketch ingestion, and telemetry
+exporters are currently disabled explicitly.
 
-- **MariaDB/MySQL** as single source of truth (no ZooKeeper/etcd)
-- **gRPC** ingestion (`Ingest` and `BatchIngest`) and query APIs
-- **Pluggable storage** backends (S3, filesystem, HTTP)
-- **Daily RANGE partitions** on `min_timestamp` for write locality and query pruning
+## Build and run
 
-### Community Edition
-
-Single-node metadata catalog: gRPC ingestion, dimension-based queries,
-partition management.
-
-### Enterprise Edition (premium crates)
-
-| Feature | Crate | Description |
-|---------|-------|-------------|
-| Aggregations | `metalog-aggs` | Pre-computed per-file counts for early termination |
-| Sketches | `metalog-sketches` | Bloom filter pruning (SBBF, Parquet-compatible) |
-| Kafka | `metalog-kafka` | Pull-based ingestion with offset watermark tracking |
-| HA | `metalog-ha` | Multi-node coordination, fair-share table claiming |
-| Consolidation | `metalog-consolidation` | IR→Archive and File→Archive pipelines with task queue |
-| Retention | `metalog-retention` | Policy-based deletion with per-file adjustment |
-
-## Building
+Install Rust 1.98.0 and `protoc`, then:
 
 ```bash
-cargo build --release
+make build
+target/release/metalog serve --config docker/coordinator-node.yaml
 ```
 
-## Usage
+The example configuration targets the local Docker network. For the complete local stack:
 
 ```bash
-# Start the server
-metalog serve --config node.yaml
-
-# Register a table
-metalog admin register-table --table web_logs
+./docker/start.sh -d
+# Optional second coordinator:
+docker compose -f docker/docker-compose.yml up -d --scale coordinator-node=2
 ```
+
+Register tables with `metalog admin register-table --addr HOST:PORT --table web_logs`.
+Retention is opt-in; configure it explicitly using the migration guide.
 
 ## Development
 
 ```bash
-# Format (requires nightly)
-cargo +nightly fmt --all
-
-# Lint
-cargo +nightly clippy --all-targets --all-features -- -D warnings
-
-# Test
-cargo test
+make test
+make test-integration                     # requires Docker
+cargo test --locked -p metalog --test production_smoke
+make lint
+make fmt                                 # pinned nightly rustfmt
 ```
 
-## Workspace Structure
-
-```
-crates/
-├── metalog-types/          # Core types (FileRecord, FileState, processor traits)
-├── metalog-encoding/       # LZ4+msgpack codec
-├── metalog-timeutil/       # Epoch nanosecond utilities
-├── metalog-logutil/        # Throttled failure logging
-├── metalog-config/         # YAML config with env overrides
-├── metalog-db/             # MySQL connection pool, dialect detection, helpers
-├── metalog-metastore/      # File records, advisory locks, UPSERT builder
-├── metalog-schema/         # Column registry, partition manager, DDL
-├── metalog-proto/          # Protobuf definitions (tonic/prost)
-├── metalog-ingestion/      # BatchingWriter, BatchIngest service, proto conversion
-├── metalog-coordinator/    # Progress tracking, table registration
-├── metalog-query/          # Filter validation, keyset pagination, cache
-├── metalog-storage/        # Backend trait, filesystem implementation
-├── metalog-grpc/           # gRPC server and handlers
-├── metalog-health/         # HTTP health probes
-├── metalog-telemetry/      # OpenTelemetry metrics
-├── metalog-node/           # Node orchestrator, coordinator units
-├── metalog-bin/            # CLI binary (enterprise edition)
-└── (premium crates)        # metalog-aggs, sketches, kafka, ha, consolidation, retention
-```
+Core crates separate ingestion batching, schema allocation, SQL queries, storage, retention, HA,
+and server lifecycle. Protobuf wire definitions live in `proto/`; Rust bindings are generated at
+build time. Integration tests live in `tests/integration`, with server process tests in
+`crates/metalog-bin/tests`.
 
 ## License
 

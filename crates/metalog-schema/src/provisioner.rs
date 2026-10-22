@@ -9,9 +9,11 @@ use metalog_metastore::{
 use metalog_timeutil::epoch_nanos;
 use sqlx::MySqlPool;
 
-use crate::ddl::{execute_ddl_statements, SCHEMA_SQL};
-use crate::partition_manager::create_lookahead_partitions;
-use crate::DEFAULT_PROVISION_LOOKAHEAD_DAYS;
+use crate::{
+    ddl::{execute_ddl_statements, SCHEMA_SQL},
+    partition_manager::create_lookahead_partitions_on,
+    DEFAULT_PROVISION_LOOKAHEAD_DAYS,
+};
 
 /// Provisions a new table by:
 /// 1. Ensuring system tables exist (idempotent DDL)
@@ -26,11 +28,24 @@ pub async fn ensure_table(
 ) -> Result<bool, EnsureTableError> {
     metalog_db::validate_sql_identifier(table_name)
         .map_err(|e| EnsureTableError::Validation(e.to_string()))?;
+    if table_name.starts_with('_') || table_name.len() > 64 {
+        return Err(EnsureTableError::Validation(
+            "table names must be at most 64 characters and must not use the reserved '_' prefix"
+                .into(),
+        ));
+    }
+    metalog_metastore::decode_table_config(config_json)
+        .map_err(|e| EnsureTableError::Validation(format!("invalid table configuration: {e}")))?;
 
     // 1. Ensure system tables.
     execute_ddl_statements(pool, SCHEMA_SQL)
         .await
         .map_err(EnsureTableError::Sql)?;
+
+    // DDL implicitly commits, so serialize provisioning and make every step
+    // independently restartable. A previous crash may have left only _table.
+    let mut lock =
+        metalog_metastore::AdvisoryLock::acquire_scoped(pool, "provision", table_name, 30).await?;
 
     // 2. Register in _table (INSERT IGNORE for idempotency).
     let result = sqlx::query(&format!(
@@ -39,13 +54,13 @@ pub async fn ensure_table(
     ))
     .bind(table_name)
     .bind(table_name)
-    .execute(pool)
+    .execute(lock.connection())
     .await
     .map_err(EnsureTableError::Sql)?;
 
     let created = result.rows_affected() > 0;
 
-    if created {
+    {
         // Insert config.
         let config_blob = config_json.unwrap_or("{}");
         sqlx::query(&format!(
@@ -53,7 +68,7 @@ pub async fn ensure_table(
         ))
         .bind(table_name)
         .bind(config_blob)
-        .execute(pool)
+        .execute(lock.connection())
         .await
         .map_err(EnsureTableError::Sql)?;
 
@@ -62,7 +77,7 @@ pub async fn ensure_table(
             "INSERT IGNORE INTO {TABLE_REGISTRY_ASSIGNMENT} (table_name) VALUES (?)"
         ))
         .bind(table_name)
-        .execute(pool)
+        .execute(lock.connection())
         .await
         .map_err(EnsureTableError::Sql)?;
 
@@ -70,18 +85,18 @@ pub async fn ensure_table(
         let create_sql =
             format!("CREATE TABLE IF NOT EXISTS `{table_name}` LIKE `{TEMPLATE_TABLE}`");
         sqlx::query(&create_sql)
-            .execute(pool)
+            .execute(lock.connection())
             .await
             .map_err(EnsureTableError::Sql)?;
 
         // Pre-populate daily partitions for the next N days.
-        if let Err(e) = create_lookahead_partitions(pool, table_name, DEFAULT_PROVISION_LOOKAHEAD_DAYS).await {
-            tracing::warn!(
-                table_name,
-                error = %e,
-                "failed to create initial lookahead partitions during provisioning"
-            );
-        }
+        create_lookahead_partitions_on(
+            lock.connection(),
+            table_name,
+            DEFAULT_PROVISION_LOOKAHEAD_DAYS,
+        )
+        .await
+        .map_err(|e| EnsureTableError::Validation(format!("partition provisioning failed: {e}")))?;
 
         // Pre-populate sketch slots (s01..s64) as AVAILABLE.
         let now = epoch_nanos();
@@ -94,14 +109,16 @@ pub async fn ensure_table(
             .bind(table_name)
             .bind(&sketch_name)
             .bind(now)
-            .execute(pool)
+            .execute(lock.connection())
             .await
             .map_err(EnsureTableError::Sql)?;
         }
 
-        tracing::info!(table_name, "provisioned new table");
+        if created {
+            tracing::info!(table_name, "provisioned new table");
+        }
     }
-
+    lock.release().await?;
     Ok(created)
 }
 
@@ -145,6 +162,8 @@ pub async fn ensure_kafka_tables(pool: &MySqlPool) -> Result<(), sqlx::Error> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnsureTableError {
+    #[error("provisioning lock: {0}")]
+    Lock(#[from] metalog_metastore::AdvisoryLockError),
     #[error("validation: {0}")]
     Validation(String),
 

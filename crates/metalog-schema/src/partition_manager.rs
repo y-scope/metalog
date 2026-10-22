@@ -40,33 +40,32 @@ impl PartitionManager {
     /// Acquires a non-blocking advisory lock. If another node holds the lock,
     /// this call returns immediately (partition maintenance is best-effort).
     pub async fn run_maintenance(&self) -> Result<(), PartitionError> {
-        let lock_name = format!("pm_{}", self.table_name);
-        let mut advisory = match AdvisoryLock::acquire(&self.db, &lock_name, 0).await {
-            Ok(lock) => lock,
-            Err(_) => {
-                tracing::debug!(
-                    table = %self.table_name,
-                    "partition maintenance lock held, skipping"
-                );
-                return Ok(());
-            }
-        };
+        let mut advisory =
+            match AdvisoryLock::acquire_scoped(&self.db, "partition", &self.table_name, 0).await {
+                Ok(lock) => lock,
+                Err(metalog_metastore::AdvisoryLockError::NotAcquired(_)) => {
+                    tracing::debug!(
+                        table = %self.table_name,
+                        "partition maintenance lock held, skipping"
+                    );
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
 
-        if let Err(e) = self.ensure_lookahead_partitions().await {
-            tracing::warn!(
-                table = %self.table_name,
-                error = %e,
-                "partition lookahead failed"
-            );
-        }
-
-        let _ = advisory.release().await;
-        Ok(())
+        let result = create_lookahead_partitions_on(
+            advisory.connection(),
+            &self.table_name,
+            self.lookahead_days,
+        )
+        .await;
+        advisory.release().await?;
+        result.map(|_| ())
     }
 
     /// Creates daily partitions from today to today + lookahead_days.
     pub async fn ensure_lookahead_partitions(&self) -> Result<u32, PartitionError> {
-        ensure_lookahead_partitions_inner(&self.db, &self.table_name, self.lookahead_days).await
+        create_lookahead_partitions(&self.db, &self.table_name, self.lookahead_days).await
     }
 }
 
@@ -77,11 +76,12 @@ pub async fn create_lookahead_partitions(
     table_name: &str,
     lookahead_days: i32,
 ) -> Result<u32, PartitionError> {
-    ensure_lookahead_partitions_inner(db, table_name, lookahead_days).await
+    let mut conn = db.acquire().await?;
+    create_lookahead_partitions_on(&mut conn, table_name, lookahead_days).await
 }
 
-async fn ensure_lookahead_partitions_inner(
-    db: &MySqlPool,
+pub(crate) async fn create_lookahead_partitions_on(
+    db: &mut sqlx::MySqlConnection,
     table_name: &str,
     lookahead_days: i32,
 ) -> Result<u32, PartitionError> {
@@ -102,7 +102,7 @@ async fn ensure_lookahead_partitions_inner(
             PART_FUTURE,
         );
 
-        match sqlx::query(&sql).execute(db).await {
+        match sqlx::query(&sql).execute(&mut *db).await {
             Ok(_) => created += 1,
             Err(e) if metalog_db::is_duplicate_partition(&e) => {
                 tracing::debug!(
@@ -117,11 +117,7 @@ async fn ensure_lookahead_partitions_inner(
     }
 
     if created > 0 {
-        tracing::info!(
-            table = table_name,
-            created,
-            "created lookahead partitions"
-        );
+        tracing::info!(table = table_name, created, "created lookahead partitions");
     }
 
     Ok(created)
@@ -148,6 +144,7 @@ impl IndexManager {
 
     /// Ensures an index exists on the given column.
     pub async fn ensure_index(&self, table_name: &str, col_name: &str) -> Result<(), sqlx::Error> {
+        validate_sql_identifier(table_name).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         if validate_sql_identifier(col_name).is_err() {
             tracing::warn!(column = %col_name, "skipping index on invalid column name");
             return Ok(());
@@ -162,7 +159,7 @@ impl IndexManager {
                 tracing::info!(table = table_name, index = %idx_name, "created index");
                 Ok(())
             }
-            Err(e) if metalog_db::is_duplicate_key(&e) => {
+            Err(e) if metalog_db::is_duplicate_index(&e) => {
                 tracing::debug!(index = %idx_name, "index already exists");
                 Ok(())
             }
@@ -172,6 +169,7 @@ impl IndexManager {
 
     /// Drops an index if it exists.
     pub async fn drop_index(&self, table_name: &str, col_name: &str) -> Result<(), sqlx::Error> {
+        validate_sql_identifier(table_name).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         if validate_sql_identifier(col_name).is_err() {
             return Ok(());
         }

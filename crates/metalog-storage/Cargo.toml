@@ -9,7 +9,11 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [dependencies]
+tempfile = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+metalog-config = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }

@@ -14,6 +14,12 @@ metalog-config = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-query = { workspace = true }
+metalog-grpc = { workspace = true }
+metalog-coordinator = { workspace = true }
+metalog-proto = { workspace = true }
+metalog-node = { workspace = true }
+metalog-storage = { workspace = true }
+metalog-retention = { workspace = true }
 metalog-schema = { workspace = true }
 metalog-ingestion = { workspace = true }
 metalog-consolidation = { workspace = true }
@@ -25,5 +31,11 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tempfile = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+async-trait = { workspace = true }
+mysql_async = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

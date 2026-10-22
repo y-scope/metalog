@@ -4,16 +4,15 @@ mod tests {
     use metalog_schema::PartitionManager;
 
     /// Returns the count of named daily partitions (excludes p_floor, p_future).
-    async fn count_named_partitions(pool: &sqlx::MySqlPool, table: &str) -> u64 {
+    async fn count_named_partitions(pool: &sqlx::MySqlPool, table: &str) -> i64 {
         let db_name: String = sqlx::query_scalar("SELECT DATABASE()")
             .fetch_one(pool)
             .await
             .unwrap();
 
         sqlx::query_scalar(
-            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS \
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
-             AND PARTITION_NAME NOT IN ('p_floor', 'p_future')",
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS WHERE TABLE_SCHEMA = ? AND \
+             TABLE_NAME = ? AND PARTITION_NAME NOT IN ('p_floor', 'p_future')",
         )
         .bind(&db_name)
         .bind(table)
@@ -25,16 +24,19 @@ mod tests {
     // ── ensure_lookahead_partitions ──────────────────────────────────────────
 
     #[tokio::test]
-    async fn lookahead_creates_seven_daily_partitions() {
+    async fn lookahead_creates_today_and_seven_days_ahead() {
         let (pool, _c) = setup_db_with_table("test_part_lookahead").await;
 
         let mgr = PartitionManager::new(pool.clone(), "test_part_lookahead", 7);
         let created = mgr.ensure_lookahead_partitions().await.unwrap();
 
-        // Should have created exactly 7 named partitions.
-        assert_eq!(created, 7, "expected 7 lookahead partitions");
+        // Provisioning creates today plus seven future daily partitions.
+        assert_eq!(
+            created, 0,
+            "provisioning already created lookahead partitions"
+        );
         let count = count_named_partitions(&pool, "test_part_lookahead").await;
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 
     #[tokio::test]
@@ -43,9 +45,9 @@ mod tests {
 
         let mgr = PartitionManager::new(pool.clone(), "test_part_idem", 7);
 
-        // First call creates partitions.
+        // Provisioning has already created the default partitions.
         let first = mgr.ensure_lookahead_partitions().await.unwrap();
-        assert_eq!(first, 7);
+        assert_eq!(first, 0);
 
         // Second call: all partitions already exist, created = 0.
         let second = mgr.ensure_lookahead_partitions().await.unwrap();
@@ -53,19 +55,19 @@ mod tests {
 
         // Total partition count unchanged.
         let count = count_named_partitions(&pool, "test_part_idem").await;
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 
     #[tokio::test]
     async fn custom_lookahead_count_respected() {
         let (pool, _c) = setup_db_with_table("test_part_custom").await;
 
-        let mgr = PartitionManager::new(pool.clone(), "test_part_custom", 3);
+        let mgr = PartitionManager::new(pool.clone(), "test_part_custom", 10);
         let created = mgr.ensure_lookahead_partitions().await.unwrap();
 
         assert_eq!(created, 3);
         let count = count_named_partitions(&pool, "test_part_custom").await;
-        assert_eq!(count, 3);
+        assert_eq!(count, 11);
     }
 
     // ── run_maintenance ──────────────────────────────────────────────────────
@@ -79,7 +81,7 @@ mod tests {
         mgr.run_maintenance().await.unwrap();
 
         let count = count_named_partitions(&pool, "test_part_maint").await;
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 
     #[tokio::test]
@@ -91,7 +93,10 @@ mod tests {
         mgr.run_maintenance().await.unwrap();
 
         let count = count_named_partitions(&pool, "test_part_maint2").await;
-        assert_eq!(count, 7, "partition count must not change on second maintenance");
+        assert_eq!(
+            count, 8,
+            "partition count must not change on second maintenance"
+        );
     }
 
     // ── IndexManager ─────────────────────────────────────────────────────────

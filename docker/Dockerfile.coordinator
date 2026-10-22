@@ -1,46 +1,22 @@
-# Lightweight Dockerfile for Metalog coordinator (no CLP binaries needed).
-# Used when metalog runs as metadata service only (worker concurrency=0).
-
-# Stage 1: Build Rust binary
-FROM ubuntu:jammy AS build
+FROM rust:1.98.0-bookworm AS build
 WORKDIR /build
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       build-essential ca-certificates curl pkg-config libssl-dev unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
-
-# Install protoc 25.x (supports proto3 optional fields)
-RUN ARCH=$(dpkg --print-architecture) \
-    && if [ "$ARCH" = "amd64" ]; then PB_ARCH="x86_64"; else PB_ARCH="aarch_64"; fi \
-    && curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v25.6/protoc-25.6-linux-${PB_ARCH}.zip" \
-       -o /tmp/protoc.zip \
-    && unzip -q /tmp/protoc.zip -d /usr/local \
-    && rm /tmp/protoc.zip
-
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Cache dependencies
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY proto/ proto/
 COPY benches/ benches/
 COPY tests/ tests/
-RUN cargo build --release --bin metalog
+RUN cargo build --locked --release --bin metalog
 
-# Stage 2: Runtime
-FROM ubuntu:jammy
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 metalog && useradd --uid 10001 --gid metalog --no-create-home metalog
 WORKDIR /app
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY --from=build /build/target/release/metalog /app/metalog
-
+USER 10001:10001
 EXPOSE 9090 8081
-
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["/app/metalog", "serve"]
 CMD ["--config", "/etc/clp/node.yaml"]

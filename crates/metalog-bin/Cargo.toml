@@ -19,6 +19,8 @@ metalog-ingestion = { workspace = true }
 metalog-coordinator = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-query = { workspace = true }
+metalog-storage = { workspace = true }
+metalog-schema = { workspace = true }
 
 # Premium crates (enterprise edition)
 metalog-aggs = { workspace = true }
@@ -32,6 +34,13 @@ metalog-health = { workspace = true }
 # Runtime
 clap = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+tokio-util = { workspace = true }
+sqlx = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+[dev-dependencies]
+metalog_it = { package = "metalog-integration-tests", path = "../../tests/integration" }
+testcontainers = { workspace = true }
+tempfile = { workspace = true }

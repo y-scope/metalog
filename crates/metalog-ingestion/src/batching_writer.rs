@@ -1,11 +1,18 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
+use metalog_metastore::{StorageMutationGuard, StoragePath};
 use metalog_schema::ColumnRegistry;
 use metalog_types::FileRecord;
-use mysql_async::prelude::Queryable;
-use sqlx::MySqlPool;
+use sqlx::{Executor, MySqlPool};
 use tokio::{
-    sync::{mpsc, RwLock},
+    sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
 };
 
@@ -18,10 +25,37 @@ const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// Channel capacity per table.
 const CHANNEL_CAPACITY: usize = 5000;
 
-/// Error returned when the per-table channel is full (non-blocking submit).
+/// A rejected submission or failed database commit.
 #[derive(Debug, thiserror::Error)]
-#[error("channel full for table {0}")]
-pub struct ChannelFullError(pub String);
+pub enum WriteError {
+    #[error("invalid table name: {0}")]
+    InvalidTable(String),
+    #[error("invalid record: {0}")]
+    InvalidRecord(String),
+    #[error("channel full for table {0}")]
+    ChannelFull(String),
+    #[error("ingestion writer has stopped")]
+    Stopped,
+    #[error("database flush failed: {0}")]
+    Flush(String),
+}
+
+/// Completion of a queued record. Success means its database statement committed.
+pub struct FlushReceipt(oneshot::Receiver<Result<(), String>>);
+
+impl FlushReceipt {
+    pub async fn wait(self) -> Result<(), WriteError> {
+        self.0
+            .await
+            .map_err(|_| WriteError::Stopped)?
+            .map_err(WriteError::Flush)
+    }
+}
+
+struct PendingRecord {
+    record: FileRecord,
+    flushed: Option<oneshot::Sender<Result<(), String>>>,
+}
 
 /// Batches file records per table and flushes to the database.
 ///
@@ -30,18 +64,17 @@ pub struct ChannelFullError(pub String);
 /// - Batch size is reached (default 5000), or
 /// - Timer fires (default 1 second)
 ///
-/// Premium processors (aggs, sketches) are injected as `Option<Arc<dyn T>>`
-/// and called during the flush pipeline if present.
+/// Unsupported aggregation/sketch inputs are rejected during validation.
 pub struct BatchingWriter {
     db: MySqlPool,
-    /// mysql_async pool for high-throughput UPSERT (text protocol, single RT).
-    mysql_pool: Option<mysql_async::Pool>,
     _is_mariadb: bool,
-    writers: Arc<RwLock<HashMap<String, mpsc::Sender<FileRecord>>>>,
+    storage: Option<Arc<metalog_storage::Registry>>,
+    writers: Arc<RwLock<HashMap<String, mpsc::Sender<PendingRecord>>>>,
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     join_set: Arc<tokio::sync::Mutex<JoinSet<()>>>,
     batch_size: usize,
     flush_interval: Duration,
+    stopped: AtomicBool,
 }
 
 impl BatchingWriter {
@@ -49,31 +82,41 @@ impl BatchingWriter {
     pub fn new(db: MySqlPool, is_mariadb: bool) -> Self {
         Self {
             db,
-            mysql_pool: None,
             _is_mariadb: is_mariadb,
+            storage: None,
             writers: Arc::new(RwLock::new(HashMap::new())),
             registries: Arc::new(RwLock::new(HashMap::new())),
             join_set: Arc::new(tokio::sync::Mutex::new(JoinSet::new())),
             batch_size: DEFAULT_BATCH_SIZE,
             flush_interval: DEFAULT_FLUSH_INTERVAL,
+            stopped: AtomicBool::new(false),
         }
     }
 
-    /// Sets a mysql_async pool for high-throughput UPSERT via text protocol.
-    pub fn with_mysql_pool(mut self, pool: mysql_async::Pool) -> Self {
-        self.mysql_pool = Some(pool);
+    /// Compatibility hook for callers that previously supplied a separate pool.
+    /// Writes now use SQLx text protocol on the connection holding the storage
+    /// mutation lock, so disconnecting cannot release the lock before a commit.
+    pub fn with_mysql_pool(self, _pool: mysql_async::Pool) -> Self {
+        tracing::warn!("separate mysql_async ingestion pool is unused; guarded writes use SQLx");
+        self
+    }
+
+    /// Validates object identities against the configured backends before queueing.
+    /// Keys are preserved verbatim; backends requiring canonical keys reject aliases.
+    pub fn with_storage(mut self, storage: Arc<metalog_storage::Registry>) -> Self {
+        self.storage = Some(storage);
         self
     }
 
     /// Sets the batch size.
     pub fn with_batch_size(mut self, n: usize) -> Self {
-        self.batch_size = n;
+        self.batch_size = n.max(1);
         self
     }
 
     /// Sets the flush interval.
     pub fn with_flush_interval(mut self, d: Duration) -> Self {
-        self.flush_interval = d;
+        self.flush_interval = d.max(Duration::from_millis(1));
         self
     }
 
@@ -83,37 +126,88 @@ impl BatchingWriter {
         regs.insert(table_name.to_string(), registry);
     }
 
-    /// Non-blocking submit. Returns `ChannelFullError` if the channel is full.
-    pub async fn submit(&self, table_name: &str, rec: FileRecord) -> Result<(), ChannelFullError> {
-        let tx = self.get_or_create_writer(table_name).await;
-        match tx.try_send(rec) {
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                // Log the rejection for observability; the caller receives an error.
-                tracing::warn!(table = table_name, "channel full, record dropped");
-                Err(ChannelFullError(table_name.to_string()))
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                // Channel is closed (writer stopped).
-                Err(ChannelFullError(table_name.to_string()))
-            }
-            Ok(()) => Ok(()),
-        }
+    /// Enqueues without waiting for durability; fails immediately if the queue is full.
+    pub async fn submit(&self, table_name: &str, rec: FileRecord) -> Result<(), WriteError> {
+        self.enqueue(table_name, rec, false, None).await
     }
 
-    /// Blocking submit. Waits until channel has space or context is cancelled.
-    pub async fn submit_wait(
+    /// Enqueues with backpressure. Use `submit_confirmed` for a commit receipt.
+    pub async fn submit_wait(&self, table_name: &str, rec: FileRecord) -> Result<(), WriteError> {
+        self.enqueue(table_name, rec, true, None).await
+    }
+
+    /// Enqueues a record and returns a receipt that resolves after commit or failure.
+    /// Callers can enqueue a whole batch before awaiting its receipts.
+    pub async fn submit_confirmed(
         &self,
         table_name: &str,
         rec: FileRecord,
-    ) -> Result<(), ChannelFullError> {
-        let tx = self.get_or_create_writer(table_name).await;
-        tx.send(rec)
-            .await
-            .map_err(|_| ChannelFullError(table_name.to_string()))
+        blocking: bool,
+    ) -> Result<FlushReceipt, WriteError> {
+        let (tx, rx) = oneshot::channel();
+        self.enqueue(table_name, rec, blocking, Some(tx)).await?;
+        Ok(FlushReceipt(rx))
+    }
+
+    async fn enqueue(
+        &self,
+        table_name: &str,
+        rec: FileRecord,
+        blocking: bool,
+        flushed: Option<oneshot::Sender<Result<(), String>>>,
+    ) -> Result<(), WriteError> {
+        metalog_db::validate_sql_identifier(table_name)
+            .map_err(|e| WriteError::InvalidTable(e.to_string()))?;
+        metalog_metastore::validate_file_record(&rec)
+            .map_err(|e| WriteError::InvalidRecord(e.to_string()))?;
+        if let Some(storage) = &self.storage {
+            for (kind, backend, bucket, path) in [
+                (
+                    "file",
+                    &rec.file_storage_backend,
+                    &rec.file_bucket,
+                    &rec.file_path,
+                ),
+                (
+                    "archive",
+                    &rec.archive_storage_backend,
+                    &rec.archive_bucket,
+                    &rec.archive_path,
+                ),
+            ] {
+                if let Some(path) = path.as_deref().filter(|path| !path.is_empty()) {
+                    storage
+                        .validate_location(
+                            backend.as_deref().unwrap_or_default(),
+                            bucket.as_deref().unwrap_or_default(),
+                            path,
+                        )
+                        .map_err(|error| {
+                            WriteError::InvalidRecord(format!("{kind} location: {error}"))
+                        })?;
+                }
+            }
+        }
+        let tx = self.get_or_create_writer(table_name).await?;
+        let pending = PendingRecord {
+            record: rec,
+            flushed,
+        };
+        if blocking {
+            tx.send(pending).await.map_err(|_| WriteError::Stopped)
+        } else {
+            tx.try_send(pending).map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => {
+                    WriteError::ChannelFull(table_name.to_string())
+                }
+                mpsc::error::TrySendError::Closed(_) => WriteError::Stopped,
+            })
+        }
     }
 
     /// Stops all writer tasks and waits for completion.
     pub async fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
         // Drop all senders to signal tasks to drain and exit.
         {
             let mut writers = self.writers.write().await;
@@ -125,21 +219,30 @@ impl BatchingWriter {
         while js.join_next().await.is_some() {}
     }
 
-    async fn get_or_create_writer(&self, table_name: &str) -> mpsc::Sender<FileRecord> {
+    async fn get_or_create_writer(
+        &self,
+        table_name: &str,
+    ) -> Result<mpsc::Sender<PendingRecord>, WriteError> {
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(WriteError::Stopped);
+        }
         // Fast path: read lock.
         {
             let writers = self.writers.read().await;
             if let Some(tx) = writers.get(table_name) {
-                return tx.clone();
+                return Ok(tx.clone());
             }
         }
 
         // Slow path: write lock + spawn task.
         let mut writers = self.writers.write().await;
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(WriteError::Stopped);
+        }
 
         // Double-check under write lock.
         if let Some(tx) = writers.get(table_name) {
-            return tx.clone();
+            return Ok(tx.clone());
         }
 
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -148,7 +251,6 @@ impl BatchingWriter {
         let ctx = WriterContext {
             table_name: table_name.to_string(),
             db: self.db.clone(),
-            mysql_pool: self.mysql_pool.clone(),
             registries: self.registries.clone(),
             dim_cache: HashMap::new(),
             dim_keys: Vec::new(),
@@ -162,14 +264,13 @@ impl BatchingWriter {
         let mut js = self.join_set.lock().await;
         js.spawn(table_writer_loop(ctx, rx));
 
-        tx
+        Ok(tx)
     }
 }
 
 struct WriterContext {
     table_name: String,
     db: MySqlPool,
-    mysql_pool: Option<mysql_async::Pool>,
     registries: Arc<RwLock<HashMap<String, Arc<ColumnRegistry>>>>,
     /// Cached dim key → physical column mappings (persists across flushes).
     dim_cache: HashMap<String, String>,
@@ -187,9 +288,12 @@ struct WriterContext {
 
 /// Per-table writer loop: batches records and flushes to DB.
 #[allow(clippy::too_many_arguments)]
-async fn table_writer_loop(mut ctx: WriterContext, mut rx: mpsc::Receiver<FileRecord>) {
+async fn table_writer_loop(mut ctx: WriterContext, mut rx: mpsc::Receiver<PendingRecord>) {
     let mut batch = Vec::with_capacity(ctx.batch_size);
-    let mut tick = tokio::time::interval(ctx.flush_interval);
+    let mut tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + ctx.flush_interval,
+        ctx.flush_interval,
+    );
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     tracing::info!(table = %ctx.table_name, "table writer started");
@@ -227,72 +331,21 @@ const MAX_ROWS_PER_INSERT: usize = 1000;
 /// 1. Resolves dim keys → physical columns via ColumnRegistry (if available)
 /// 2. Builds multi-row INSERT with guarded ON DUPLICATE KEY UPDATE
 /// 3. Executes in chunks of 1000 rows
-async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
+async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<PendingRecord>) {
     let count = batch.len();
     let t0 = std::time::Instant::now();
-
-    // Resolve NEW dim keys only (check first record for new keys).
-    // After warmup, the cache hit rate is 100% and this loop is skipped.
-    let mut dims_changed = false;
-    if let Some(first) = batch.first() {
-        let has_new_keys = first
-            .dim_meta
-            .iter()
-            .any(|m| !ctx.dim_cache.contains_key(&m.key));
-        if has_new_keys {
-            // Get registry from cache, or lazy-load from DB if not yet set
-            // (e.g. before the reconciliation loop assigns this table).
-            let registry = {
-                let regs = ctx.registries.read().await;
-                regs.get(&ctx.table_name).cloned()
-            };
-            let registry = if registry.is_none() {
-                match ColumnRegistry::new(ctx.db.clone(), &ctx.table_name).await {
-                    Ok(reg) => {
-                        let reg = Arc::new(reg);
-                        ctx.registries
-                            .write()
-                            .await
-                            .insert(ctx.table_name.clone(), Arc::clone(&reg));
-                        Some(reg)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            table = %ctx.table_name, error = %e, "failed to lazy-load registry"
-                        );
-                        None
-                    }
-                }
-            } else {
-                registry
-            };
-            if let Some(reg) = &registry {
-                for meta in &first.dim_meta {
-                    if !ctx.dim_cache.contains_key(&meta.key) {
-                        match reg
-                            .resolve_or_allocate_dim(&meta.key, &meta.base_type, meta.width)
-                            .await
-                        {
-                            Ok(col) => {
-                                ctx.dim_cache.insert(meta.key.clone(), col);
-                                ctx.dim_keys.push(meta.key.clone());
-                                dims_changed = true;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    dim_key = %meta.key, error = %e, "dim alloc failed"
-                                );
-                            }
-                        }
-                    }
-                }
+    if let Err(error) = resolve_batch_dimensions(ctx, batch).await {
+        tracing::error!(table = %ctx.table_name, %error, "dimension resolution failed");
+        for pending in batch.drain(..) {
+            if let Some(tx) = pending.flushed {
+                let _ = tx.send(Err(error.clone()));
             }
         }
+        return;
     }
 
     // Rebuild SQL template only when dim columns change.
-    // dim_keys is maintained incrementally above (pushed on each new dim).
-    if dims_changed || ctx.sql_prefix.is_none() {
+    if ctx.sql_prefix.is_none() {
         // Sort keys for deterministic column order. Both the SQL template
         // (INSERT column list) and value ordering (dim_keys) must use the
         // same order — a single sorted iteration guarantees this.
@@ -311,39 +364,138 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<FileRecord>) {
     let sql_suffix = ctx.sql_suffix.as_deref().unwrap();
     let t_resolve = t0.elapsed();
 
-    // Build and execute INSERT in chunks, reusing sql_buf across calls.
-    for chunk in batch.chunks(MAX_ROWS_PER_INSERT) {
-        if let Err(e) = execute_upsert_into(
-            &ctx.db,
-            &ctx.mysql_pool,
-            chunk,
-            &ctx.dim_keys,
-            sql_prefix,
-            sql_suffix,
-            &mut ctx.sql_buf,
-        )
-        .await
-        {
-            tracing::error!(table = &ctx.table_name, error = %e, "upsert failed");
+    // Statements commit independently. A failed chunk rejects its own records;
+    // previously committed chunks retain their success receipts.
+    for chunk in batch.chunks_mut(MAX_ROWS_PER_INSERT) {
+        let paths = chunk
+            .iter()
+            .flat_map(|pending| {
+                let rec = &pending.record;
+                [
+                    (&rec.file_storage_backend, &rec.file_bucket, &rec.file_path),
+                    (
+                        &rec.archive_storage_backend,
+                        &rec.archive_bucket,
+                        &rec.archive_path,
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(backend, bucket, path)| {
+                    path.as_ref()
+                        .filter(|path| !path.is_empty())
+                        .map(|path| StoragePath {
+                            backend: backend.clone().unwrap_or_default(),
+                            bucket: bucket.clone().unwrap_or_default(),
+                            path: path.clone(),
+                        })
+                })
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let result: Result<(), String> = async {
+            let mut guard = StorageMutationGuard::acquire(&ctx.db)
+                .await
+                .map_err(|e| e.to_string())?;
+            let result = async {
+                guard
+                    .ensure_writable(&paths)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                execute_upsert_into(
+                    guard.connection(),
+                    chunk,
+                    &ctx.dim_keys,
+                    sql_prefix,
+                    sql_suffix,
+                    &mut ctx.sql_buf,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            }
+            .await;
+            // A cleanup failure must not turn a committed write into an ambiguous
+            // retry. The guard closes its connection if explicit release fails.
+            if let Err(error) = guard.release().await {
+                tracing::error!(%error, "failed to release storage mutation guard");
+            }
+            result
+        }
+        .await;
+        if let Err(ref error) = result {
+            tracing::error!(table = %ctx.table_name, %error, "upsert failed");
+        }
+        for pending in chunk {
+            if let Some(tx) = pending.flushed.take() {
+                let _ = tx.send(result.clone());
+            }
         }
     }
-    let t_total = t0.elapsed();
-
-    tracing::info!(
-        table = &ctx.table_name,
-        count,
-        resolve_us = t_resolve.as_micros(),
-        total_ms = t_total.as_millis(),
-        "flush complete"
-    );
-
+    tracing::info!(table = %ctx.table_name, count, resolve_us = t_resolve.as_micros(),
+        total_ms = t0.elapsed().as_millis(), "flush complete");
     batch.clear();
 }
 
-/// Builds and executes a multi-row INSERT using text protocol (COM_QUERY).
-///
-/// When a `mysql_async::Pool` is provided, uses it for optimal throughput
-/// (native text protocol, single round-trip). Falls back to sqlx otherwise.
+/// Resolve every dimension used by the batch. Allocation errors reject the batch
+/// instead of committing records with silently missing dimensions.
+async fn resolve_batch_dimensions(
+    ctx: &mut WriterContext,
+    batch: &[PendingRecord],
+) -> Result<(), String> {
+    let mut requests: HashMap<&str, (&str, i32)> = HashMap::new();
+    for pending in batch {
+        for meta in &pending.record.dim_meta {
+            match requests.get_mut(meta.key.as_str()) {
+                Some((base_type, width)) => {
+                    if *base_type != meta.base_type {
+                        return Err(format!("inconsistent types for dimension {}", meta.key));
+                    }
+                    *width = (*width).max(meta.width);
+                }
+                None => {
+                    requests.insert(&meta.key, (&meta.base_type, meta.width));
+                }
+            }
+        }
+    }
+    if requests.is_empty() {
+        return Ok(());
+    }
+    let existing = ctx.registries.read().await.get(&ctx.table_name).cloned();
+    let registry = match existing {
+        Some(registry) => registry,
+        None => {
+            let registry = Arc::new(
+                ColumnRegistry::new(ctx.db.clone(), &ctx.table_name)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            );
+            ctx.registries
+                .write()
+                .await
+                .insert(ctx.table_name.clone(), registry.clone());
+            registry
+        }
+    };
+    registry
+        .refresh_aliases()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut requests: Vec<_> = requests.into_iter().collect();
+    requests.sort_by_key(|(key, _)| *key);
+    for (key, (base_type, width)) in requests {
+        let column = registry
+            .resolve_or_allocate_dim(key, base_type, width)
+            .await
+            .map_err(|e| format!("dimension {key}: {e}"))?;
+        metalog_db::validate_sql_identifier(&column).map_err(|e| e.to_string())?;
+        if ctx.dim_cache.get(key) != Some(&column) {
+            ctx.dim_cache.insert(key.to_string(), column);
+            ctx.sql_prefix = None;
+        }
+    }
+    Ok(())
+}
+
 /// Builds the SQL template (prefix + suffix) for UPSERT.
 /// Only needs to be rebuilt when dim columns change.
 fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (String, String) {
@@ -379,43 +531,19 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
 
     let prefix = format!("INSERT INTO `{table_name}` ({cols_sql}) VALUES ");
 
-    // Guarded ON DUPLICATE KEY UPDATE.
-    let guard_states = metalog_types::FileState::upsert_guard_states()
+    let extra_cols = dim_col_strings
         .iter()
-        .map(|s| format!("'{}'", s.as_db_str()))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let update_cols: &[&str] = &[
-        "max_timestamp",
-        "state",
-        "file_storage_backend",
-        "file_bucket",
-        "file_size_bytes",
-        "archive_storage_backend",
-        "archive_bucket",
-        "archive_path",
-        "archive_size_bytes",
-        "archive_created_at",
-        "raw_size_bytes",
-        "record_count",
-    ];
-
-    let mut update_parts: Vec<String> = Vec::new();
-    for col in update_cols {
-        update_parts.push(format!(
-            "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
-             `max_timestamp`, VALUES(`{col}`), `{col}`)"
-        ));
-    }
-    for col in &dim_col_strings {
-        update_parts.push(format!(
-            "`{col}` = IF(`state` NOT IN ({guard_states}) AND VALUES(`max_timestamp`) > \
-             `max_timestamp`, VALUES(`{col}`), `{col}`)"
-        ));
-    }
-
-    let suffix = format!(" ON DUPLICATE KEY UPDATE {}", update_parts.join(", "));
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>();
+    // VALUES() is supported by both MariaDB and MySQL (including MySQL 8).
+    let suffix = format!(
+        " {}",
+        metalog_metastore::build_guarded_update(
+            metalog_metastore::GUARDED_UPDATE_COLUMNS,
+            &extra_cols,
+            true,
+        )
+    );
 
     (prefix, suffix)
 }
@@ -425,9 +553,8 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
 /// Builds directly into one buffer: prefix → VALUES rows → suffix.
 /// No intermediate allocation. The buffer is `.clear()`ed but retains capacity.
 async fn execute_upsert_into(
-    db: &MySqlPool,
-    mysql_pool: &Option<mysql_async::Pool>,
-    records: &[FileRecord],
+    connection: &mut sqlx::MySqlConnection,
+    records: &[PendingRecord],
     dim_keys: &[String],
     sql_prefix: &str,
     sql_suffix: &str,
@@ -453,7 +580,8 @@ async fn execute_upsert_into(
 
     // Build VALUES rows with itoa for integers.
     let mut itoa_buf = itoa::Buffer::new();
-    for (i, rec) in records.iter().enumerate() {
+    for (i, pending) in records.iter().enumerate() {
+        let rec = &pending.record;
         if i > 0 {
             sql_buf.push(',');
         }
@@ -512,18 +640,10 @@ async fn execute_upsert_into(
     let build_elapsed = build_start.elapsed();
     let exec_start = std::time::Instant::now();
 
-    // Use mysql_async for native text protocol if available, else sqlx.
-    if let Some(pool) = mysql_pool {
-        let mut conn = pool
-            .get_conn()
-            .await
-            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-        conn.query_drop(sql_buf.as_str())
-            .await
-            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-    } else {
-        sqlx::query(sql_buf.as_str()).execute(db).await?;
-    }
+    // COM_QUERY keeps the single-round-trip path on the SAME connection that
+    // checked tombstones and owns the advisory lock. A separate execution
+    // connection could commit after cancellation has released that lock.
+    connection.execute(sql_buf.as_str()).await?;
 
     let exec_elapsed = exec_start.elapsed();
     tracing::info!(
@@ -536,33 +656,16 @@ async fn execute_upsert_into(
     Ok(())
 }
 
-/// Writes `,'{escaped_value}'` into the buffer.
-/// Escapes all MySQL-special characters per the MySQL C API `mysql_real_escape_string`.
-///
-/// Fast path: if the string contains no special characters (common for hostnames,
-/// service names, paths), copies it in bulk without per-byte branching.
+/// Writes a UTF-8 hex literal, independent of NO_BACKSLASH_ESCAPES and connection
+/// string escaping modes. Metadata remains data even when it contains SQL syntax.
 fn write_escaped(buf: &mut String, s: &str) {
-    buf.push_str(",'");
-    // Fast path: scan for special bytes. Most metadata strings are clean ASCII.
-    let needs_escape = s
-        .bytes()
-        .any(|b| matches!(b, b'\'' | b'\\' | b'\0' | b'\n' | b'\r' | 0x1a));
-    if !needs_escape {
-        buf.push_str(s);
-    } else {
-        for c in s.chars() {
-            match c {
-                '\'' => buf.push_str("\\'"),
-                '\\' => buf.push_str("\\\\"),
-                '\0' => buf.push_str("\\0"),
-                '\n' => buf.push_str("\\n"),
-                '\r' => buf.push_str("\\r"),
-                '\x1a' => buf.push_str("\\Z"),
-                _ => buf.push(c),
-            }
-        }
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    buf.push_str(",CONVERT(X'");
+    for byte in s.bytes() {
+        buf.push(HEX[(byte >> 4) as usize] as char);
+        buf.push(HEX[(byte & 15) as usize] as char);
     }
-    buf.push('\'');
+    buf.push_str("' USING utf8mb4)");
 }
 
 /// Writes `,'{escaped}'` or `,NULL` for an optional string.
@@ -579,7 +682,7 @@ mod tests {
 
     #[test]
     fn channel_full_error_display() {
-        let err = ChannelFullError("test_table".into());
+        let err = WriteError::ChannelFull("test_table".into());
         assert!(err.to_string().contains("test_table"));
     }
 
@@ -599,17 +702,13 @@ mod tests {
     }
 
     #[test]
-    fn write_escaped_fast_path() {
+    fn text_literals_do_not_depend_on_sql_mode() {
         let mut buf = String::new();
-        write_escaped(&mut buf, "hello-world_123");
-        assert_eq!(buf, ",'hello-world_123'");
-    }
-
-    #[test]
-    fn write_escaped_special_chars() {
-        let mut buf = String::new();
-        write_escaped(&mut buf, "it's a \"test\"\nwith\\stuff");
-        assert_eq!(buf, ",'it\\'s a \"test\"\\nwith\\\\stuff'");
+        write_escaped(&mut buf, "a'\\é");
+        assert_eq!(buf, ",CONVERT(X'61275cc3a9' USING utf8mb4)");
+        let mut empty = String::new();
+        write_escaped(&mut empty, "");
+        assert_eq!(empty, ",CONVERT(X'' USING utf8mb4)");
     }
 
     #[test]

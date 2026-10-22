@@ -24,7 +24,6 @@ impl KafkaModule {
     pub fn source_store(&self) -> &Arc<KafkaSourceStore> {
         &self.source_store
     }
-
 }
 
 #[async_trait::async_trait]

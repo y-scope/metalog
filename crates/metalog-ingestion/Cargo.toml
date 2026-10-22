@@ -9,6 +9,7 @@ metalog-types = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }
+metalog-storage = { workspace = true }
 metalog-proto = { workspace = true }
 metalog-timeutil = { workspace = true }
 metalog-logutil = { workspace = true }

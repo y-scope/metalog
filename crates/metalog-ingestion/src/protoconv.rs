@@ -1,23 +1,17 @@
-use metalog_proto::coordinator::{
-    dimension_value,
-    ingest_agg_entry,
-    DimEntry,
-    FileFields,
-    MetadataRecord,
-};
-use metalog_types::{
-    agg::{AggData, AggMeta},
-    file_record::DimMeta,
-    file_state::FileState,
-    sketch::SketchData,
-    FileRecord,
-};
+use metalog_proto::coordinator::{dimension_value, DimEntry, FileFields, MetadataRecord};
+use metalog_types::{file_record::DimMeta, file_state::FileState, FileRecord};
 
 /// Converts a protobuf [`MetadataRecord`] to an internal [`FileRecord`].
 ///
-/// Extracts file metadata, dimensions, and (if present) aggregation and sketch
-/// data into the premium extension slots.
+/// Extracts file metadata and dimensions. Unsupported extension fields are
+/// rejected explicitly so callers never receive success for discarded metadata.
 pub fn convert_record(record: &MetadataRecord) -> Result<FileRecord, ConvertError> {
+    if !record.agg.is_empty() || !record.sketch.is_empty() || !record.self_describing_kv.is_empty()
+    {
+        return Err(ConvertError(
+            "aggregation, sketch, and self-describing ingestion are not supported".into(),
+        ));
+    }
     let file = record
         .file
         .as_ref()
@@ -26,42 +20,7 @@ pub fn convert_record(record: &MetadataRecord) -> Result<FileRecord, ConvertErro
     let mut rec = file_record_from_proto(file)?;
 
     // Dimensions (base feature).
-    extract_dims(&record.dim, &mut rec);
-
-    // Premium: aggregations (populated into Option slot).
-    if !record.agg.is_empty() {
-        let mut agg_data = AggData::default();
-        for agg in &record.agg {
-            let agg_type_str = agg.agg_type().as_str_name();
-            let key = format!("{}\0{}\0{}", agg_type_str, agg.field, agg.qualifier);
-            let value = match &agg.value {
-                Some(ingest_agg_entry::Value::IntVal(v)) => serde_json::Value::Number((*v).into()),
-                Some(ingest_agg_entry::Value::FloatVal(v)) => serde_json::json!(*v),
-                None => serde_json::Value::Null,
-            };
-            let is_float = matches!(&agg.value, Some(ingest_agg_entry::Value::FloatVal(_)));
-            agg_data.entries.insert(key, value);
-            agg_data.meta.push(AggMeta {
-                key: agg.field.clone(),
-                value: agg.qualifier.clone(),
-                agg_type: agg_type_str.to_string(),
-                value_type: if is_float { "FLOAT" } else { "INT" }.to_string(),
-                alias_col: agg.alias_column.clone(),
-            });
-        }
-        rec.aggs = Some(agg_data);
-    }
-
-    // Premium: sketches (populated into Option slot).
-    if !record.sketch.is_empty() {
-        let mut sketch_data = SketchData::default();
-        for sketch in &record.sketch {
-            sketch_data
-                .sketches
-                .insert(sketch.sketch_key.clone(), sketch.data.clone());
-        }
-        rec.sketches = Some(sketch_data);
-    }
+    extract_dims(&record.dim, &mut rec)?;
 
     Ok(rec)
 }
@@ -99,11 +58,12 @@ fn file_record_from_proto(file: &FileFields) -> Result<FileRecord, ConvertError>
     Ok(rec)
 }
 
-fn extract_dims(dims: &[DimEntry], rec: &mut FileRecord) {
+fn extract_dims(dims: &[DimEntry], rec: &mut FileRecord) -> Result<(), ConvertError> {
     for dim in dims {
-        let Some(ref dv) = dim.value else {
-            continue;
-        };
+        let dv = dim
+            .value
+            .as_ref()
+            .ok_or_else(|| ConvertError(format!("missing value for dimension {}", dim.key)))?;
 
         let (json_val, base_type, width) = match &dv.value {
             Some(dimension_value::Value::Str(s)) => (
@@ -120,8 +80,18 @@ fn extract_dims(dims: &[DimEntry], rec: &mut FileRecord) {
                 (serde_json::Value::Number((*v).into()), "int", 0)
             }
             Some(dimension_value::Value::BoolVal(v)) => (serde_json::Value::Bool(*v), "bool", 0),
-            Some(dimension_value::Value::FloatVal(v)) => (serde_json::json!(*v), "float", 0),
-            None => continue,
+            Some(dimension_value::Value::FloatVal(v)) => {
+                if !v.is_finite() {
+                    return Err(ConvertError(format!("non-finite dimension {}", dim.key)));
+                }
+                (serde_json::json!(*v), "float", 0)
+            }
+            None => {
+                return Err(ConvertError(format!(
+                    "missing value for dimension {}",
+                    dim.key
+                )))
+            }
         };
 
         rec.dims.insert(dim.key.clone(), json_val);
@@ -131,6 +101,7 @@ fn extract_dims(dims: &[DimEntry], rec: &mut FileRecord) {
             width,
         });
     }
+    Ok(())
 }
 
 /// Error during proto-to-domain conversion.
@@ -223,5 +194,31 @@ mod tests {
         let rec = convert_record(&test_proto_record()).unwrap();
         assert!(rec.aggs.is_none());
         assert!(rec.sketches.is_none());
+    }
+    #[test]
+    fn unsupported_extensions_are_rejected_instead_of_discarded() {
+        let mut rec = test_proto_record();
+        rec.agg.push(Default::default());
+        assert!(convert_record(&rec)
+            .unwrap_err()
+            .to_string()
+            .contains("not supported"));
+        rec.agg.clear();
+        rec.sketch.push(Default::default());
+        assert!(convert_record(&rec).is_err());
+        rec.sketch.clear();
+        rec.self_describing_kv.push(Default::default());
+        assert!(convert_record(&rec).is_err());
+    }
+
+    #[test]
+    fn malformed_dimension_values_are_rejected() {
+        let mut rec = test_proto_record();
+        rec.dim[0].value = None;
+        assert!(convert_record(&rec).is_err());
+        rec.dim[0].value = Some(DimensionValue {
+            value: Some(dimension_value::Value::FloatVal(f64::NAN)),
+        });
+        assert!(convert_record(&rec).is_err());
     }
 }

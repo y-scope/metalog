@@ -39,65 +39,100 @@ pub const GUARDED_UPDATE_COLUMNS: &[&str] = &[
     "record_count",
 ];
 
-/// Builds the guard expression for the ON DUPLICATE KEY UPDATE clause.
-///
-/// The guard prevents overwriting rows in protected states and ensures monotonic
-/// timestamp progression (newer data only).
-///
-/// MariaDB: `IF(state NOT IN ('...') AND VALUES(max_timestamp) > max_timestamp, VALUES(col), col)`
-/// MySQL 8.0.20+: `IF(state NOT IN ('...') AND new.max_timestamp > max_timestamp, new.col, col)`
-pub fn build_guard_expression(col: &str, is_mariadb: bool) -> String {
-    let guard_states: Vec<&str> = FileState::upsert_guard_states()
-        .iter()
-        .map(|s| s.as_db_str())
-        .collect();
-    let states_csv = guard_states
-        .iter()
-        .map(|s| format!("'{s}'"))
-        .collect::<Vec<_>>()
-        .join(",");
-
+fn new_value(col: &str, is_mariadb: bool) -> String {
     if is_mariadb {
-        format!(
-            "IF(`state` NOT IN ({states_csv}) AND VALUES(`max_timestamp`) > `max_timestamp`, \
-             VALUES(`{col}`), `{col}`)"
-        )
+        format!("VALUES(`{col}`)")
     } else {
-        format!(
-            "IF(`state` NOT IN ({states_csv}) AND `new`.`max_timestamp` > `max_timestamp`, \
-             `new`.`{col}`, `{col}`)"
-        )
+        format!("`new`.`{col}`")
     }
 }
 
-/// Builds the full ON DUPLICATE KEY UPDATE clause with guards.
+/// Lifecycle eligibility is checked before changing either state or timestamp.
+/// This also prevents newer replayed BUFFERING records from reopening closed files.
+fn lifecycle_guard(is_mariadb: bool) -> String {
+    let incoming = new_value("state", is_mariadb);
+    let mut transitions = vec![format!("{incoming} = `state`")];
+    for from in FileState::all() {
+        for to in FileState::all() {
+            if from.can_transition_to(*to) {
+                transitions.push(format!(
+                    "(`state` = '{}' AND {incoming} = '{}')",
+                    from.as_db_str(),
+                    to.as_db_str()
+                ));
+            }
+        }
+    }
+    format!("({})", transitions.join(" OR "))
+}
+
+fn state_guard(is_mariadb: bool) -> String {
+    let states = FileState::upsert_guard_states()
+        .iter()
+        .map(|s| format!("'{}'", s.as_db_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "`state` NOT IN ({states}) AND {}",
+        lifecycle_guard(is_mariadb)
+    )
+}
+
+/// Guards payload updates using the original row's lifecycle and timestamp.
+pub fn build_guard_expression(col: &str, is_mariadb: bool) -> String {
+    format!(
+        "IF({} AND {} > `max_timestamp`, {}, `{col}`)",
+        state_guard(is_mariadb),
+        new_value("max_timestamp", is_mariadb),
+        new_value(col, is_mariadb)
+    )
+}
+
+/// Builds an update in dependency order: payload, timestamp, then lifecycle state.
 ///
-/// Each guarded column uses the guard expression; unguarded columns (dim/agg)
-/// are updated unconditionally.
+/// Payload expressions observe the original state and timestamp. State is assigned
+/// last so entering a protected state cannot suppress other assignments. A forward
+/// lifecycle transition is allowed at an equal timestamp: finalizing a file need not
+/// add a newer event. Replays cannot reopen files or cross lifecycle chains.
 pub fn build_guarded_update(
     guarded_cols: &[&str],
     extra_cols: &[String],
     is_mariadb: bool,
 ) -> String {
     let mut parts = Vec::new();
-
-    // Guarded base columns.
-    for col in guarded_cols {
-        let expr = build_guard_expression(col, is_mariadb);
-        parts.push(format!("`{col}` = {expr}"));
+    for col in guarded_cols
+        .iter()
+        .copied()
+        .chain(extra_cols.iter().map(String::as_str))
+    {
+        if col == "state" || col == "max_timestamp" {
+            continue;
+        }
+        parts.push(format!(
+            "`{col}` = {}",
+            build_guard_expression(col, is_mariadb)
+        ));
     }
-
-    // Extra columns (dims, aggs) updated unconditionally with same guard.
-    for col in extra_cols {
-        let expr = build_guard_expression(col, is_mariadb);
-        parts.push(format!("`{col}` = {expr}"));
+    if guarded_cols.contains(&"max_timestamp") {
+        parts.push(format!(
+            "`max_timestamp` = {}",
+            build_guard_expression("max_timestamp", is_mariadb)
+        ));
     }
-
-    if is_mariadb {
-        format!("ON DUPLICATE KEY UPDATE {}", parts.join(", "))
+    if guarded_cols.contains(&"state") {
+        parts.push(format!(
+            "`state` = IF({} AND {} >= `max_timestamp`, {}, `state`)",
+            state_guard(is_mariadb),
+            new_value("max_timestamp", is_mariadb),
+            new_value("state", is_mariadb)
+        ));
+    }
+    let prefix = if is_mariadb {
+        "ON DUPLICATE KEY UPDATE"
     } else {
-        format!("AS `new` ON DUPLICATE KEY UPDATE {}", parts.join(", "))
-    }
+        "AS `new` ON DUPLICATE KEY UPDATE"
+    };
+    format!("{prefix} {}", parts.join(", "))
 }
 
 #[cfg(test)]

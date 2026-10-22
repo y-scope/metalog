@@ -27,12 +27,11 @@ pub async fn with_deadlock_retry<F, Fut, T>(max_retries: u32, f: F) -> Result<T,
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T, sqlx::Error>>, {
-    for attempt in 0..max_retries {
+    let attempts = max_retries.max(1);
+    for attempt in 0..attempts {
         match f().await {
             Ok(v) => return Ok(v),
-            Err(e)
-                if (is_deadlock(&e) || is_lock_wait_timeout(&e)) && attempt < max_retries - 1 =>
-            {
+            Err(e) if (is_deadlock(&e) || is_lock_wait_timeout(&e)) && attempt < attempts - 1 => {
                 let jitter_ms = rand::thread_rng().gen_range(1..=50);
                 tracing::debug!(attempt, jitter_ms, "deadlock/lock-wait, retrying");
                 tokio::time::sleep(Duration::from_millis(jitter_ms)).await;

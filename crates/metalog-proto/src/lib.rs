@@ -1,11 +1,14 @@
 /// Generated protobuf types for the coordinator gRPC services
 /// (MetadataIngestionService, AdminService).
+// tonic's generated API requires its concrete Status error type.
+#[allow(clippy::result_large_err)]
 pub mod coordinator {
     tonic::include_proto!("com.yscope.metalog.coordinator.grpc");
 }
 
 /// Generated protobuf types for the query gRPC services
 /// (SplitQueryService, MetadataService).
+#[allow(clippy::result_large_err)]
 pub mod query {
     tonic::include_proto!("com.yscope.metalog.query.api.proto.grpc");
 }

@@ -1,104 +1,125 @@
 use sqlparser::{
-    ast::{Expr, Statement, UnaryOperator},
+    ast::{BinaryOperator, Expr, UnaryOperator, Value},
     dialect::MySqlDialect,
     parser::Parser,
+    tokenizer::Token,
 };
 
-/// Validates a filter expression for safety.
-///
-/// Parses the expression as `SELECT 1 FROM t WHERE <expr>` and walks the AST,
-/// allowing only safe constructs: comparisons, AND/OR/NOT, LIKE, IN, BETWEEN,
-/// IS NULL/IS NOT NULL, column references, and literals.
-///
-/// Rejects: subqueries, function calls, UNION, JOIN, etc.
+/// Parses exactly one predicate; statement suffixes and placeholders are forbidden.
+pub(crate) fn parse_filter(expr: &str) -> Result<Expr, FilterError> {
+    let dialect = MySqlDialect {};
+    let mut parser = Parser::new(&dialect)
+        .try_with_sql(expr)
+        .map_err(|e| FilterError::Parse(e.to_string()))?;
+    let expression = parser
+        .parse_expr()
+        .map_err(|e| FilterError::Parse(e.to_string()))?;
+    if parser.peek_token().token != Token::EOF {
+        return Err(FilterError::Unsafe(
+            "expected only a filter predicate".into(),
+        ));
+    }
+    validate_expr(&expression)?;
+    Ok(expression)
+}
+
 pub fn validate_filter_expression(expr: &str) -> Result<(), FilterError> {
-    if expr.is_empty() {
+    if expr.trim().is_empty() {
         return Ok(());
     }
-
-    let sql = format!("SELECT 1 FROM t WHERE {expr}");
-    let dialect = MySqlDialect {};
-    let statements =
-        Parser::parse_sql(&dialect, &sql).map_err(|e| FilterError::Parse(e.to_string()))?;
-
-    let stmt = statements
-        .first()
-        .ok_or_else(|| FilterError::Parse("empty parse result".into()))?;
-
-    let Statement::Query(query) = stmt else {
-        return Err(FilterError::Unsafe("expected SELECT statement".into()));
-    };
-
-    let sqlparser::ast::SetExpr::Select(select) = query.body.as_ref() else {
-        return Err(FilterError::Unsafe("expected simple SELECT".into()));
-    };
-
-    let Some(ref selection) = select.selection else {
-        return Err(FilterError::Unsafe("missing WHERE clause".into()));
-    };
-
-    validate_expr(selection)?;
-    Ok(())
+    parse_filter(expr).map(|_| ())
 }
 
 fn validate_expr(expr: &Expr) -> Result<(), FilterError> {
     match expr {
-        // Safe leaf nodes.
         Expr::Identifier(_) | Expr::CompoundIdentifier(_) => Ok(()),
-        Expr::Value(_) => Ok(()),
-
-        // Binary operations (comparisons, AND, OR).
-        Expr::BinaryOp { left, right, .. } => {
+        Expr::Value(
+            Value::Number(..)
+            | Value::SingleQuotedString(_)
+            | Value::DoubleQuotedString(_)
+            | Value::Boolean(_)
+            | Value::Null,
+        ) => Ok(()),
+        Expr::Value(Value::HexStringLiteral(value))
+            if value.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            Ok(())
+        }
+        Expr::IntroducedString { introducer, value }
+            if introducer.eq_ignore_ascii_case("_utf8mb4") =>
+        {
+            validate_expr(&Expr::Value(value.clone()))
+        }
+        Expr::BinaryOp {
+            left,
+            op:
+                BinaryOperator::Eq
+                | BinaryOperator::NotEq
+                | BinaryOperator::Lt
+                | BinaryOperator::LtEq
+                | BinaryOperator::Gt
+                | BinaryOperator::GtEq
+                | BinaryOperator::Spaceship
+                | BinaryOperator::And
+                | BinaryOperator::Or
+                | BinaryOperator::Xor
+                | BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Modulo,
+            right,
+        } => {
             validate_expr(left)?;
             validate_expr(right)
         }
-
-        // Unary NOT.
         Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: inner,
-        } => validate_expr(inner),
-
-        // IS NULL / IS NOT NULL.
-        Expr::IsNull(inner) | Expr::IsNotNull(inner) => validate_expr(inner),
-
-        // IN (value list).
-        Expr::InList {
-            expr: inner, list, ..
-        } => {
-            validate_expr(inner)?;
+            op: UnaryOperator::Not | UnaryOperator::Plus | UnaryOperator::Minus,
+            expr,
+        }
+        | Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::IsTrue(expr)
+        | Expr::IsNotTrue(expr)
+        | Expr::IsFalse(expr)
+        | Expr::IsNotFalse(expr)
+        | Expr::Nested(expr) => validate_expr(expr),
+        Expr::InList { expr, list, .. } => {
+            validate_expr(expr)?;
             for item in list {
                 validate_expr(item)?;
             }
             Ok(())
         }
-
-        // BETWEEN.
         Expr::Between {
-            expr: inner,
-            low,
-            high,
-            ..
+            expr, low, high, ..
         } => {
-            validate_expr(inner)?;
+            validate_expr(expr)?;
             validate_expr(low)?;
             validate_expr(high)
         }
-
-        // LIKE.
-        Expr::Like {
-            expr: inner,
-            pattern,
-            ..
-        } => {
-            validate_expr(inner)?;
+        Expr::RLike { expr, pattern, .. } => {
+            validate_expr(expr)?;
             validate_expr(pattern)
         }
-
-        // Nested parentheses.
-        Expr::Nested(inner) => validate_expr(inner),
-
-        // Everything else is rejected.
+        Expr::Like {
+            expr,
+            pattern,
+            escape_char,
+            ..
+        } => {
+            // The AST printer does not escape backslashes in ESCAPE strings.
+            if escape_char
+                .as_ref()
+                .is_some_and(|s| s.contains(['\\', '\'']))
+            {
+                return Err(FilterError::Unsafe(
+                    "unsupported LIKE escape character".into(),
+                ));
+            }
+            validate_expr(expr)?;
+            validate_expr(pattern)
+        }
         other => Err(FilterError::Unsafe(format!(
             "unsupported expression type: {other}"
         ))),
@@ -109,7 +130,6 @@ fn validate_expr(expr: &Expr) -> Result<(), FilterError> {
 pub enum FilterError {
     #[error("filter parse error: {0}")]
     Parse(String),
-
     #[error("unsafe filter expression: {0}")]
     Unsafe(String),
 }
@@ -161,5 +181,23 @@ mod tests {
     fn reject_invalid_sql() {
         let result = validate_filter_expression("this is not sql at all");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_predicate_suffixes_and_placeholders() {
+        for expression in [
+            "1=1; DROP TABLE t",
+            "1=1 ORDER BY id",
+            "1=1 LIMIT 5",
+            "1=1 UNION SELECT 1",
+            "state = ?",
+            "id IN (SELECT id FROM t)",
+            "file_path = X'ff'' OR 1=1 --'",
+        ] {
+            assert!(
+                validate_filter_expression(expression).is_err(),
+                "accepted {expression}"
+            );
+        }
     }
 }
