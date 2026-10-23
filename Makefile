@@ -1,4 +1,4 @@
-.PHONY: all build test test-integration test-storage-image lint fmt clean
+.PHONY: all build test test-integration test-proxysql test-storage-image lint fmt clean
 
 all: build
 
@@ -13,6 +13,10 @@ test-storage-image:
 
 test-integration: test-storage-image
 	cargo test --locked -p metalog-integration-tests -- --test-threads=4
+
+test-proxysql: test-storage-image
+	METALOG_TEST_PROXYSQL=1 cargo test --locked -p metalog-integration-tests -- --test-threads=4
+	METALOG_TEST_PROXYSQL=1 cargo test --locked -p metalog --test production_smoke -- --test-threads=2
 
 lint:
 	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

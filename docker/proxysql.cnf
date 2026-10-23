@@ -1,0 +1,57 @@
+# Local integration credentials only. Provision separate secrets/TLS in production.
+# This file is the source of truth: start with --initial, without a persistent
+# ProxySQL SQLite volume. Runtime admin changes are lost on restart.
+datadir="/var/lib/proxysql"
+
+admin_variables=
+{
+    admin_credentials="metalog_admin:metalog_admin_dev"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=2
+    max_connections=2048
+    interfaces="0.0.0.0:6033;0.0.0.0:6034"
+    monitor_username="metalog_monitor"
+    monitor_password="metalog_monitor_dev"
+    monitor_connect_interval=2000
+    monitor_ping_interval=2000
+    connect_timeout_server=1000
+    connect_timeout_server_max=3000
+    connect_retries_on_failure=0
+    query_retries_on_failure=0
+    default_query_timeout=30000
+    multiplexing=true
+    kill_backend_connection_when_disconnect=true
+    select_version_forwarding=1
+    # SQL comments must not override routing, caching or retry safety rules.
+    query_processor_first_comment_parsing=0
+}
+
+# Both groups intentionally use the SAME authoritative database. Never put two
+# writable servers in HG10: MySQL advisory locks are local to one server.
+mysql_servers=
+(
+    { address="mariadb", port=3306, hostgroup=10, max_connections=200 },
+    { address="mariadb", port=3306, hostgroup=20, max_connections=8 }
+)
+
+mysql_users=
+(
+    { username="metalog_writer", password="metalog_writer_dev", default_hostgroup=10, default_schema="metalog_metastore", transaction_persistent=1, active=1 },
+    { username="metalog_reader", password="metalog_reader_dev", default_hostgroup=20, default_schema="metalog_metastore", transaction_persistent=1, active=1 }
+)
+
+# Route by principal, never by SELECT matching. Writers also read under locks.
+# multiplex=0 pins every writer statement, including prepared GET_LOCK and raw
+# UPSERTs, to its backend session. Database SELECT grants enforce reader access.
+# Omit cache_ttl: NULL disables caching; zero is invalid in ProxySQL 3.0.11.
+mysql_query_rules=
+(
+    { rule_id=1, active=1, username="metalog_writer", proxy_port=6034, error_msg="Use the writer endpoint on port 6033", apply=1 },
+    { rule_id=2, active=1, username="metalog_reader", proxy_port=6033, error_msg="Use the reader endpoint on port 6034", apply=1 },
+    { rule_id=10, active=1, username="metalog_writer", destination_hostgroup=10, multiplex=0, retries=0, apply=1 },
+    { rule_id=20, active=1, username="metalog_reader", destination_hostgroup=20, retries=0, apply=1 }
+)

@@ -2,29 +2,28 @@
 #
 # nodeId is resolved from the HOSTNAME env var (set automatically by Docker
 # to the container ID). Override nodeIdEnvVar for other platforms.
-# Database host uses the 'db' network alias — both MySQL and MariaDB register this alias.
+# ProxySQL exposes separate writer and read-only endpoints backed by the same DB.
 
 database:
   primary:
-    host: db
-    port: 3306
+    host: proxysql
+    port: 6033
     database: metalog_metastore
-    user: root
-    password: password
+    user: metalog_writer
+    password: metalog_writer_dev
     poolSize: 5
     poolMinIdle: 2
 
-  # Optional read replica pool.
-  # Query and metadata services use this pool when configured.
-  # Omit when no read replica is available — falls back to primary.
-  # replica:
-  #   host: replica-db
-  #   port: 3306
-  #   database: metalog_metastore
-  #   user: reader
-  #   password: secret
-  #   poolSize: 10
-  #   poolMinIdle: 2
+  # "replica" selects the read pool; local reads still hit the authoritative DB
+  # through ProxySQL's multiplexed, SELECT-only user (no replica lag).
+  replica:
+    host: proxysql
+    port: 6034
+    database: metalog_metastore
+    user: metalog_reader
+    password: metalog_reader_dev
+    poolSize: 5
+    poolMinIdle: 2
 
 storage:
   defaultBackend: minio

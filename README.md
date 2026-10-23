@@ -36,6 +36,7 @@ Retention is opt-in; configure it explicitly using the migration guide.
 ```bash
 make test
 make test-integration                     # requires Docker
+make test-proxysql                        # DB + process regressions through ProxySQL
 cargo test --locked -p metalog --test production_smoke
 make lint
 make fmt                                 # pinned nightly rustfmt

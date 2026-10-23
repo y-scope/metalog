@@ -19,6 +19,9 @@ pub enum AdvisoryLockError {
 
     #[error("advisory lock {0}: {1}")]
     Sql(String, #[source] sqlx::Error),
+
+    #[error("advisory lock {0}: release did not confirm ownership")]
+    LostOwnership(String),
 }
 
 impl AdvisoryLock {
@@ -97,9 +100,16 @@ impl AdvisoryLock {
             .fetch_one(&mut *self.conn)
             .await;
 
-        release_result.map_err(|e| AdvisoryLockError::Sql(self.name.clone(), e))?;
-        self.held = false;
-        Ok(())
+        match release_result.map_err(|e| AdvisoryLockError::Sql(self.name.clone(), e))? {
+            Some(1) => {
+                self.held = false;
+                Ok(())
+            }
+            // 0 means another session owns the lock; NULL means it does not
+            // exist. Neither confirms this connection's protected ownership.
+            // Keep the guard armed so this session is closed rather than pooled.
+            _ => Err(AdvisoryLockError::LostOwnership(self.name.clone())),
+        }
     }
 }
 

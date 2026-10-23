@@ -12,7 +12,7 @@ end. Requests/configuration for those features fail explicitly. Keep `worker.con
 Install Rust 1.98.0 and `protoc` (proto3 optional support required). The checked-in lockfile fixes
 Rust dependency resolution. `make build` produces `target/release/metalog`. The Docker image uses
 the same Rust version, includes TLS trust certificates, and runs as UID 10001. `docker/start.sh -d`
-starts the local MariaDB/MinIO/Rust stack; `docker compose -f docker/docker-compose.yml up -d
+starts the local MariaDB/ProxySQL/MinIO/Rust stack; `docker compose -f docker/docker-compose.yml up -d
 --scale coordinator-node=2` adds a second node. Use `docker compose ... port coordinator-node 9090`
 to discover the local gRPC port. Compose is a local test deployment with development credentials.
 
@@ -39,6 +39,75 @@ exceed their renewal intervals. All nodes must share the same configuration and 
 Fair sharing applies to unassigned tables; adding a node does not proactively move existing assignments.
 Database availability and failover remain the responsibility of the database deployment. Node HA
 does not make a single MariaDB instance highly available.
+
+## ProxySQL and direct metadata readers
+
+The Compose stack routes all Metalog database traffic through pinned ProxySQL 3.0.11. The
+`database.primary` pool uses port 6033 and `metalog_writer`; the `database.replica` read pool uses
+port 6034 and `metalog_reader`. Both hostgroups point to the same MariaDB instance, preserving
+read-after-write visibility. The reader principal has database-enforced SELECT privileges only.
+External SQL readers can use the same read endpoint:
+
+```bash
+mysql --protocol=TCP -h127.0.0.1 -P6034 -umetalog_reader -p metalog_metastore
+# Local development password: metalog_reader_dev
+```
+
+`PROXYSQL_WRITER_PORT` and `PROXYSQL_READER_PORT` override the published loopback ports. MariaDB's
+direct port remains available for local administration. ProxySQL's admin port 6032 is not published.
+The idempotent `database-init` service recreates the three dedicated development accounts on existing
+volumes as well as fresh databases, clearing old grants and roles. Restart proxy sessions when
+changing credentials or privileges. Use managed secrets, restricted networks and TLS for production;
+neither these development passwords nor this local Compose topology constitute a production deployment.
+
+The checked-in [proxy configuration](../../docker/proxysql.cnf) separates writer and reader policies:
+
+- Writers have session affinity (`multiplex=0`) to the single authoritative server in hostgroup 10.
+  Ingestion, DDL and retention use advisory locks across multiple autocommit statements, so merely
+  pinning SQL transactions is insufficient. Do not add SELECT-based read splitting for this account.
+- Readers use hostgroup 20 with multiplexing enabled and eight backend connections per proxy
+  instance. Many idle or short, stateless client sessions can share these connections. Transactions,
+  session state and some client SQL patterns restrict sharing; this is not a promise of unlimited
+  active queries. Keep transactions short and size limits/timeouts using the actual workload.
+- Query retries and query caching are disabled. A failed protected write must surface an error,
+  rather than continue on another backend without its lock. Backend session state and advisory
+  locks are discarded on frontend disconnect before reuse. SQL comment routing overrides are
+  disabled, and the real database version is forwarded for Metalog's SQL dialect detection.
+
+The writer backend cap is 200, while total frontend connections are capped at 2048 in this example.
+Account for the sum of writer pools across all Metalog nodes, administrative clients and readers
+when sizing MariaDB. Each additional ProxySQL instance has its own caps. Inspect
+`stats_mysql_connection_pool`, `stats_mysql_processlist` and query digests through the private admin
+interface to observe connection use and slow queries. The SQL reader credentials, not a routing
+regex, enforce read-only access.
+
+Compose starts ProxySQL with `--initial` and an ephemeral datadir: **the configuration file is the
+source of truth**. Runtime admin edits, including `SAVE ... TO DISK`, do not survive recreation or
+restart. Update the managed configuration for lasting topology changes. Metalog readiness checks
+both endpoints; a reader-only outage makes `/ready` fail even while writer ingestion remains usable.
+Readiness verifies connectivity, not replication freshness or every privilege.
+
+For a future database migration, keep a stable proxy endpoint but perform a controlled cutover:
+
+1. Prepare and validate a compatible MySQL/MariaDB target, including grants, schema, all metadata,
+   node/assignment state and `_storage_tombstone`. Disable retention during the migration window.
+2. Stop/drain all writers and coordinators and fence the old database against further writes.
+   Finish replication or a consistent final copy and verify it before opening the target.
+3. Update both hostgroups in managed configuration, restart proxy connections, then restart
+   Metalog and verify ingestion, queries, membership and retention before resuming normal traffic.
+
+Do not load-balance writers across independent primaries: advisory locks are server-local. Marking
+a backend `OFFLINE_SOFT` does not force pinned sessions away. In-flight operations and transactions
+cannot be moved transparently; clients must reconnect and retry idempotently after ambiguous
+transport failures. ProxySQL does not replicate data, select/fence a new primary, or translate
+Metalog's SQL/schema into a different database engine. A production HA topology also needs redundant
+proxies and a tested database failover mechanism; the local stack has one of each.
+
+These policies follow ProxySQL's [multiplexing rules](https://proxysql.com/documentation/multiplexing/),
+[MySQL variables](https://proxysql.com/documentation/global-variables/mysql-variables/) and
+[configuration persistence model](https://proxysql.com/documentation/configuration-file/).
+
+## Network and storage configuration
 
 The server currently exposes plaintext, unauthenticated gRPC. Deploy it on a private network behind
 an authenticated TLS ingress/service mesh with authorization for admin and ingestion access. Do not
@@ -115,6 +184,7 @@ dropped automatically by this Rust scope.
 ```bash
 make test
 make test-integration  # Docker required; builds the pinned MinIO fixture
+make test-proxysql     # reruns DB + real-process tests through the deployment proxy policy
 cargo test --locked -p metalog --test production_smoke
 make lint
 make fmt              # requires nightly-2026-08-30 rustfmt
@@ -126,6 +196,12 @@ retention failure/restart/cancellation/shared references, object retirement race
 operations, and HA membership/lease/start-stop behavior. Process tests exercise gRPC across nodes,
 owner death, SIGTERM, and startup bind failure. These are regression checks, not long-running soak or
 capacity tests.
+
+ProxySQL regressions additionally exercise prepared advisory locks followed by text-protocol writes,
+lock release on cancellation/disconnect, backend-session loss, read-only grants, concurrent reader
+multiplexing, dialect detection, and proxy restart recovery. The same database suite runs directly
+and through ProxySQL in CI. Real-process tests cover the separate query pool, reader-only outage,
+readiness recovery, durable ingestion, and two-node takeover through the proxy.
 
 Before switching production, restore a backup into an isolated database/object namespace and replay
 representative ingestion. Compare Go/Rust query output and lifecycle state, including boundary

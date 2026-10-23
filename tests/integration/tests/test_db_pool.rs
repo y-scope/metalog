@@ -3,7 +3,10 @@ use metalog_it::helpers::setup_db;
 
 #[tokio::test]
 async fn configured_pool_connects_with_empty_and_literal_passwords() {
-    let (admin, container) = setup_db().await;
+    let (_pool, container) = setup_db().await;
+    // Account creation is root administration, outside the proxy writer's
+    // database-scoped grants. The connections being tested remain raw MariaDB.
+    let admin = container.direct_pool().await;
     let port = container.get_host_port_ipv4(3306).await.unwrap();
     let mut config = DatabaseConfig {
         host: "127.0.0.1".into(),

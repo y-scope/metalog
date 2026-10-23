@@ -11,13 +11,56 @@ services:
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
+      # The entrypoint's temporary initialization server uses a Unix socket;
+      # require TCP so dependent services cannot start before initialization ends.
+      test: ["CMD", "mariadb", "--protocol=TCP", "-h127.0.0.1", "-uroot", "-ppassword", "-e", "SELECT 1"]
       interval: 5s
       timeout: 3s
       retries: 20
     networks:
       metalog-network:
         aliases: [db]
+
+  database-init:
+    image: mariadb:10.11
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      MYSQL_PWD: password
+    volumes:
+      - ./proxysql-users.sql:/bootstrap/users.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["mariadb --host=mariadb --user=root < /bootstrap/users.sql"]
+    networks: [metalog-network]
+
+  proxysql:
+    image: proxysql/proxysql:3.0.11
+    depends_on:
+      database-init:
+        condition: service_completed_successfully
+    command: ["proxysql", "-f", "--idle-threads", "--initial", "-c", "/etc/proxysql.cnf"]
+    volumes:
+      - ./proxysql.cnf:/etc/proxysql.cnf:ro
+    # Stateless proxy configuration: runtime admin edits do not survive restart.
+    tmpfs:
+      - /var/lib/proxysql
+    ports:
+      - "127.0.0.1:${PROXYSQL_WRITER_PORT:-6033}:6033"
+      - "127.0.0.1:${PROXYSQL_READER_PORT:-6034}:6034"
+    # Admin port 6032 stays on the private Compose network.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mysql --protocol=TCP -h127.0.0.1 -P6033 -umetalog_writer -pmetalog_writer_dev metalog_metastore -e 'SELECT 1' &&
+          mysql --protocol=TCP -h127.0.0.1 -P6034 -umetalog_reader -pmetalog_reader_dev metalog_metastore -e 'SELECT 1'
+      interval: 5s
+      timeout: 8s
+      retries: 20
+    stop_grace_period: 30s
+    restart: unless-stopped
+    networks: [metalog-network]
 
   minio:
     build:
@@ -59,7 +102,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     depends_on:
-      mariadb:
+      proxysql:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully

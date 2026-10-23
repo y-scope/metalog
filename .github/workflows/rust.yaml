@@ -21,4 +21,8 @@ jobs:
       - run: make lint
       - run: make test-storage-image
       - run: cargo test --locked --workspace --all-features -- --test-threads=4
+      - name: Database and process regressions through ProxySQL
+        run: |
+          METALOG_TEST_PROXYSQL=1 cargo test --locked -p metalog-integration-tests -- --test-threads=4
+          METALOG_TEST_PROXYSQL=1 cargo test --locked -p metalog --test production_smoke -- --test-threads=2
       - run: cargo build --locked --release --bin metalog
