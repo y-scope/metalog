@@ -164,6 +164,27 @@ impl Backend for S3Backend {
         Ok(())
     }
 
+    async fn put_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        let bucket = self.validate_location(bucket, key)?;
+        let body = ByteStream::from_path(path)
+            .await
+            .map_err(|e| StorageError::Other(e.to_string()))?;
+        self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| StorageError::Other(format!("S3 file upload: {e}")))?;
+        Ok(())
+    }
+
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
         let bucket = self.validate_location(bucket, key)?;
         match self

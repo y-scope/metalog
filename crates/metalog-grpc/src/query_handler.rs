@@ -61,8 +61,13 @@ impl SplitQueryService for QueryHandler {
                 "limit and stream_idle_timeout_ms must be nonnegative",
             ));
         }
-        if !req.sketch_expression.is_empty() {
-            return Err(Status::unimplemented("sketch filtering is not implemented"));
+        let mut sketch_predicates =
+            metalog_sketches::parse_expression(&req.sketch_expression).map_err(invalid)?;
+        if !sketch_predicates.is_empty() && !req.group_by.is_empty() {
+            return Err(invalid(
+                "sketch pruning cannot be combined with group_by; prune individual files before \
+                 grouping",
+            ));
         }
         if !req.group_by.is_empty() && req.cursor.is_some() {
             return Err(invalid("group_by and cursor are mutually exclusive"));
@@ -73,10 +78,32 @@ impl SplitQueryService for QueryHandler {
         let registry = ColumnRegistry::new(self.db.clone(), &req.table)
             .await
             .map_err(|e| Status::internal(format!("load column registry: {e}")))?;
+        let mut active_sketches = HashMap::new();
+        if !sketch_predicates.is_empty() {
+            let sketches = metalog_sketches::SketchRegistry::new(self.db.clone(), &req.table)
+                .await
+                .map_err(|e| Status::internal(format!("load sketch registry: {e}")))?;
+            let mut active = Vec::new();
+            for predicate in sketch_predicates {
+                if let Some(slot) = sketches.resolve(&predicate.key).await {
+                    active_sketches.insert(predicate.key.clone(), slot);
+                    active.push(predicate);
+                }
+            }
+            // Invalidated or unregistered fields cannot safely exclude files.
+            sketch_predicates = active;
+        }
         let filter =
             rewrite_filter_columns(&req.filter_expression, Some(&registry)).map_err(invalid)?;
         let mut columns =
             resolve_projection_columns(&req.projection, Some(&registry)).map_err(invalid)?;
+        // Default projection excludes internal blobs. Fetch them separately only
+        // for sketch evaluation, and preserve the existing public split fields.
+        if columns.is_empty() && req.group_by.is_empty() {
+            columns =
+                resolve_projection_columns(&["__FILE.*".into(), "__DIM.*".into()], Some(&registry))
+                    .map_err(invalid)?;
+        }
         let group_by = req
             .group_by
             .iter()
@@ -96,11 +123,23 @@ impl SplitQueryService for QueryHandler {
                 })
             })
             .collect::<Result<Vec<_>, Status>>()?;
-        SplitQueryEngine::validate_sort_columns(
-            &order_by,
-            req.allow_unindexed_sort || !group_by.is_empty(),
-        )
-        .map_err(invalid)?;
+        SplitQueryEngine::validate_sort_columns(&order_by, true).map_err(invalid)?;
+        if !req.allow_unindexed_sort && group_by.is_empty() {
+            for order in &order_by {
+                if let Err(error) =
+                    SplitQueryEngine::validate_sort_columns(std::slice::from_ref(order), false)
+                {
+                    if !self
+                        .engine
+                        .has_full_column_index(&req.table, &order.column)
+                        .await
+                        .map_err(|e| Status::internal(e.to_string()))?
+                    {
+                        return Err(invalid(error));
+                    }
+                }
+            }
+        }
         let mut seen_orders = std::collections::HashSet::new();
         if order_by.iter().any(|o| !seen_orders.insert(&o.column)) {
             return Err(invalid("duplicate sort column"));
@@ -183,7 +222,7 @@ impl SplitQueryService for QueryHandler {
                 let mut last_cursor = None;
                 let truncated;
                 let mut offset = 0u64;
-                loop {
+                'pages: loop {
                     let remaining = if req.limit == 0 {
                         i64::MAX
                     } else {
@@ -191,9 +230,14 @@ impl SplitQueryService for QueryHandler {
                     };
                     // One lookahead row identifies truncation without losing it: the
                     // next page always starts after the last row actually emitted.
-                    let fetch_limit =
-                        i64::from(QUERY_PAGE_SIZE).min(remaining.saturating_add(1)) as i32;
-                    let query = engine.execute_page_offset(
+                    // Keep scanning bounded batches after reaching the limit:
+                    // sparse matches must not turn lookahead into one SQL call per file.
+                    let fetch_limit = if sketch_predicates.is_empty() {
+                        i64::from(QUERY_PAGE_SIZE).min(remaining.saturating_add(1)) as i32
+                    } else {
+                        16 // at most 32 MiB of compressed sketch blobs per page
+                    };
+                    let query = engine.execute_page_with_ext(
                         &req.table,
                         &columns,
                         &filter,
@@ -202,6 +246,7 @@ impl SplitQueryService for QueryHandler {
                         fetch_limit,
                         &group_by,
                         offset,
+                        !sketch_predicates.is_empty(),
                     );
                     let rows = tokio::select! {
                         _ = tx.closed() => return Ok(()),
@@ -209,10 +254,28 @@ impl SplitQueryService for QueryHandler {
                             .map_err(|_| Status::deadline_exceeded("query page timeout"))?
                             .map_err(|e| Status::internal(e.to_string()))?,
                     };
-                    scanned += rows.len() as i64;
-                    let emit = rows.len().min(remaining as usize);
-                    let page_truncated = rows.len() > emit;
-                    for row in &rows[..emit] {
+                    for (row, ext) in &rows {
+                        scanned += 1;
+                        let slots = row
+                            .get("_metalog_sketch_slots")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let eligible = sketch_predicates.iter().filter(|predicate| {
+                            active_sketches
+                                .get(&predicate.key)
+                                .is_some_and(|slot| slots.split(',').any(|present| present == slot))
+                        });
+                        if !metalog_sketches::may_match(
+                            row.get("state").and_then(Value::as_str).unwrap_or(""),
+                            ext.as_deref(),
+                            eligible,
+                        ) {
+                            continue;
+                        }
+                        if req.limit != 0 && matched == i64::from(req.limit) {
+                            truncated = true;
+                            break 'pages;
+                        }
                         matched += 1;
                         if matched > i64::from(i32::MAX) {
                             return Err(Status::out_of_range(
@@ -246,14 +309,20 @@ impl SplitQueryService for QueryHandler {
                         };
                         send_response(&tx, response, timeout).await?;
                     }
-                    if page_truncated || rows.len() < fetch_limit as usize {
-                        truncated = page_truncated;
+                    if rows.len() < fetch_limit as usize {
+                        truncated = false;
                         break;
                     }
                     if group_by.is_empty() {
-                        let cursor = last_cursor
-                            .as_ref()
-                            .ok_or_else(|| Status::internal("missing page cursor"))?;
+                        // Advance past scanned candidates even when every row
+                        // was pruned. Public cursors still refer to emitted rows.
+                        let cursor = row_cursor(
+                            &rows
+                                .last()
+                                .ok_or_else(|| Status::internal("missing page cursor"))?
+                                .0,
+                            &order_by,
+                        )?;
                         let values = cursor
                             .values
                             .iter()
@@ -264,7 +333,7 @@ impl SplitQueryService for QueryHandler {
                         )
                         .map_err(invalid)?;
                     } else {
-                        offset += emit as u64;
+                        offset += rows.len() as u64;
                     }
                 }
                 send_response(

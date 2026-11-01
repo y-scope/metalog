@@ -568,8 +568,9 @@ PARTITION BY RANGE (min_timestamp) (
 --   5. PlannerThread cleans up old completed/failed/timed_out tasks
 --
 -- Recovery:
---   On coordinator restart, tasks are deleted and Kafka consumer group
---   (clp-coordinator-{table_name}-{table_id}) resumes from last committed offset.
+--   Rust coordinators preserve tasks and _consolidation_file reservations.
+--   Completed tasks are removed only after metadata publication and storage cleanup.
+--   Stale attempts receive new task IDs; prior attempt destinations remain fenced.
 --
 
 CREATE TABLE IF NOT EXISTS _task_queue (
@@ -609,6 +610,25 @@ CREATE TABLE IF NOT EXISTS _task_queue (
     -- overhead without meaningful query benefit.
 
     FOREIGN KEY (table_name) REFERENCES _table(table_name) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+
+-- Durable reservations survive coordinator changes. The complete partitioned
+-- file primary key prevents duplicate planning and pins inputs against retention.
+CREATE TABLE IF NOT EXISTS _consolidation_file (
+    table_name VARCHAR(64) NOT NULL,
+    min_timestamp BIGINT NOT NULL,
+    file_id BIGINT NOT NULL,
+    task_id BIGINT NOT NULL,
+    backend VARBINARY(128) NOT NULL,
+    bucket VARBINARY(255) NOT NULL,
+    path TEXT NOT NULL,
+    path_hash BINARY(16) NOT NULL,
+    released BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (table_name, min_timestamp, file_id),
+    INDEX idx_task (task_id),
+    INDEX idx_source (backend, bucket, path_hash),
+    FOREIGN KEY (task_id) REFERENCES _task_queue(task_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 

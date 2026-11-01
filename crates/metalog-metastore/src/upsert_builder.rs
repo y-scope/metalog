@@ -108,10 +108,22 @@ pub fn build_guarded_update(
         if col == "state" || col == "max_timestamp" {
             continue;
         }
-        parts.push(format!(
-            "`{col}` = {}",
+        let expression = if matches!(col, "sketches" | "ext") {
+            // A final snapshot can arrive with the closing state at the same
+            // timestamp. Replays at the same state/timestamp cannot replace it.
+            format!(
+                "IF({} AND ({} > `max_timestamp` OR ({} = `max_timestamp` AND {} <> `state`)), \
+                 {}, `{col}`)",
+                state_guard(is_mariadb),
+                new_value("max_timestamp", is_mariadb),
+                new_value("max_timestamp", is_mariadb),
+                new_value("state", is_mariadb),
+                new_value(col, is_mariadb)
+            )
+        } else {
             build_guard_expression(col, is_mariadb)
-        ));
+        };
+        parts.push(format!("`{col}` = {expression}"));
     }
     if guarded_cols.contains(&"max_timestamp") {
         parts.push(format!(

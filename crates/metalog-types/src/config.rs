@@ -8,6 +8,32 @@ pub struct TableConfig {
     pub consolidation: ConsolidationConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
+    /// Logical dimension fields to index. Empty removes only Metalog-managed indexes.
+    #[serde(default)]
+    pub indexes: Vec<String>,
+}
+
+impl TableConfig {
+    pub fn validate_indexes(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        if self.indexes.len() > 32 {
+            return Err("at most 32 dimension indexes may be configured".into());
+        }
+        for key in &self.indexes {
+            if key.is_empty()
+                || key.chars().count() > 1024
+                || key.contains('\0')
+                || !seen.insert(key)
+            {
+                return Err(
+                    "index fields must be unique, nonempty logical names of at most 1024 \
+                     characters without NUL"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Consolidation subsystem configuration (premium feature).
@@ -123,6 +149,7 @@ mod tests {
     #[test]
     fn roundtrip_serde() {
         let cfg = TableConfig {
+            indexes: vec![],
             consolidation: ConsolidationConfig {
                 enabled: true,
                 policies: vec![ConsolidationPolicyConfig {

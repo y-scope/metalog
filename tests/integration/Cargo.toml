@@ -10,6 +10,8 @@ path = "src/lib.rs"
 
 [dependencies]
 metalog-types = { workspace = true }
+metalog-sketches = { workspace = true }
+rmp-serde = { workspace = true }
 metalog-config = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }

@@ -1,3 +1,5 @@
+FROM ghcr.io/y-scope/clp/clp-package:0.14.1@sha256:f04d30e9243b2af0e549f2e81e547c0b9640d4e9f02c00aed34771987115671a AS clp
+
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
@@ -10,11 +12,13 @@ COPY tests/ tests/
 RUN cargo build --locked --release --bin metalog
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libzstd1 libssl3 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 metalog && useradd --uid 10001 --gid metalog --no-create-home metalog
 WORKDIR /app
 COPY --from=build /build/target/release/metalog /app/metalog
+COPY --from=clp /opt/clp/bin/clp-s /usr/local/bin/clp-s
+COPY --from=clp /opt/clp/LICENSE /usr/share/doc/clp/LICENSE
 USER 10001:10001
 EXPOSE 9090 8081
 STOPSIGNAL SIGTERM

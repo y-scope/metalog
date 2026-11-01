@@ -2,3 +2,5 @@
 // Tests are in the tests/ directory.
 pub mod helpers;
 pub mod proxysql;
+
+pub mod clp;

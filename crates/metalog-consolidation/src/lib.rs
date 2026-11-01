@@ -1,3 +1,6 @@
+mod archive;
+mod finalizer;
+pub use archive::{ArchiveCreator, ArchiveError};
 mod inflight;
 mod planner;
 mod policy;
@@ -7,7 +10,7 @@ mod worker;
 pub use inflight::InFlightSet;
 use metalog_types::processors::ConsolidationProvider;
 pub use planner::{Planner, PlannerConfig, PlannerError};
-pub use policy::{FileGroup, Policy, TimeWindowPolicy};
+pub use policy::{build_policy, FileGroup, Policy, PolicyChain, SparkJobPolicy, TimeWindowPolicy};
 pub use task_queue::{
     marshal_payload,
     marshal_result,
@@ -21,7 +24,7 @@ pub use task_queue::{
     TaskState,
     TASK_PAYLOAD_VERSION,
 };
-pub use worker::{Prefetcher, WorkerUnit};
+pub use worker::{execute_task, Prefetcher, WorkerUnit};
 
 /// Premium consolidation pipeline module.
 pub struct ConsolidationModule;

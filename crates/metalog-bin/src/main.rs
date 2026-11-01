@@ -78,9 +78,6 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
     let shutdown = shutdown_signal()?;
     tracing::info!(config = config_path, "loading configuration");
     let config = metalog_config::NodeConfig::load(config_path)?;
-    if config.worker.concurrency > 0 {
-        return Err("consolidation workers are not supported by this Rust server".into());
-    }
     let node_id = config.resolve_node_id()?;
     let pool = metalog_db::new_pool(&config.database.primary).await?;
     let read_pool = match &config.database.replica {

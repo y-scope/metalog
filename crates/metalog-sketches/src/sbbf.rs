@@ -1,28 +1,27 @@
 // Split Block Bloom Filter (SBBF) evaluation.
-// Parquet-compatible: 256-bit blocks (8 × u32 LE), xxHash64 with seed 0.
+// Both Parquet and the legacy Go reader use this type tag, but differ in
+// block selection and lane ordering. Accept either interpretation to avoid
+// false negatives during migration (at the cost of some extra false positives).
 
 /// Checks if a value might be present in an SBBF.
 ///
 /// Returns `true` if the value might be present (no false negatives),
 /// `false` if definitely absent (no false positives on `false`).
 pub fn sbbf_contains(filter_data: &[u8], value: &[u8]) -> bool {
-    if filter_data.len() < 32 {
-        return false;
+    if filter_data.is_empty() || !filter_data.len().is_multiple_of(32) {
+        return true; // malformed/absent filter cannot prove absence
     }
 
     let hash = xxhash_rust::xxh64::xxh64(value, 0);
     let num_blocks = filter_data.len() / 32;
-    if num_blocks == 0 {
-        return false;
-    }
+    let parquet_block = (((hash >> 32) * num_blocks as u64) >> 32) as usize;
+    let legacy_block = (hash % num_blocks as u64) as usize;
+    contains_block(&filter_data[parquet_block * 32..][..32], hash as u32, false)
+        || contains_block(&filter_data[legacy_block * 32..][..32], hash as u32, true)
+}
 
-    // Select block using upper 32 bits of hash.
-    let block_index = ((hash >> 32) as usize) % num_blocks;
-    let block_offset = block_index * 32;
-    let block = &filter_data[block_offset..block_offset + 32];
-
+fn contains_block(block: &[u8], key: u32, legacy: bool) -> bool {
     // Check 8 lanes using lower 32 bits with Parquet SBBF salt values.
-    let key = hash as u32;
     const SALT: [u32; 8] = [
         0x47b6_137b,
         0x4497_4d91,
@@ -31,7 +30,7 @@ pub fn sbbf_contains(filter_data: &[u8], value: &[u8]) -> bool {
         0x7054_95c7,
         0x2df1_424b,
         0x9efc_4947,
-        0x05c6_377d,
+        0x5c6b_fb31,
     ];
 
     for i in 0..8 {
@@ -41,7 +40,7 @@ pub fn sbbf_contains(filter_data: &[u8], value: &[u8]) -> bool {
             block[i * 4 + 2],
             block[i * 4 + 3],
         ]);
-        let bit_index = key.wrapping_mul(SALT[i]) >> 27;
+        let bit_index = key.wrapping_mul(SALT[if legacy { i ^ 1 } else { i }]) >> 27;
         if lane_word & (1 << bit_index) == 0 {
             return false;
         }
@@ -62,7 +61,7 @@ mod tests {
 
     #[test]
     fn sbbf_empty_filter() {
-        assert!(!sbbf_contains(&[], b"test"));
+        assert!(sbbf_contains(&[], b"test"));
     }
 
     #[test]
@@ -92,7 +91,7 @@ mod tests {
             0x7054_95c7,
             0x2df1_424b,
             0x9efc_4947,
-            0x05c6_377d,
+            0x5c6b_fb31,
         ];
 
         // Set bits for this value.

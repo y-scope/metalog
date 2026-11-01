@@ -66,8 +66,9 @@ impl Prefetcher {
                     } else {
                         backoff = POLL_INTERVAL;
                         for task in tasks {
-                            if tx.send(task).await.is_err() {
-                                break; // Channel closed.
+                            tokio::select! {
+                                _ = token.cancelled() => return,
+                                result = tx.send(task) => if result.is_err() { return; },
                             }
                         }
                     }
@@ -87,147 +88,171 @@ impl Prefetcher {
     }
 }
 
-/// Worker unit: runs N concurrent task executors consuming from the prefetcher.
+/// Each executor claims only when it has capacity. Pending tasks remain durable
+/// in the database instead of aging in a prefetched, un-heartbeated local queue.
 pub struct WorkerUnit {
     queue: Arc<Queue>,
-    prefetcher: Prefetcher,
+    archive: Arc<crate::ArchiveCreator>,
+    worker_id: String,
     concurrency: usize,
 }
 
 impl WorkerUnit {
     pub fn new(
         queue: Arc<Queue>,
-        table_name: &str,
+        archive: Arc<crate::ArchiveCreator>,
         worker_id: &str,
-        batch_size: i32,
         concurrency: usize,
     ) -> Self {
         Self {
-            queue: queue.clone(),
-            prefetcher: Prefetcher::new(queue, table_name, worker_id, batch_size),
+            queue,
+            archive,
+            worker_id: worker_id.into(),
             concurrency,
         }
     }
 
-    /// Starts the worker unit: prefetcher + N worker tasks.
-    /// Returns when the token is cancelled and all tasks drain.
     pub async fn run(&self, token: CancellationToken) {
-        // async-channel supports multiple receivers without Mutex.
-        let (tx, rx) = async_channel::bounded::<Task>(self.concurrency * 2);
-
-        // Start prefetcher.
-        let pf_token = token.clone();
-        let pf_handle = {
-            let prefetcher_queue = self.prefetcher.queue.clone();
-            let table_name = self.prefetcher.table_name.clone();
-            let worker_id = self.prefetcher.worker_id.clone();
-            let batch_size = self.prefetcher.batch_size;
-            tokio::spawn(async move {
-                let pf = Prefetcher::new(prefetcher_queue, &table_name, &worker_id, batch_size);
-                pf.run(pf_token, tx).await;
-            })
-        };
-
-        // Start N worker tasks (each gets its own rx clone — MPMC).
         let mut workers = JoinSet::new();
         for _ in 0..self.concurrency {
-            let rx = rx.clone();
             let queue = self.queue.clone();
+            let archive = self.archive.clone();
+            let worker_id = self.worker_id.clone();
+            let stop = token.clone();
             workers.spawn(async move {
-                while let Ok(task) = rx.recv().await {
-                    execute_task(&queue, task).await;
+                loop {
+                    let tasks = tokio::select! {
+                        _ = stop.cancelled() => return,
+                        tasks = queue.claim_tasks("", &worker_id, 1) => tasks,
+                    };
+                    match tasks {
+                        Ok(tasks) if !tasks.is_empty() => {
+                            for task in tasks {
+                                execute_task(&queue, &archive, task).await;
+                            }
+                        }
+                        tasks => {
+                            if let Err(error) = tasks {
+                                tracing::warn!(%error, "claim consolidation task failed");
+                            }
+                            tokio::select! {
+                                _ = stop.cancelled() => return,
+                                _ = tokio::time::sleep(POLL_INTERVAL) => {},
+                            }
+                        }
+                    }
                 }
             });
         }
-
-        // Wait for prefetcher to finish (cancelled).
-        let _ = pf_handle.await;
-
-        // Two-phase shutdown: wait for workers to drain or timeout.
-        let drain = async { while workers.join_next().await.is_some() {} };
-        tokio::select! {
-            _ = drain => {
-                tracing::info!("workers drained cleanly");
-            }
-            _ = tokio::time::sleep(DRAIN_TIMEOUT) => {
-                tracing::warn!("worker drain timeout, aborting remaining tasks");
-                workers.abort_all();
-            }
+        token.cancelled().await;
+        if tokio::time::timeout(DRAIN_TIMEOUT, async {
+            while workers.join_next().await.is_some() {}
+        })
+        .await
+        .is_err()
+        {
+            tracing::warn!("consolidation drain timed out; unfinished attempts will be reclaimed");
+            workers.abort_all();
+            while workers.join_next().await.is_some() {}
         }
     }
 }
 
-/// Executes a single task.
-async fn execute_task(queue: &Queue, task: Task) {
-    // Validate version.
-    if task.version != TASK_PAYLOAD_VERSION {
+/// Holds a dedicated task lock through upload and completion. All progress SQL
+/// uses that connection: losing it cancels compression instead of silently
+/// continuing on a replacement pooled connection.
+pub async fn execute_task(queue: &Queue, archive: &crate::ArchiveCreator, task: Task) {
+    if let Err(error) = execute_inner(queue, archive, &task).await {
+        tracing::warn!(
+            task_id = task.task_id, %error,
+            "consolidation attempt interrupted; left for recovery"
+        );
+    }
+}
+
+async fn execute_inner(
+    queue: &Queue,
+    archive: &crate::ArchiveCreator,
+    task: &Task,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut lock = queue.task_lock(task.task_id).await?;
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM _task_queue WHERE task_id = ? AND state = 'processing'",
+    )
+    .bind(task.task_id)
+    .fetch_one(lock.connection())
+    .await?;
+    if active != 1 {
+        lock.release().await?;
+        return Ok(());
+    }
+    let payload = unmarshal_payload(&task.input);
+    let valid = payload
+        .as_ref()
+        .ok()
+        .filter(|p| p.table_name == task.table_name)
+        .and_then(|p| p.consolidation.as_ref())
+        .filter(|p| p.validate().is_ok());
+    let Some(input) = valid.filter(|_| task.version == TASK_PAYLOAD_VERSION) else {
+        sqlx::query(
+            "UPDATE _task_queue SET state = 'dead_letter', completed_at = ? WHERE task_id = ? AND \
+             state = 'processing'",
+        )
+        .bind(metalog_timeutil::epoch_nanos())
+        .bind(task.task_id)
+        .execute(lock.connection())
+        .await?;
         tracing::error!(
             task_id = task.task_id,
-            version = task.version,
-            "version mismatch"
+            "invalid consolidation payload; dead-lettered without modifying sources"
         );
-        let _ = queue.fail_task(task.task_id).await;
-        return;
-    }
-
-    // Unmarshal payload.
-    let payload = match unmarshal_payload(&task.input) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(task_id = task.task_id, error = %e, "unmarshal failed");
-            let _ = queue.fail_task(task.task_id).await;
-            return;
+        lock.release().await?;
+        return Ok(());
+    };
+    queue.ensure_reservations(task, input).await?;
+    let create = archive.create(task.task_id, input);
+    tokio::pin!(create);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
+    let result = loop {
+        tokio::select! {
+            result = &mut create => break result,
+            _ = heartbeat.tick() => {
+                let updated = sqlx::query(
+                    "UPDATE _task_queue SET claimed_at = ? WHERE task_id = ? \
+                     AND state = 'processing'"
+                )
+                .bind(metalog_timeutil::epoch_nanos())
+                .bind(task.task_id)
+                .execute(lock.connection())
+                .await?;
+                if updated.rows_affected() != 1 { return Err("task ownership lost".into()); }
+            }
         }
     };
-
-    let cons = match &payload.consolidation {
-        Some(c) => c,
-        None => {
-            tracing::error!(task_id = task.task_id, "missing consolidation data");
-            let _ = queue.fail_task(task.task_id).await;
-            return;
-        }
-    };
-
-    // TODO: actually create archive (download IR, compress, upload).
-    // For now, just complete with a placeholder result.
-    tracing::info!(
-        task_id = task.task_id,
-        ir_paths = cons.ir_paths.len(),
-        archive_path = %cons.archive_path,
-        "executing consolidation task (placeholder)"
-    );
-
-    let result = TaskResult {
-        archive_path: cons.archive_path.clone(),
-        archive_size_bytes: 0,
-        error: String::new(),
-        created_at: metalog_timeutil::epoch_nanos(),
-    };
-
-    match marshal_result(&result) {
-        Ok(output) => {
-            let _ = queue.complete_task(task.task_id, &output).await;
-        }
-        Err(e) => {
-            tracing::error!(task_id = task.task_id, error = %e, "marshal result failed");
-            let _ = queue.fail_task(task.task_id).await;
-        }
+    let result = result.unwrap_or_else(|error| TaskResult {
+        error: error.to_string().chars().take(4096).collect(),
+        ..TaskResult::default()
+    });
+    if !result.error.is_empty() {
+        tracing::warn!(task_id = task.task_id, error = %result.error, "archive creation failed");
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn drain_timeout() {
-        assert_eq!(DRAIN_TIMEOUT, Duration::from_secs(30));
+    if result.error.is_empty() {
+        tracing::info!(
+            task_id = task.task_id, files = input.ir_paths.len(),
+            archive_path = %result.archive_path, bytes = result.archive_size_bytes,
+            "archive uploaded"
+        );
     }
-
-    #[test]
-    fn poll_constants() {
-        assert_eq!(POLL_INTERVAL, Duration::from_secs(2));
-        assert_eq!(MAX_BACKOFF, Duration::from_secs(30));
-    }
+    let output = marshal_result(&result)?;
+    sqlx::query(
+        "UPDATE _task_queue SET state = 'completed', output = ?, completed_at = ? WHERE task_id = \
+         ? AND state = 'processing'",
+    )
+    .bind(output)
+    .bind(metalog_timeutil::epoch_nanos())
+    .bind(task.task_id)
+    .execute(lock.connection())
+    .await?;
+    lock.release().await?;
+    Ok(())
 }

@@ -159,9 +159,31 @@ impl NodeConfig {
             return Err(invalid("grpc.ingestion requires coordinator.enabled=true"));
         }
         if self.worker.concurrency != 0 {
-            return Err(invalid(
-                "Rust consolidation workers are not implemented; worker.concurrency must be 0",
-            ));
+            if self.worker.concurrency > 256
+                || self.database.primary.pool_size < self.worker.concurrency + 4
+            {
+                return Err(invalid(
+                    "worker concurrency must be <= 256 and primary pool_size must allow \
+                     concurrency + 4 connections",
+                ));
+            }
+            if self.worker.clp_process_timeout_secs == 0
+                || self.worker.clp_process_timeout_secs > 3600
+            {
+                return Err(invalid(
+                    "worker.clp_process_timeout_secs must be between 1 and 3600",
+                ));
+            }
+            let binary = self.worker.resolve_clp_binary().ok_or_else(|| {
+                invalid("workers require clp-s on PATH or worker.clp_binary_path")
+            })?;
+            which::which(binary)
+                .map_err(|_| invalid("worker.clp_binary_path must be an executable file"))?;
+            if self.storage.backends.is_empty() {
+                return Err(invalid(
+                    "workers require configured object storage backends",
+                ));
+            }
         }
         if self.telemetry.enabled {
             return Err(invalid(
@@ -657,7 +679,7 @@ storage:
     }
 
     #[test]
-    fn reject_unsafe_intervals_and_unimplemented_workers() {
+    fn reject_unsafe_intervals_and_unconfigured_workers() {
         let mut cfg: NodeConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
         cfg.coordinator.enabled = true;
         cfg.coordinator.reconciliation_interval_secs = 0;

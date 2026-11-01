@@ -6,10 +6,9 @@ use metalog_types::{file_record::DimMeta, file_state::FileState, FileRecord};
 /// Extracts file metadata and dimensions. Unsupported extension fields are
 /// rejected explicitly so callers never receive success for discarded metadata.
 pub fn convert_record(record: &MetadataRecord) -> Result<FileRecord, ConvertError> {
-    if !record.agg.is_empty() || !record.sketch.is_empty() || !record.self_describing_kv.is_empty()
-    {
+    if !record.agg.is_empty() || !record.self_describing_kv.is_empty() {
         return Err(ConvertError(
-            "aggregation, sketch, and self-describing ingestion are not supported".into(),
+            "aggregation and self-describing ingestion are not supported".into(),
         ));
     }
     let file = record
@@ -22,6 +21,23 @@ pub fn convert_record(record: &MetadataRecord) -> Result<FileRecord, ConvertErro
     // Dimensions (base feature).
     extract_dims(&record.dim, &mut rec)?;
 
+    if !record.sketch.is_empty() {
+        let mut sketches = metalog_types::sketch::SketchData::default();
+        for entry in &record.sketch {
+            if sketches
+                .sketches
+                .insert(entry.sketch_key.clone(), entry.data.clone())
+                .is_some()
+            {
+                return Err(ConvertError(format!(
+                    "duplicate sketch field {}",
+                    entry.sketch_key
+                )));
+            }
+        }
+        metalog_sketches::decode_snapshots(&sketches.sketches).map_err(ConvertError)?;
+        rec.sketches = Some(sketches);
+    }
     Ok(rec)
 }
 

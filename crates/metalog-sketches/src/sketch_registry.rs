@@ -54,47 +54,77 @@ impl SketchRegistry {
 
     /// Claims an AVAILABLE slot for a new sketch key.
     pub async fn claim_slot(&self, sketch_key: &str) -> Result<Option<String>, sqlx::Error> {
-        // Check cache first.
-        {
-            let inner = self.inner.read().await;
-            if let Some(name) = inner.cache.get(sketch_key) {
-                return Ok(Some(name.clone()));
+        let names = self.resolve_or_allocate(&[sketch_key.to_owned()]).await?;
+        Ok(names.get(sketch_key).cloned())
+    }
+
+    /// Serialize cross-node allocation and always re-read all slots under the
+    /// lock. The schema has no unique logical-key index; a process-local cache
+    /// alone cannot prevent two nodes allocating the same key twice.
+    pub async fn resolve_or_allocate(
+        &self,
+        keys: &[String],
+    ) -> Result<HashMap<String, String>, sqlx::Error> {
+        let mut lock = metalog_metastore::AdvisoryLock::acquire_scoped(
+            &self.db,
+            "sketch_registry",
+            &self.table_name,
+            10,
+        )
+        .await
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        let entries: Vec<SketchRegistryEntry> = sqlx::query_as(
+            "SELECT table_name, sketch_name, sketch_key, state FROM _sketch_registry WHERE \
+             table_name = ? ORDER BY sketch_name",
+        )
+        .bind(&self.table_name)
+        .fetch_all(lock.connection())
+        .await?;
+        let mut mapping = HashMap::new();
+        let mut available = Vec::new();
+        for entry in entries {
+            match (entry.status.as_str(), entry.sketch_key) {
+                ("ACTIVE", Some(key)) => {
+                    if mapping.insert(key, entry.sketch_name).is_some() {
+                        return Err(sqlx::Error::Protocol(
+                            "duplicate active sketch key; repair registry before ingesting".into(),
+                        ));
+                    }
+                }
+                ("AVAILABLE", None) => available.push(entry.sketch_name),
+                _ => {} // Never recycle invalidated slots.
             }
         }
-
-        // Find an AVAILABLE slot and claim it.
-        let now = metalog_timeutil::epoch_nanos();
-        let result = sqlx::query(
-            "UPDATE _sketch_registry SET sketch_key = ?, state = 'ACTIVE', created_at = ? WHERE \
-             table_name = ? AND state = 'AVAILABLE' AND sketch_key IS NULL LIMIT 1",
-        )
-        .bind(sketch_key)
-        .bind(now)
-        .bind(&self.table_name)
-        .execute(&self.db)
-        .await?;
-
-        if result.rows_affected() == 0 {
-            return Ok(None); // No slots available.
+        let mut keys = keys.to_vec();
+        keys.sort();
+        keys.dedup();
+        let missing: Vec<_> = keys
+            .iter()
+            .filter(|key| !mapping.contains_key(*key))
+            .collect();
+        if missing.len() > available.len() {
+            return Err(sqlx::Error::Protocol(
+                "all 64 sketch slots are allocated".into(),
+            ));
         }
-
-        // Find which slot was claimed.
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT sketch_name FROM _sketch_registry WHERE table_name = ? AND sketch_key = ? AND \
-             state = 'ACTIVE'",
-        )
-        .bind(&self.table_name)
-        .bind(sketch_key)
-        .fetch_optional(&self.db)
-        .await?;
-
-        if let Some((name,)) = row {
-            let mut inner = self.inner.write().await;
-            inner.cache.insert(sketch_key.to_string(), name.clone());
-            Ok(Some(name))
-        } else {
-            Ok(None)
+        for (key, slot) in missing.into_iter().zip(available) {
+            sqlx::query(
+                "UPDATE _sketch_registry SET sketch_key = ?, state = 'ACTIVE', created_at = ? \
+                 WHERE table_name = ? AND sketch_name = ? AND state = 'AVAILABLE'",
+            )
+            .bind(key)
+            .bind(metalog_timeutil::epoch_nanos())
+            .bind(&self.table_name)
+            .bind(&slot)
+            .execute(lock.connection())
+            .await?;
+            mapping.insert(key.clone(), slot);
         }
+        lock.release()
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        self.inner.write().await.cache = mapping.clone();
+        Ok(mapping)
     }
 
     /// Builds the FIND_IN_SET SQL for sketch predicate evaluation.

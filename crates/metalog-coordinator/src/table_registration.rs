@@ -219,11 +219,10 @@ fn merge_config(stored: &mut serde_json::Value, patch: serde_json::Value) {
 fn validate_supported_config(json: &str) -> Result<(), TableRegistrationError> {
     let cfg = metalog_metastore::decode_table_config(Some(json))
         .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
-    if cfg.consolidation.enabled {
-        return Err(TableRegistrationError::InvalidConfig(
-            "consolidation is not implemented in the Rust server".into(),
-        ));
-    }
+    cfg.validate_indexes()
+        .map_err(TableRegistrationError::InvalidConfig)?;
+    metalog_consolidation::build_policy(&cfg.consolidation)
+        .map_err(TableRegistrationError::InvalidConfig)?;
     let r = cfg.retention;
     if r.enabled
         && ((!r.type_name.is_empty() && r.type_name != "default")

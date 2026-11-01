@@ -218,6 +218,11 @@ MySQL 8.0 supports `LOCK=NONE` even with indexed virtual columns, giving zero-im
 
 ## Dynamic Indexes
 
+Rust uses the per-table `indexes` array of logical dimension names and reserves the
+`idx_metalog_dim_fNN` prefix for managed indexes. It reconciles at startup and every 60 seconds,
+including fields allocated after startup. See the [Rust configuration and guarantees](../operations/rust-production.md#per-field-bloom-filters-and-dimension-indexes).
+The following describes the historical Go manager.
+
 The `IndexManager` type (in the `schema` package) reconciles index configuration at startup and on config reload:
 
 - **Creates** indexes that are enabled in config but missing from the table

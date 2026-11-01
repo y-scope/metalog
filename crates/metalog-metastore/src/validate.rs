@@ -11,15 +11,21 @@ pub fn validate_file_record(rec: &FileRecord) -> Result<(), ValidationError> {
         .aggs
         .as_ref()
         .is_some_and(|a| !a.entries.is_empty() || !a.meta.is_empty())
-        || rec.sketches.as_ref().is_some_and(|s| {
-            !s.sketches.is_empty() || s.set_value.is_some() || s.ext_blob.is_some()
-        })
     {
         return Err(ValidationError(
-            "aggregation and sketch ingestion are not supported".into(),
+            "aggregation ingestion is not supported".into(),
         ));
     }
 
+    if rec
+        .sketches
+        .as_ref()
+        .is_some_and(|s| s.set_value.is_some() || s.ext_blob.is_some())
+    {
+        return Err(ValidationError(
+            "supply raw sketch snapshots, not pre-resolved storage fields".into(),
+        ));
+    }
     if rec.min_timestamp < 0 {
         return Err(ValidationError("min_timestamp must be non-negative".into()));
     }

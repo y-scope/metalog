@@ -80,6 +80,39 @@ impl SplitQueryEngine {
         group_by: &[String],
         offset: u64,
     ) -> Result<Vec<SplitRow>, EngineError> {
+        Ok(self
+            .execute_page_with_ext(
+                table_name,
+                columns,
+                filter_expr,
+                order_clauses,
+                keyset_where,
+                limit,
+                group_by,
+                offset,
+                false,
+            )
+            .await?
+            .into_iter()
+            .map(|(row, _)| row)
+            .collect())
+    }
+
+    /// Optional internal binary projection. Keep payload bytes out of JSON and
+    /// never fetch an oversized sketch blob just to decide it is unusable.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_page_with_ext(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        filter_expr: &str,
+        order_clauses: &[String],
+        keyset_where: &str,
+        limit: i32,
+        group_by: &[String],
+        offset: u64,
+        include_ext: bool,
+    ) -> Result<Vec<(SplitRow, Option<Vec<u8>>)>, EngineError> {
         let table = try_quote_identifier(table_name)
             .map_err(|e| EngineError::InvalidTableName(table_name.into(), e.to_string()))?;
         let filter_expr = rewrite_filter_columns(filter_expr, None)
@@ -94,7 +127,18 @@ impl SplitQueryEngine {
                 "group_by cannot be combined with a cursor".into(),
             ));
         }
-        let cols_sql = Self::projection_sql(columns, group_by)?;
+        let mut cols_sql = Self::projection_sql(columns, group_by)?;
+        if include_ext {
+            if columns.is_empty() || !group_by.is_empty() {
+                return Err(EngineError::InvalidProjection(
+                    "sketch paging requires explicit, ungrouped columns".into(),
+                ));
+            }
+            cols_sql.push_str(
+                ", IF(OCTET_LENGTH(ext) <= 2097152, ext, NULL) AS _metalog_sketch_blob, \
+                 CAST(sketches AS CHAR) AS _metalog_sketch_slots",
+            );
+        }
         let order_sql = order_clauses
             .iter()
             .map(|clause| {
@@ -147,15 +191,25 @@ impl SplitQueryEngine {
         let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
         rows.iter()
             .map(|row| {
-                row.columns()
+                let ext: Option<Vec<u8>> = if include_ext {
+                    row.try_get("_metalog_sketch_blob")?
+                } else {
+                    None
+                };
+                let fields = row
+                    .columns()
                     .iter()
+                    .filter(|column| {
+                        column.name() != "_metalog_sketch_blob" && column.name() != "ext"
+                    })
                     .map(|column| {
                         Ok((
                             column.name().to_string(),
                             decode_column(row, column.ordinal())?,
                         ))
                     })
-                    .collect::<Result<SplitRow, sqlx::Error>>()
+                    .collect::<Result<SplitRow, sqlx::Error>>()?;
+                Ok((fields, ext))
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(EngineError::Sql)
@@ -231,6 +285,24 @@ impl SplitQueryEngine {
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|parts| parts.join(", "))
+    }
+
+    /// Discover indexes created by dimension reconciliation. Prefix indexes do
+    /// not order complete strings and therefore do not qualify here.
+    pub async fn has_full_column_index(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND \
+             TABLE_NAME=? AND COLUMN_NAME=? AND SEQ_IN_INDEX=1 AND SUB_PART IS NULL",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count > 0)
     }
 
     pub fn validate_sort_columns(

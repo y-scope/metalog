@@ -1,9 +1,20 @@
 mod ext_codec;
+mod predicate;
 mod sbbf;
 mod sketch_registry;
 
-pub use ext_codec::{decode_ext_blob, encode_ext_blob};
+pub use ext_codec::{
+    decode_ext_blob,
+    decode_snapshots,
+    encode_ext_blob,
+    SketchPayload,
+    Snapshot,
+    MAX_EXT_BYTES,
+    MAX_SKETCH_BYTES,
+    SBBF_TYPE,
+};
 use metalog_types::processors::SketchProcessor;
+pub use predicate::{may_match, parse_expression, SketchPredicate};
 pub use sbbf::sbbf_contains;
 pub use sketch_registry::SketchRegistry;
 

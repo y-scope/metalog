@@ -24,6 +24,18 @@ pub trait Backend: Send + Sync {
     /// Writes an object. Creates or overwrites.
     async fn put(&self, bucket: &str, key: &str, data: &[u8]) -> Result<(), StorageError>;
 
+    /// Uploads a local file. Archive executors require a streaming implementation.
+    async fn put_file(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::Other(
+            "backend does not support file uploads".into(),
+        ))
+    }
+
     /// Deletes an object. Idempotent (returns Ok if not found).
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StorageError>;
 

@@ -110,6 +110,31 @@ impl Backend for FilesystemBackend {
         Ok(())
     }
 
+    async fn put_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        source: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        let path = self.safe_path(bucket, key)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| StorageError::Other("missing parent directory".into()))?;
+        tokio::fs::create_dir_all(parent).await?;
+        // Keep the temporary path owned by this future, including on cancellation.
+        let temporary = tempfile::NamedTempFile::new_in(parent)?;
+        let mut output = tokio::fs::File::from_std(temporary.reopen()?);
+        let mut input = tokio::fs::File::open(source).await?;
+        tokio::io::copy(&mut input, &mut output).await?;
+        output.sync_all().await?;
+        drop(output);
+        temporary
+            .persist(&path)
+            .map_err(|e| StorageError::Io(e.error))?;
+        tokio::fs::File::open(parent).await?.sync_all().await?;
+        Ok(())
+    }
+
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
         let path = self.safe_path(bucket, key)?;
         match tokio::fs::remove_file(&path).await {

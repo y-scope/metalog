@@ -21,6 +21,7 @@ pub struct Node {
     storage: Option<Arc<StorageRegistry>>,
     token: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 pub struct NodeBuilder {
@@ -58,6 +59,7 @@ impl NodeBuilder {
             storage: self.storage,
             token: CancellationToken::new(),
             tasks: Vec::new(),
+            worker: None,
         }
     }
 }
@@ -91,12 +93,48 @@ impl Node {
                 self.writer.clone(),
                 self.storage.clone(),
                 &self.token,
+                archive_destination(&self.config),
             )
             .await
             {
                 self.stop().await;
                 return Err(error);
             }
+        }
+        if self.config.worker.concurrency > 0 {
+            let storage = self.storage.clone().ok_or_else(|| NodeError::TableConfig {
+                table: String::new(),
+                message: "workers require configured storage".into(),
+            })?;
+            let binary =
+                self.config
+                    .worker
+                    .resolve_clp_binary()
+                    .ok_or_else(|| NodeError::TableConfig {
+                        table: String::new(),
+                        message: "workers require clp-s".into(),
+                    })?;
+            let archive = Arc::new(metalog_consolidation::ArchiveCreator::new(
+                storage,
+                binary,
+                Duration::from_secs(self.config.worker.clp_process_timeout_secs),
+            ));
+            let queue = Arc::new(metalog_consolidation::Queue::new(self.shared.db.clone()));
+            let worker_id =
+                self.config
+                    .resolve_node_id()
+                    .map_err(|error| NodeError::TableConfig {
+                        table: String::new(),
+                        message: error.to_string(),
+                    })?;
+            let worker = metalog_consolidation::WorkerUnit::new(
+                queue,
+                archive,
+                &worker_id,
+                self.config.worker.concurrency as usize,
+            );
+            let token = self.token.clone();
+            self.worker = Some(tokio::spawn(async move { worker.run(token).await }));
         }
         tracing::info!(tables = tables.len(), "node started");
         Ok(())
@@ -109,13 +147,15 @@ impl Node {
         let writer = self.writer.clone();
         let storage = self.storage.clone();
         let token = self.token.clone();
+        let destination = archive_destination(&self.config);
         let on_start: CoordinatorCallback = Arc::new(move |table: String| {
             let shared = shared.clone();
             let writer = writer.clone();
             let storage = storage.clone();
             let token = token.clone();
+            let destination = destination.clone();
             Box::pin(async move {
-                start_coordinator(&table, shared, writer, storage, &token)
+                start_coordinator(&table, shared, writer, storage, &token, destination)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -136,6 +176,15 @@ impl Node {
     /// Cancels and joins background work before draining ingestion.
     pub async fn stop(&mut self) {
         self.token.cancel();
+        if let Some(mut worker) = self.worker.take() {
+            if tokio::time::timeout(Duration::from_secs(35), &mut worker)
+                .await
+                .is_err()
+            {
+                worker.abort();
+                let _ = worker.await;
+            }
+        }
         for mut handle in self.tasks.drain(..) {
             if tokio::time::timeout(Duration::from_secs(10), &mut handle)
                 .await
@@ -153,12 +202,19 @@ impl Node {
     }
 }
 
+fn archive_destination(config: &NodeConfig) -> Option<(String, String)> {
+    let backend = &config.storage.default_backend;
+    let bucket = &config.storage.backends.get(backend)?.bucket;
+    (!bucket.is_empty()).then(|| (backend.clone(), bucket.clone()))
+}
+
 async fn start_coordinator(
     table_name: &str,
     shared: Arc<Resources>,
     writer: Option<Arc<BatchingWriter>>,
     storage: Option<Arc<StorageRegistry>>,
     parent_token: &CancellationToken,
+    archive_destination: Option<(String, String)>,
 ) -> Result<(), NodeError> {
     // Serialize startup with stop so duplicate callbacks cannot leak tasks or
     // replace the registered unit while an earlier instance is still running.
@@ -185,11 +241,36 @@ async fn start_coordinator(
         })?;
     // Do not accept a configured lifecycle until its archive/storage path is
     // available. Silently replacing these values with defaults loses user intent.
-    if table_cfg.consolidation.enabled {
+    table_cfg
+        .validate_indexes()
+        .map_err(|message| NodeError::TableConfig {
+            table: table_name.into(),
+            message,
+        })?;
+    metalog_consolidation::build_policy(&table_cfg.consolidation).map_err(|message| {
+        NodeError::TableConfig {
+            table: table_name.into(),
+            message,
+        }
+    })?;
+    if table_cfg.consolidation.enabled && (storage.is_none() || archive_destination.is_none()) {
         return Err(NodeError::UnsupportedFeature {
             table: table_name.to_string(),
-            feature: "consolidation requires a configured archive executor",
+            feature: "consolidation requires storage.default_backend with a configured bucket",
         });
+    }
+    if storage.is_some() && shared.db.options().get_max_connections() < 4 {
+        let queued: i64 =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _task_queue WHERE table_name = ?)")
+                .bind(table_name)
+                .fetch_one(&shared.db)
+                .await?;
+        if table_cfg.consolidation.enabled || queued != 0 {
+            return Err(NodeError::TableConfig {
+                table: table_name.into(),
+                message: "consolidation requires at least four primary pool connections".into(),
+            });
+        }
     }
     if table_cfg.retention.enabled && storage.is_none() {
         return Err(NodeError::UnsupportedFeature {
@@ -230,15 +311,19 @@ async fn start_coordinator(
     }
 
     let registry = Arc::new(ColumnRegistry::new(shared.db.clone(), table_name).await?);
-    let unit = Arc::new(CoordinatorUnit::new_with_token(
-        table_name,
-        table_cfg,
-        registry.clone(),
-        shared.db.clone(),
-        storage,
-        DEFAULT_PROGRESS_STALL_TIMEOUT,
-        parent_token,
-    ));
+    let unit = Arc::new(
+        CoordinatorUnit::new_with_token(
+            table_name,
+            table_cfg,
+            registry.clone(),
+            shared.db.clone(),
+            storage,
+            DEFAULT_PROGRESS_STALL_TIMEOUT,
+            parent_token,
+        )
+        .with_archive_destination(archive_destination)
+        .with_consolidation_slot(shared.consolidation_slot.clone()),
+    );
     unit.ensure_partitions_ready().await?;
     if parent_token.is_cancelled() {
         return Err(NodeError::ShuttingDown);

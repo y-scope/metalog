@@ -2,6 +2,10 @@
 
 [← Back to docs](../README.md)
 
+For the Rust runtime, see [configuration and recovery](../operations/rust-consolidation.md).
+The historical Go design below uses an in-memory in-flight set; Rust uses durable reservations,
+per-attempt archive names, and retryable cleanup.
+
 **Related:** [Architecture Overview](overview.md) · [Metadata Schema](metadata-schema.md) · [Task Queue Design](../design/task-queue.md) · [Scale Workers](../guides/scale-workers.md) · [Naming Conventions](../reference/naming-conventions.md)
 
 ## Table of Contents

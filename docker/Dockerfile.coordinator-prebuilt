@@ -1,12 +1,16 @@
 # Lightweight image using a pre-built metalog binary (avoids Rust compile in Docker).
+FROM ghcr.io/y-scope/clp/clp-package:0.14.1@sha256:f04d30e9243b2af0e549f2e81e547c0b9640d4e9f02c00aed34771987115671a AS clp
+
 FROM ubuntu:noble
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libzstd1 libssl3t64 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY target/release/metalog /app/metalog
+COPY --from=clp /opt/clp/bin/clp-s /usr/local/bin/clp-s
+COPY --from=clp /opt/clp/LICENSE /usr/share/doc/clp/LICENSE
 
 EXPOSE 9090 8081
 

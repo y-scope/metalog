@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 metalog-types = { workspace = true }
+metalog-sketches = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }

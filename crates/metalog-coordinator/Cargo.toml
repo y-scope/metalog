@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+metalog-consolidation = { workspace = true }
 metalog-db = { workspace = true }
 metalog-metastore = { workspace = true }
 metalog-schema = { workspace = true }

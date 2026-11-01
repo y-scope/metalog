@@ -18,6 +18,37 @@ pub enum CodecError {
 
     #[error("decompressed size {0} exceeds limit {MAX_DECOMPRESSED_SIZE}")]
     DecompressedTooLarge(usize),
+
+    #[error("LZ4 frame I/O: {0}")]
+    Frame(#[from] std::io::Error),
+}
+
+/// Go-compatible named MessagePack maps inside a standard LZ4 frame.
+pub fn marshal_frame<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
+    use std::io::Write;
+    let bytes = rmp_serde::to_vec_named(value)?;
+    if bytes.len() > MAX_DECOMPRESSED_SIZE {
+        return Err(CodecError::DecompressedTooLarge(bytes.len()));
+    }
+    let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
+    encoder.write_all(&bytes)?;
+    encoder
+        .finish()
+        .map_err(|e| CodecError::Decompress(e.to_string()))
+}
+
+/// Enforce the decompressed limit while reading, before allocating a full payload.
+pub fn unmarshal_frame<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, CodecError> {
+    use std::io::Read;
+    let decoder = lz4_flex::frame::FrameDecoder::new(data);
+    let mut bytes = Vec::new();
+    decoder
+        .take((MAX_DECOMPRESSED_SIZE + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_DECOMPRESSED_SIZE {
+        return Err(CodecError::DecompressedTooLarge(bytes.len()));
+    }
+    Ok(rmp_serde::from_slice(&bytes)?)
 }
 
 /// Serializes `value` to msgpack, then LZ4-compresses the result.
@@ -79,6 +110,26 @@ mod tests {
         let encoded = marshal(&Empty {}).unwrap();
         let decoded: Empty = unmarshal(&encoded).unwrap();
         assert_eq!(Empty {}, decoded);
+    }
+
+    #[test]
+    fn frame_decode_bounds_decompression_and_rejects_truncation() {
+        use std::io::Write;
+        let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        encoder
+            .write_all(&vec![0; MAX_DECOMPRESSED_SIZE + 1])
+            .unwrap();
+        let bomb = encoder.finish().unwrap();
+        assert!(matches!(
+            unmarshal_frame::<Vec<u8>>(&bomb),
+            Err(CodecError::DecompressedTooLarge(_))
+        ));
+        let valid = marshal_frame(&TestPayload {
+            name: "frame".into(),
+            values: vec![1],
+        })
+        .unwrap();
+        assert!(unmarshal_frame::<TestPayload>(&valid[..valid.len() / 2]).is_err());
     }
 
     #[test]

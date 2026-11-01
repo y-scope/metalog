@@ -442,6 +442,7 @@ async fn shared_archive_and_ir_references_are_protected_across_tables() {
     )
     .await;
     // The same object can appear in the opposite field in another table.
+    // Keep a live IR state: ARCHIVE_CLOSED source paths are only provenance.
     insert_file(
         &pool,
         "retention_live",
@@ -451,6 +452,10 @@ async fn shared_archive_and_ir_references_are_protected_across_tables() {
         Some("shared_ir"),
     )
     .await;
+    sqlx::query("UPDATE retention_live SET state = 'IR_CLOSED'")
+        .execute(&pool)
+        .await
+        .unwrap();
     module()
         .run_once(
             &FileRecords::new(pool.clone(), "retention_old"),

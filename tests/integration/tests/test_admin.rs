@@ -117,7 +117,7 @@ async fn registration_validates_and_merges_stored_configuration() {
     let (pool, _db) = setup_db().await;
     let registration = TableRegistration::new(pool.clone(), "");
     for config in [
-        r#"{"consolidation":{"enabled":true}}"#,
+        r#"{"consolidation":{"enabled":true,"policies":[{"type":"unknown"}]}}"#,
         r#"{"retention":{"scan_interval_secs":0,"enabled":true}}"#,
         r#"{"retention":{"misspelled":1}}"#,
     ] {

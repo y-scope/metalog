@@ -1,0 +1,2 @@
+{"timestamp":1700000000000,"message":"worker alpha completed 12 items","application_id":"job-1","value":12}
+{"timestamp":1700000001000,"message":"worker alpha completed 25 items","application_id":"job-1","value":25}

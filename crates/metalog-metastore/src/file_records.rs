@@ -117,20 +117,33 @@ impl FileRecords {
         ];
 
         for m in dim_mappings {
-            select_cols.push(format!("`{}` AS `{}`", m.physical_col, m.logical_key));
+            select_cols.push(format!(
+                "CAST({} AS CHAR) AS {}",
+                metalog_db::quote_identifier(&m.physical_col),
+                metalog_db::quote_identifier(&m.logical_key)
+            ));
         }
         for m in agg_mappings {
-            select_cols.push(format!("`{}` AS `{}`", m.physical_col, m.logical_key));
+            select_cols.push(format!(
+                "CAST({} AS CHAR) AS {}",
+                metalog_db::quote_identifier(&m.physical_col),
+                metalog_db::quote_identifier(&m.logical_key)
+            ));
         }
 
         let sql = format!(
-            "SELECT {} FROM `{}` WHERE state = ? ORDER BY min_timestamp ASC LIMIT 10000",
+            "SELECT {} FROM {} AS f WHERE state = ? AND (expires_at = 0 OR expires_at > ?) AND \
+             NOT EXISTS (SELECT 1 FROM _consolidation_file c WHERE c.table_name = ? AND \
+             c.min_timestamp = f.min_timestamp AND c.file_id = f.id) ORDER BY min_timestamp, id \
+             LIMIT 10000",
             select_cols.join(", "),
-            self.table_name,
+            metalog_db::quote_identifier(&self.table_name),
         );
 
         let rows = sqlx::query(&sql)
             .bind(pending_state.as_db_str())
+            .bind(metalog_timeutil::epoch_nanos())
+            .bind(&self.table_name)
             .fetch_all(&self.db)
             .await?;
 
@@ -144,6 +157,18 @@ impl FileRecords {
                 file_storage_backend: row.try_get("file_storage_backend")?,
                 file_bucket: row.try_get("file_bucket")?,
                 file_path: row.try_get("file_path")?,
+                dims: dim_mappings
+                    .iter()
+                    .map(|mapping| {
+                        let value: Option<String> = row.try_get(mapping.logical_key.as_str())?;
+                        Ok((
+                            mapping.logical_key.clone(),
+                            value
+                                .map(serde_json::Value::String)
+                                .unwrap_or(serde_json::Value::Null),
+                        ))
+                    })
+                    .collect::<Result<_, sqlx::Error>>()?,
             });
         }
         Ok(results)
@@ -236,8 +261,11 @@ impl FileRecords {
         let sql = format!(
             "UPDATE `{}` SET state = CASE WHEN state IN (?, ?) THEN ? WHEN state IN (?, ?, ?, ?, \
              ?) THEN ? ELSE state END WHERE expires_at > 0 AND expires_at < ? AND state IN (?, ?, \
-             ?, ?, ?, ?, ?) LIMIT 1000",
-            self.table_name,
+             ?, ?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM _consolidation_file c JOIN _task_queue \
+             q ON q.task_id = c.task_id WHERE c.table_name = ? AND c.min_timestamp = \
+             `{}`.min_timestamp AND c.file_id = `{}`.id AND c.released = FALSE AND q.state IN \
+             ('pending', 'processing', 'completed')) LIMIT 1000",
+            self.table_name, self.table_name, self.table_name,
         );
         let result = sqlx::query(&sql)
             // IR chain: IR_BUFFERING, IR_CLOSED → IR_PURGING
@@ -260,6 +288,7 @@ impl FileRecords {
             .bind(FileState::FileArchiveBuffering.as_db_str())
             .bind(FileState::IrArchiveConsolidationPending.as_db_str())
             .bind(FileState::FileArchiveConsolidationPending.as_db_str())
+            .bind(&self.table_name)
             .execute(&self.db)
             .await?;
         Ok(result.rows_affected())
@@ -330,6 +359,22 @@ impl FileRecords {
         cutoff: i64,
     ) -> Result<bool, crate::StorageMutationError> {
         let mut guard = crate::StorageMutationGuard::acquire(&self.db).await?;
+        let pinned: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM _consolidation_file c JOIN _task_queue q ON q.task_id = \
+             c.task_id WHERE c.backend = ? AND c.bucket = ? AND c.path_hash = UNHEX(MD5(?)) AND \
+             BINARY c.path = BINARY ? AND c.released = FALSE AND q.state IN ('pending', \
+             'processing', 'completed'))",
+        )
+        .bind(&path.backend)
+        .bind(&path.bucket)
+        .bind(&path.path)
+        .bind(&path.path)
+        .fetch_one(guard.connection())
+        .await?;
+        if pinned != 0 {
+            guard.release().await?;
+            return Ok(false);
+        }
         let tables: Vec<(String,)> =
             sqlx::query_as("SELECT table_name FROM _table ORDER BY table_name")
                 .fetch_all(guard.connection())
@@ -338,11 +383,12 @@ impl FileRecords {
             let table = metalog_db::quote_identifier(&table_name);
             let sql = format!(
                 "SELECT EXISTS(SELECT 1 FROM {table} WHERE (state NOT IN ('IR_PURGING', \
-                 'ARCHIVE_PURGING') OR expires_at <= 0 OR expires_at >= ?) AND ((file_path_hash = \
-                 UNHEX(MD5(?)) AND BINARY file_storage_backend = BINARY ? AND BINARY file_bucket \
-                 = BINARY ? AND BINARY file_path = BINARY ?) OR (archive_path_hash = \
-                 UNHEX(MD5(?)) AND BINARY archive_storage_backend = BINARY ? AND BINARY \
-                 archive_bucket = BINARY ? AND BINARY archive_path = BINARY ?)))"
+                 'ARCHIVE_PURGING') OR expires_at <= 0 OR expires_at >= ?) AND ((NOT (state = \
+                 'ARCHIVE_CLOSED' AND archive_path IS NOT NULL AND OCTET_LENGTH(archive_path) > \
+                 0) AND file_path_hash = UNHEX(MD5(?)) AND BINARY file_storage_backend = BINARY ? \
+                 AND BINARY file_bucket = BINARY ? AND BINARY file_path = BINARY ?) OR \
+                 (archive_path_hash = UNHEX(MD5(?)) AND BINARY archive_storage_backend = BINARY ? \
+                 AND BINARY archive_bucket = BINARY ? AND BINARY archive_path = BINARY ?)))"
             );
             let (exists,): (i64,) = sqlx::query_as(&sql)
                 .bind(cutoff)
@@ -371,12 +417,17 @@ impl FileRecords {
         let table = metalog_db::quote_identifier(&self.table_name);
         let sql = format!(
             "DELETE FROM {table} WHERE min_timestamp = ? AND id = ? AND state IN ('IR_PURGING', \
-             'ARCHIVE_PURGING') AND expires_at > 0 AND expires_at < ?"
+             'ARCHIVE_PURGING') AND expires_at > 0 AND expires_at < ? AND NOT EXISTS (SELECT 1 \
+             FROM _consolidation_file c JOIN _task_queue q ON q.task_id = c.task_id WHERE \
+             c.table_name = ? AND c.min_timestamp = {table}.min_timestamp AND c.file_id = \
+             {table}.id AND c.released = FALSE AND q.state IN \
+             ('pending','processing','completed'))"
         );
         Ok(sqlx::query(&sql)
             .bind(file.min_timestamp)
             .bind(file.id)
             .bind(cutoff)
+            .bind(&self.table_name)
             .execute(&self.db)
             .await?
             .rows_affected())
@@ -392,6 +443,7 @@ pub struct PendingFile {
     pub file_storage_backend: Option<String>,
     pub file_bucket: Option<String>,
     pub file_path: Option<String>,
+    pub dims: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -417,6 +469,7 @@ mod tests {
             file_storage_backend: Some("minio".into()),
             file_bucket: Some("logs".into()),
             file_path: Some("/data/test.ir".into()),
+            dims: Default::default(),
         };
         assert_eq!(f.id, 42);
     }

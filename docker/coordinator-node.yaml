@@ -71,5 +71,7 @@ coordinator:
 # periodic reconciliation. See docs/guides/configure-tables.md.
 
 worker:
-  concurrency: 0
-  # Rust consolidation execution is not implemented. Keep workers disabled.
+  concurrency: 1
+  clp_binary_path: /usr/local/bin/clp-s
+  clp_process_timeout_secs: 300
+  # Enable consolidation per table through RegisterTable configuration.

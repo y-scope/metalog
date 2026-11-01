@@ -1,14 +1,15 @@
 # metalog
 
 Rust metadata catalog for [CLP](https://github.com/y-scope/clp), backed by MariaDB/MySQL.
-This branch supports gRPC ingestion/query/admin, S3/MinIO storage, retention, and multi-node
-coordinator HA. The retained Go sources provide migration reference; the default build and Docker
+This branch supports gRPC ingestion/query/admin, S3/MinIO storage, IR-to-archive consolidation,
+retention, multi-node coordinator HA, per-field Bloom pruning, and configurable dimension indexes. The retained Go sources provide migration reference; the default build and Docker
 image run Rust.
 
-Start with the [Rust deployment and migration guide](docs/operations/rust-production.md).
+Start with the [Rust deployment and migration guide](docs/operations/rust-production.md) and
+[consolidation configuration](docs/operations/rust-consolidation.md).
 It describes acknowledgment semantics, retention safety, configuration, unsupported features, and
 rollout requirements. Historical documents describe a broader Go feature set; they are not a Rust
-feature checklist. Kafka, consolidation execution, aggregation/sketch ingestion, and telemetry
+feature checklist. Kafka, aggregation ingestion, and telemetry
 exporters are currently disabled explicitly.
 
 ## Build and run

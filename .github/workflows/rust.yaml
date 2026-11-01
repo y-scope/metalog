@@ -20,6 +20,8 @@ jobs:
       - run: make fmt
       - run: make lint
       - run: make test-storage-image
+      - name: Prepare real CLP engine for consolidation tests
+        run: docker pull ghcr.io/y-scope/clp/clp-package:0.14.1@sha256:f04d30e9243b2af0e549f2e81e547c0b9640d4e9f02c00aed34771987115671a
       - run: cargo test --locked --workspace --all-features -- --test-threads=4
       - name: Database and process regressions through ProxySQL
         run: |

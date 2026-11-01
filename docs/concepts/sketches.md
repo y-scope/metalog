@@ -26,7 +26,7 @@ Sketches answer a different question than dimensions. A dimension filter says "t
 
 ### Split Block Bloom Filter (SBBF)
 
-Each sketch is a Parquet-compatible Split Block Bloom Filter — the same algorithm used by Apache Parquet for column chunk filtering:
+Each sketch is a Split Block Bloom Filter. Standard Parquet and the legacy Go library have different block-selection/lane conventions; the Rust reader accepts both (see compatibility below):
 
 - **256-bit blocks** (8 x uint32 words) with standard Parquet salt constants
 - **xxHash64** (seed 0) for hashing values
@@ -80,7 +80,7 @@ LZ4(
 )
 ```
 
-The `type` field is a format discriminator that fully identifies the algorithm, block layout, and hash function. `data` contains the raw 256-bit blocks (32 bytes each, little-endian uint32 words). `num_blocks = len(data) / 32`.
+The `type` field identifies the filter family. The historical `parquet_sbbf_xxhash64` tag is shared by two layout conventions, described below. `data` contains the raw 256-bit blocks (32 bytes each, little-endian uint32 words). `num_blocks = len(data) / 32`.
 
 ---
 
@@ -178,7 +178,7 @@ Request:
 4. Execute SQL (filter_expression applied as WHERE clause)
    SELECT ..., IF(FIND_IN_SET('s03',sketches)>0,ext,NULL) AS `ext`
    FROM table
-   WHERE uuid = 'abc-123' AND min_timestamp > 1000
+   WHERE min_timestamp > 1000
 
 5. Bloom filter evaluation (per row, in query API server)
    ext is NULL  → no sketch for this field → pass through
@@ -199,8 +199,8 @@ Sketches are **pruning hints, not filters**. A row without a sketch for the quer
 
 - Files ingested before sketches were configured still appear in results
 - Files from producers that don't send sketch data are not penalized
-- Results are identical with or without `sketch_expression` — it only affects performance
-- The query engine always confirms results via `filter_expression`
+- The metadata API returns fewer candidate files when a sketch proves absence
+- Consumers must confirm exact event matches inside surviving files; `filter_expression` filters file metadata
 
 The `SplitsScanned` vs `SplitsMatched` gap in `QueryStats` shows the pruning benefit.
 
@@ -213,12 +213,32 @@ The SBBF format is designed for cross-language interoperability:
 | Component | Specification |
 |-----------|---------------|
 | Block layout | 256-bit (8 x uint32 LE), Parquet standard |
-| Salt constants | Parquet SBBF salts (8 values) |
+| Salt constants | Parquet salts, or pair-swapped legacy Go salts |
+| Block selection | Parquet multiply-high, or legacy Go full-hash modulo |
 | Hash function | xxHash64, seed 0 |
 | Serialization | msgpack `{type: "parquet_sbbf_xxhash64", data: <bytes>}` |
 | Compression | LZ4 frame (applied at ext column level, not per-sketch) |
 
-Any language with xxHash64 and the ability to read little-endian uint32 arrays can evaluate the filter. The `type` string is the only field needed to identify the algorithm.
+The pinned Go `axiomhq/splitblockbloom` version selects `hash % num_blocks` and swaps each
+adjacent pair of Parquet salts. Standard Parquet selects `((hash >> 32) * num_blocks) >> 32`
+with the standard lane order. Both have historically used the same type tag here. Rust keeps a
+file if either interpretation might match; it never rewrites the stored bytes.
+
+Fixtures in `tests/fixtures/bloom` are generated using the pinned Go filter, xxHash, MessagePack,
+and LZ4 libraries plus an independent Go reference encoder for the standard Parquet algorithm.
+They cover one, three, and sixteen blocks, empty strings, quotes, Unicode, and embedded NULs:
+
+```bash
+go run -mod=readonly tests/fixtures/bloom/generate.go
+cargo test -p metalog-sketches
+cargo run -p metalog-sketches --example export_fixture -- /tmp/metalog-rust-ext.lz4
+go run -mod=readonly tests/fixtures/bloom/generate.go /tmp/metalog-rust-ext.lz4
+```
+
+The final command verifies that Go can decompress and evaluate a Rust-produced ext blob.
+The pipeline sections above describe the broader Go design, including Kafka. For the implemented
+Rust gRPC interface, snapshot completeness contract, lifecycle guards, limits, and supported
+predicates, see the [Rust operations guide](../operations/rust-production.md#per-field-bloom-filters-and-dimension-indexes).
 
 ---
 

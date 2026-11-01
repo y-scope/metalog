@@ -17,6 +17,9 @@ pub struct Resources {
     column_registries: RwLock<HashMap<String, Arc<ColumnRegistry>>>,
     coordinator_units: RwLock<HashMap<String, Arc<CoordinatorUnit>>>,
     pub(crate) coordinator_lifecycle: tokio::sync::Mutex<()>,
+    // A planner holds nested session locks. Bound concurrent planner passes so
+    // many tables cannot consume every pool slot while waiting for another one.
+    pub(crate) consolidation_slot: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Resources {
@@ -30,6 +33,7 @@ impl Resources {
             column_registries: RwLock::new(HashMap::new()),
             coordinator_units: RwLock::new(HashMap::new()),
             coordinator_lifecycle: tokio::sync::Mutex::new(()),
+            consolidation_slot: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 

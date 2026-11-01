@@ -142,6 +142,87 @@ impl IndexManager {
         Self { db }
     }
 
+    /// Manage only idx_metalog_dim_fNN indexes; operational/manual indexes are
+    /// never removed. Prefix string indexes bound InnoDB key sizes. The exact
+    /// field predicate still runs after the index lookup.
+    pub async fn reconcile(&self, table_name: &str) -> Result<(), sqlx::Error> {
+        validate_sql_identifier(table_name).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        let mut lock =
+            metalog_metastore::AdvisoryLock::acquire_scoped(&self.db, "dim_alloc", table_name, 10)
+                .await
+                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        let config: Option<String> = sqlx::query_scalar(
+            "SELECT CAST(config AS CHAR) FROM _table_config WHERE table_name = ?",
+        )
+        .bind(table_name)
+        .fetch_one(lock.connection())
+        .await?;
+        let config = metalog_metastore::decode_table_config(config.as_deref())
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        config.validate_indexes().map_err(sqlx::Error::Protocol)?;
+        let entries: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT dim_key, column_name, base_type FROM _dim_registry WHERE table_name = ? AND \
+             state = 'ACTIVE' AND dim_key IS NOT NULL",
+        )
+        .bind(table_name)
+        .fetch_all(lock.connection())
+        .await?;
+        let desired: std::collections::BTreeMap<_, _> = entries
+            .into_iter()
+            .filter(|(key, ..)| config.indexes.contains(key))
+            .map(|(_, col, kind)| (format!("idx_metalog_{col}"), (col, kind)))
+            .collect();
+        let existing: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = \
+             DATABASE() AND TABLE_NAME = ?",
+        )
+        .bind(table_name)
+        .fetch_all(lock.connection())
+        .await?;
+        let table = metalog_db::quote_identifier(table_name);
+        for name in &existing {
+            if managed_dimension_index(name) && !desired.contains_key(name) {
+                let sql = format!(
+                    "ALTER TABLE {table} DROP INDEX {}, ALGORITHM=INPLACE, LOCK=NONE",
+                    metalog_db::quote_identifier(name)
+                );
+                sqlx::query(&sql).execute(lock.connection()).await?;
+            }
+        }
+        for (name, (column, kind)) in desired {
+            if !managed_dimension_index(&name) {
+                return Err(sqlx::Error::Protocol(
+                    "invalid dimension registry column".into(),
+                ));
+            }
+            if existing.contains(&name) {
+                continue;
+            }
+            let suffix = if matches!(kind.as_str(), "str" | "str_utf8") {
+                let width: Option<u64> = sqlx::query_scalar(
+                    "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE \
+                     TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                )
+                .bind(table_name)
+                .bind(&column)
+                .fetch_one(lock.connection())
+                .await?;
+                format!("({})", width.unwrap_or(191).min(191))
+            } else {
+                String::new()
+            };
+            let sql = format!(
+                "ALTER TABLE {table} ADD INDEX {} ({}{suffix}), ALGORITHM=INPLACE, LOCK=NONE",
+                metalog_db::quote_identifier(&name),
+                metalog_db::quote_identifier(&column)
+            );
+            sqlx::query(&sql).execute(lock.connection()).await?;
+        }
+        lock.release()
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))
+    }
+
     /// Ensures an index exists on the given column.
     pub async fn ensure_index(&self, table_name: &str, col_name: &str) -> Result<(), sqlx::Error> {
         validate_sql_identifier(table_name).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
@@ -187,6 +268,11 @@ impl IndexManager {
             Err(e) => Err(e),
         }
     }
+}
+
+fn managed_dimension_index(name: &str) -> bool {
+    name.strip_prefix("idx_metalog_dim_f")
+        .is_some_and(|n| n.len() == 2 && n.bytes().all(|b| b.is_ascii_digit()) && n != "00")
 }
 
 #[cfg(test)]

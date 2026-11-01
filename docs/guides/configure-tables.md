@@ -193,3 +193,11 @@ Each policy in the `policies` array has a `type` and a policy-specific `config` 
 - [Ingestion Paths](../concepts/ingestion.md) — gRPC vs Kafka ingestion
 - [Write Transformers](write-transformers.md) — `recordTransformer` values
 - [Schema Evolution](evolve-schema.md) — Online DDL for new columns
+
+
+### Rust consolidation
+
+Rust supports the `time_window` and `spark_job` policies and their ordered waterfall composition.
+Rust defaults consolidation to **disabled**; set `consolidation.enabled: true` explicitly and
+configure workers plus `storage.default_backend` on nodes. See the
+[Rust consolidation guide](../operations/rust-consolidation.md) for a complete example and limits.

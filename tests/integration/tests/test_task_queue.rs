@@ -211,8 +211,8 @@ mod tests {
         let tasks = queue.claim_tasks("test", "w1", 1).await.unwrap();
         let task_id = tasks[0].task_id;
 
-        // Set retry_count to max-1 so the next fail triggers dead_letter.
-        sqlx::query("UPDATE _task_queue SET retry_count = 2 WHERE task_id = ?")
+        // Exhaust retries; the coordinator dead-letters failed work.
+        sqlx::query("UPDATE _task_queue SET retry_count = 3 WHERE task_id = ?")
             .bind(task_id)
             .execute(&pool)
             .await
@@ -220,6 +220,7 @@ mod tests {
 
         let affected = queue.fail_task(task_id).await.unwrap();
         assert_eq!(affected, 1);
+        assert_eq!(queue.retry_task(task_id, "failed").await.unwrap(), None);
 
         let (state,): (String,) = sqlx::query_as("SELECT state FROM _task_queue WHERE task_id = ?")
             .bind(task_id)
@@ -253,7 +254,12 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(state, "pending");
+        assert_eq!(state, "timed_out");
+        let next = queue.claim_tasks("", "w2", 1).await.unwrap();
+        assert_eq!(next.len(), 1);
+        assert_ne!(next[0].task_id, task_id);
+        assert_eq!(next[0].retry_count, 1);
+        assert_eq!(queue.complete_task(task_id, b"late").await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -353,7 +359,7 @@ mod tests {
     // ── Cleanup ──────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn cleanup_old_tasks() {
+    async fn old_completed_work_remains_visible_to_finalization() {
         let (pool, _container) = setup_db_with_table("test").await;
         let queue = Queue::new(pool.clone());
 
@@ -376,11 +382,9 @@ mod tests {
             .await
             .unwrap();
 
-        let deleted = queue
-            .cleanup_old_tasks("test", Duration::from_secs(1))
-            .await
-            .unwrap();
-        assert_eq!(deleted, 1);
+        let terminal = queue.terminal_tasks("test").await.unwrap();
+        assert_eq!(terminal.len(), 1, "unfinalized output must survive its age");
+        assert_eq!(terminal[0].output.as_deref(), Some(b"done".as_slice()));
 
         let count = queue.count_active_tasks("test").await.unwrap();
         assert_eq!(count, 0);

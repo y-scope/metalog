@@ -28,6 +28,8 @@ const DEFAULT_LOOKAHEAD_DAYS: i32 = 7;
 pub struct CoordinatorUnit {
     table_name: String,
     table_cfg: TableConfig,
+    archive_destination: Option<(String, String)>,
+    consolidation_slot: Arc<tokio::sync::Mutex<()>>,
     db: MySqlPool,
     partition: PartitionManager,
     retention: Option<Arc<RetentionModule>>,
@@ -62,6 +64,8 @@ impl CoordinatorUnit {
         Self {
             table_name: table_name.to_string(),
             table_cfg,
+            archive_destination: None,
+            consolidation_slot: Arc::new(tokio::sync::Mutex::new(())),
             db,
             partition,
             retention,
@@ -102,6 +106,8 @@ impl CoordinatorUnit {
         Self {
             table_name: table_name.to_string(),
             table_cfg,
+            archive_destination: None,
+            consolidation_slot: Arc::new(tokio::sync::Mutex::new(())),
             db,
             partition,
             retention,
@@ -114,6 +120,16 @@ impl CoordinatorUnit {
             token: parent_token.child_token(),
             tasks: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_archive_destination(mut self, destination: Option<(String, String)>) -> Self {
+        self.archive_destination = destination;
+        self
+    }
+
+    pub(crate) fn with_consolidation_slot(mut self, slot: Arc<tokio::sync::Mutex<()>>) -> Self {
+        self.consolidation_slot = slot;
+        self
     }
 
     /// Returns the table name.
@@ -175,6 +191,14 @@ impl CoordinatorUnit {
         Ok(())
     }
 
+    /// Read current stored configuration on each pass, including fields allocated
+    /// after coordinator startup. Serialized with dimension schema changes.
+    pub async fn reconcile_indexes(&self) -> Result<(), sqlx::Error> {
+        metalog_schema::IndexManager::new(self.db.clone())
+            .reconcile(&self.table_name)
+            .await
+    }
+
     /// Runs the partition maintenance cycle once.
     async fn run_partition_maintenance(&self) {
         if let Err(e) = self.partition.run_maintenance().await {
@@ -223,6 +247,103 @@ impl CoordinatorUnit {
     pub fn spawn_background_tasks(self: &Arc<Self>) {
         let unit = Arc::clone(self);
         let token = self.token.clone();
+
+        let index_unit = Arc::clone(&unit);
+        let index_token = token.clone();
+        self.spawn_task(async move {
+            // Index builds can be long. Start immediately in an owned task so
+            // ingestion/readiness and HA reconciliation do not wait for DDL.
+            let mut ticker = tokio::time::interval(ALIAS_REFRESH_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = index_token.cancelled() => return,
+                    _ = ticker.tick() => {
+                        tokio::select! {
+                            _ = index_token.cancelled() => return,
+                            result = index_unit.reconcile_indexes() => {
+                                if let Err(error) = result {
+                                    tracing::warn!(
+                                        table = %index_unit.table_name, %error,
+                                        "dimension index reconciliation failed"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        if let Some(storage) = &self.storage {
+            // Keep finalization/recovery running when policy creation is disabled,
+            // so a configuration change cannot strand uploaded archives.
+            let config = &self.table_cfg.consolidation;
+            let policy =
+                metalog_consolidation::build_policy(config).expect("validated before startup");
+            let queue = Arc::new(metalog_consolidation::Queue::new(self.db.clone()));
+            let files = Arc::new(FileRecords::new(self.db.clone(), &self.table_name));
+            let (backend, bucket) = self.archive_destination.clone().unwrap_or_default();
+            let mut planners = Vec::new();
+            use metalog_types::file_state::FileState;
+            for (buffering, pending) in [
+                (
+                    FileState::IrArchiveBuffering,
+                    FileState::IrArchiveConsolidationPending,
+                ),
+                (
+                    FileState::FileArchiveBuffering,
+                    FileState::FileArchiveConsolidationPending,
+                ),
+            ] {
+                let stale_mins = if config.stale_buffering_mins == 0 {
+                    60
+                } else {
+                    config.stale_buffering_mins.max(0)
+                };
+                planners.push(
+                    metalog_consolidation::Planner::new(metalog_consolidation::PlannerConfig {
+                        file_recs: files.clone(),
+                        queue: queue.clone(),
+                        policy: policy.clone(),
+                        in_flight: Arc::new(metalog_consolidation::InFlightSet::new()),
+                        table_name: self.table_name.clone(),
+                        archive_backend: backend.clone(),
+                        archive_bucket: bucket.clone(),
+                        interval: Duration::from_secs(10),
+                        stale_threshold: Duration::from_secs(stale_mins as u64 * 60),
+                        buffering_state: buffering,
+                        pending_state: pending,
+                    })
+                    .with_storage(storage.clone())
+                    .with_planning_enabled(config.enabled),
+                );
+            }
+            let planner_token = token.clone();
+            let slot = self.consolidation_slot.clone();
+            self.spawn_task(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(10));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        _ = planner_token.cancelled() => return,
+                        _ = ticker.tick() => {},
+                    }
+                    for planner in &planners {
+                        let _permit = tokio::select! {
+                            _ = planner_token.cancelled() => return,
+                            permit = slot.lock() => permit,
+                        };
+                        tokio::select! {
+                            _ = planner_token.cancelled() => return,
+                            result = planner.plan_once() => if let Err(error) = result {
+                                tracing::warn!(%error, "consolidation planning failed");
+                            },
+                        }
+                    }
+                }
+            });
+        }
 
         // Partition maintenance (hourly).
         let pm_token = token.clone();

@@ -57,6 +57,27 @@ impl ServerProcess {
         grpc_port: u16,
         health_port: Option<u16>,
     ) -> Self {
+        Self::spawn_with_worker(
+            directory,
+            node_id,
+            primary,
+            replica,
+            grpc_port,
+            health_port,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_with_worker(
+        directory: &Path,
+        node_id: &str,
+        primary: &DatabaseConfig,
+        replica: &DatabaseConfig,
+        grpc_port: u16,
+        health_port: Option<u16>,
+        binary: Option<&Path>,
+    ) -> Self {
         let storage_dir = directory.join("objects");
         std::fs::create_dir_all(storage_dir.join("smoke")).unwrap();
         let config_path = directory.join(format!("{node_id}.yaml"));
@@ -80,6 +101,7 @@ impl ServerProcess {
     local:
       type: filesystem
       base_path: '{}'
+      bucket: smoke
 grpc:
   port: {grpc_port}
   ingestion: true
@@ -109,6 +131,17 @@ telemetry:
             health_port.is_some(),
             health_port.unwrap_or(8081),
         );
+        let config = if let Some(binary) = binary {
+            config.replace(
+                "  concurrency: 0",
+                &format!(
+                    "  concurrency: 1\n  clp_binary_path: '{}'\n  clp_process_timeout_secs: 300",
+                    binary.display()
+                ),
+            )
+        } else {
+            config
+        };
         std::fs::write(&config_path, config).unwrap();
         let log_path = directory.join(format!("{node_id}.log"));
         let log = File::create(&log_path).unwrap();
@@ -272,6 +305,10 @@ fn request(path: &str, source: &str, min_timestamp: i64) -> IngestRequest {
                 }),
                 archive: None,
             }),
+            sketch: vec![metalog_proto::coordinator::SketchEntry {
+                sketch_key: "trace_id".into(),
+                data: include_bytes!("../../../tests/fixtures/bloom/snapshot.msgpack").to_vec(),
+            }],
             dim: vec![DimEntry {
                 key: "source".into(),
                 value: Some(DimensionValue {
@@ -305,6 +342,7 @@ async fn paths(channel: Channel) -> BTreeSet<String> {
                 "__DIM.source".into(),
             ],
             filter_expression: "__FILE.state = 'IR_CLOSED'".into(),
+            sketch_expression: "trace_id = 'abc'".into(),
             order_by: vec![OrderBy {
                 column: "__FILE.max_timestamp".into(),
                 order: Order::Desc as i32,
@@ -465,6 +503,22 @@ async fn two_actual_servers_ingest_query_fail_over_and_shutdown_cleanly() {
         timestamp + 1000,
     )
     .await;
+    let mut pruned = SplitQueryServiceClient::new(first_channel.clone())
+        .stream_splits(StreamSplitsRequest {
+            table: TABLE.into(),
+            sketch_expression: "trace_id = 'definitely-absent'".into(),
+            order_by: vec![OrderBy {
+                column: "min_timestamp".into(),
+                order: Order::Asc as i32,
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let final_response = pruned.message().await.unwrap().unwrap();
+    assert!(final_response.done && final_response.split.is_none());
+    assert_eq!(final_response.stats.unwrap().splits_matched, 0);
     let mut expected = BTreeSet::from(["first.ir".into(), "second.ir".into()]);
     assert_eq!(paths(first_channel.clone()).await, expected);
     assert_eq!(paths(second_channel.clone()).await, expected);
@@ -617,4 +671,183 @@ async fn failed_listener_bind_exits_nonzero() {
         "unexpected startup failure\n{}",
         server.logs()
     );
+}
+
+#[tokio::test]
+async fn consolidation_recovers_after_worker_and_coordinator_process_death() {
+    use std::os::unix::fs::PermissionsExt;
+    let (pool, database) = metalog_it::helpers::setup_db().await;
+    let directory = tempfile::tempdir().unwrap();
+    let reservations: Vec<_> = (0..4)
+        .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let ports: Vec<_> = reservations
+        .iter()
+        .map(|v| v.local_addr().unwrap().port())
+        .collect();
+    drop(reservations);
+    let slow = directory.path().join("slow-clp");
+    let marker = directory.path().join("compressor.pid");
+    std::fs::write(
+        &slow,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec sleep 60\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut first = ServerProcess::spawn_with_worker(
+        directory.path(),
+        "archive-a",
+        &database.writer_config(),
+        &database.reader_config(),
+        ports[0],
+        Some(ports[2]),
+        Some(&slow),
+    );
+    let channel = first.connect().await;
+    AdminServiceClient::new(channel.clone())
+        .register_table(RegisterTableRequest {
+            table_name: TABLE.into(),
+            display_name: "Consolidation failover".into(),
+            config_json: Some(
+                r#"{"consolidation":{"enabled":true,"policies":[
+            {"type":"time_window","config":{"min_files":2,"window_size":"24h"}}
+        ]}}"#
+                    .into(),
+            ),
+        })
+        .await
+        .unwrap();
+    wait_for_owner(&pool, Some("archive-a")).await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    for (index, (name, data)) in [
+        (
+            "one.ir",
+            include_bytes!("../../../tests/fixtures/consolidation/one.ir").as_slice(),
+        ),
+        (
+            "two.ir",
+            include_bytes!("../../../tests/fixtures/consolidation/two.ir").as_slice(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        std::fs::write(directory.path().join("objects/smoke").join(name), data).unwrap();
+        let mut record = request(name, "archive-producer", now + index as i64);
+        record.record.as_mut().unwrap().file.as_mut().unwrap().state =
+            "IR_ARCHIVE_CONSOLIDATION_PENDING".into();
+        let result = MetadataIngestionServiceClient::new(channel.clone())
+            .ingest(record)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(result.accepted, "{}", result.error);
+    }
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "first worker never compressed\n{}",
+            first.logs()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let binary = metalog_it::clp::binary();
+    let mut second = ServerProcess::spawn_with_worker(
+        directory.path(),
+        "archive-b",
+        &database.writer_config(),
+        &database.reader_config(),
+        ports[1],
+        Some(ports[3]),
+        Some(&binary),
+    );
+    let second_channel = second.connect().await;
+    first.kill().await;
+    // Reap the test-owned blocking subprocess, then simulate elapsed task timeout.
+    let pid = std::fs::read_to_string(&marker).unwrap();
+    let _ = Command::new("kill").args(["-TERM", pid.trim()]).status();
+    sqlx::query("UPDATE _task_queue SET claimed_at=1 WHERE state='processing'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    wait_for_owner(&pool, Some("archive-b")).await;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let count: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM {TABLE} WHERE state='ARCHIVE_CLOSED'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if count == 2 && !directory.path().join("objects/smoke/one.ir").exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "replacement failed to finalize\n{}",
+            second.logs()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut stream = SplitQueryServiceClient::new(second_channel)
+        .stream_splits(StreamSplitsRequest {
+            table: TABLE.into(),
+            filter_expression: "__FILE.state = 'ARCHIVE_CLOSED'".into(),
+            order_by: vec![OrderBy {
+                column: "min_timestamp".into(),
+                order: Order::Asc as i32,
+            }],
+            sketch_expression: "trace_id = 'abc'".into(),
+            projection: vec![
+                "__FILE.state".into(),
+                "__FILE.archive_path".into(),
+                "__FILE.archive_size_bytes".into(),
+                "__DIM.source".into(),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut archives = BTreeSet::new();
+    let mut splits = 0;
+    while let Some(response) = stream.message().await.unwrap() {
+        if let Some(split) = response.split {
+            let file = split.file.unwrap();
+            assert_eq!(file.state, "ARCHIVE_CLOSED");
+            assert!(file.archive_size_bytes > 0);
+            assert_eq!(split.dimensions["source"], "archive-producer");
+            archives.insert(file.archive_path);
+            splits += 1;
+        }
+    }
+    assert_eq!(splits, 2);
+    assert_eq!(archives.len(), 1);
+    let path = directory
+        .path()
+        .join("objects/smoke")
+        .join(archives.first().unwrap());
+    assert!(path.is_file());
+    let output = Command::new(binary)
+        .arg("x")
+        .arg(path)
+        .arg(directory.path().join("decoded"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let decoded = std::fs::read_to_string(directory.path().join("decoded/original")).unwrap();
+    assert_eq!(decoded.lines().count(), 4);
+    assert!(decoded.contains("worker beta failed 1 item"));
+    second.terminate().await;
 }

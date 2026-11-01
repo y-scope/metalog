@@ -54,6 +54,7 @@ impl FlushReceipt {
 
 struct PendingRecord {
     record: FileRecord,
+    _sketch_budget: Option<tokio::sync::OwnedSemaphorePermit>,
     flushed: Option<oneshot::Sender<Result<(), String>>>,
 }
 
@@ -64,7 +65,7 @@ struct PendingRecord {
 /// - Batch size is reached (default 5000), or
 /// - Timer fires (default 1 second)
 ///
-/// Unsupported aggregation/sketch inputs are rejected during validation.
+/// Unsupported aggregation inputs are rejected during validation.
 pub struct BatchingWriter {
     db: MySqlPool,
     _is_mariadb: bool,
@@ -75,6 +76,7 @@ pub struct BatchingWriter {
     batch_size: usize,
     flush_interval: Duration,
     stopped: AtomicBool,
+    sketch_budget: Arc<tokio::sync::Semaphore>,
 }
 
 impl BatchingWriter {
@@ -90,6 +92,7 @@ impl BatchingWriter {
             batch_size: DEFAULT_BATCH_SIZE,
             flush_interval: DEFAULT_FLUSH_INTERVAL,
             stopped: AtomicBool::new(false),
+            sketch_budget: Arc::new(tokio::sync::Semaphore::new(64 << 20)),
         }
     }
 
@@ -160,6 +163,10 @@ impl BatchingWriter {
             .map_err(|e| WriteError::InvalidTable(e.to_string()))?;
         metalog_metastore::validate_file_record(&rec)
             .map_err(|e| WriteError::InvalidRecord(e.to_string()))?;
+        if let Some(sketches) = &rec.sketches {
+            metalog_sketches::decode_snapshots(&sketches.sketches)
+                .map_err(WriteError::InvalidRecord)?;
+        }
         if let Some(storage) = &self.storage {
             for (kind, backend, bucket, path) in [
                 (
@@ -188,8 +195,33 @@ impl BatchingWriter {
                 }
             }
         }
+        let sketch_bytes = rec.sketches.as_ref().map_or(0, |s| {
+            s.sketches
+                .iter()
+                .map(|(key, data)| key.len() + data.len())
+                .sum::<usize>()
+        }) as u32;
+        let budget = if sketch_bytes == 0 {
+            None
+        } else if blocking {
+            Some(
+                self.sketch_budget
+                    .clone()
+                    .acquire_many_owned(sketch_bytes)
+                    .await
+                    .map_err(|_| WriteError::Stopped)?,
+            )
+        } else {
+            Some(
+                self.sketch_budget
+                    .clone()
+                    .try_acquire_many_owned(sketch_bytes)
+                    .map_err(|_| WriteError::ChannelFull(table_name.into()))?,
+            )
+        };
         let tx = self.get_or_create_writer(table_name).await?;
         let pending = PendingRecord {
+            _sketch_budget: budget,
             record: rec,
             flushed,
         };
@@ -208,6 +240,7 @@ impl BatchingWriter {
     /// Stops all writer tasks and waits for completion.
     pub async fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
+        self.sketch_budget.close();
         // Drop all senders to signal tasks to drain and exit.
         {
             let mut writers = self.writers.write().await;
@@ -334,8 +367,13 @@ const MAX_ROWS_PER_INSERT: usize = 1000;
 async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<PendingRecord>) {
     let count = batch.len();
     let t0 = std::time::Instant::now();
-    if let Err(error) = resolve_batch_dimensions(ctx, batch).await {
-        tracing::error!(table = %ctx.table_name, %error, "dimension resolution failed");
+    let resolution = async {
+        resolve_batch_dimensions(ctx, batch).await?;
+        resolve_batch_sketches(ctx, batch).await
+    }
+    .await;
+    if let Err(error) = resolution {
+        tracing::error!(table = %ctx.table_name, %error, "dimension/sketch resolution failed");
         for pending in batch.drain(..) {
             if let Some(tx) = pending.flushed {
                 let _ = tx.send(Err(error.clone()));
@@ -366,7 +404,27 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<PendingRecord>) {
 
     // Statements commit independently. A failed chunk rejects its own records;
     // previously committed chunks retain their success receipts.
-    for chunk in batch.chunks_mut(MAX_ROWS_PER_INSERT) {
+    let mut remaining = batch.as_mut_slice();
+    while !remaining.is_empty() {
+        let mut size = 0usize;
+        let count = remaining
+            .iter()
+            .take(MAX_ROWS_PER_INSERT)
+            .take_while(|p| {
+                size += p
+                    .record
+                    .sketches
+                    .as_ref()
+                    .and_then(|s| s.ext_blob.as_ref())
+                    .map_or(0, Vec::len)
+                    * 2
+                    + 512;
+                size <= 4 * 1024 * 1024
+            })
+            .count()
+            .max(1);
+        let (chunk, tail) = remaining.split_at_mut(count);
+        remaining = tail;
         let paths = chunk
             .iter()
             .flat_map(|pending| {
@@ -433,6 +491,48 @@ async fn flush_batch(ctx: &mut WriterContext, batch: &mut Vec<PendingRecord>) {
     tracing::info!(table = %ctx.table_name, count, resolve_us = t_resolve.as_micros(),
         total_ms = t0.elapsed().as_millis(), "flush complete");
     batch.clear();
+}
+
+/// Resolve slots from durable state and encode a complete replacement snapshot.
+/// Accepted updates without sketches clear the previous filter, avoiding stale
+/// pruning when new records or new field values arrive.
+async fn resolve_batch_sketches(
+    ctx: &WriterContext,
+    batch: &mut [PendingRecord],
+) -> Result<(), String> {
+    let keys: Vec<String> = batch
+        .iter()
+        .filter_map(|p| p.record.sketches.as_ref())
+        .flat_map(|s| s.sketches.keys().cloned())
+        .collect();
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let registry = metalog_sketches::SketchRegistry::new(ctx.db.clone(), &ctx.table_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mapping = registry
+        .resolve_or_allocate(&keys)
+        .await
+        .map_err(|e| e.to_string())?;
+    for pending in batch {
+        if let Some(sketches) = pending
+            .record
+            .sketches
+            .as_mut()
+            .filter(|s| !s.sketches.is_empty())
+        {
+            let mut members: Vec<_> = sketches
+                .sketches
+                .keys()
+                .map(|k| mapping[k].as_str())
+                .collect();
+            members.sort();
+            sketches.set_value = Some(members.join(","));
+            sketches.ext_blob = Some(metalog_sketches::encode_ext_blob(&sketches.sketches)?);
+        }
+    }
+    Ok(())
 }
 
 /// Resolve every dimension used by the batch. Allocation errors reject the batch
@@ -516,6 +616,8 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
         "record_count",
         "retention_days",
         "expires_at",
+        "sketches",
+        "ext",
     ];
 
     let dim_col_strings: Vec<&str> = dim_mappings.iter().map(|(_, col)| *col).collect();
@@ -531,10 +633,11 @@ fn build_sql_template(table_name: &str, dim_mappings: &[(&str, &str)]) -> (Strin
 
     let prefix = format!("INSERT INTO `{table_name}` ({cols_sql}) VALUES ");
 
-    let extra_cols = dim_col_strings
+    let mut extra_cols = dim_col_strings
         .iter()
         .map(|c| c.to_string())
         .collect::<Vec<_>>();
+    extra_cols.extend(["sketches".into(), "ext".into()]);
     // VALUES() is supported by both MariaDB and MySQL (including MySQL 8).
     let suffix = format!(
         " {}",
@@ -610,6 +713,19 @@ async fn execute_upsert_into(
         sql_buf.push_str(itoa_buf.format(rec.retention_days));
         sql_buf.push(',');
         sql_buf.push_str(itoa_buf.format(rec.expires_at));
+        let sketches = rec.sketches.as_ref();
+        write_escaped_opt(sql_buf, sketches.and_then(|s| s.set_value.as_deref()));
+        if let Some(bytes) = sketches.and_then(|s| s.ext_blob.as_deref()) {
+            sql_buf.push_str(",X'");
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            for byte in bytes {
+                sql_buf.push(HEX[(byte >> 4) as usize] as char);
+                sql_buf.push(HEX[(byte & 15) as usize] as char);
+            }
+            sql_buf.push('\'');
+        } else {
+            sql_buf.push_str(",NULL");
+        }
         for logical_key in dim_keys {
             match rec.dims.get(logical_key.as_str()) {
                 Some(serde_json::Value::String(s)) => write_escaped(sql_buf, s),

@@ -1,17 +1,18 @@
 # Rust deployment and Go migration
 
 The supported Rust server scope is gRPC ingestion/query/metadata/admin, S3-compatible storage,
-retention, partition maintenance, and multi-node coordinator HA. This branch is a migration
-candidate, not evidence of a completed production rollout. Kafka ingestion, consolidation workers,
-aggregation/sketch ingestion, sketch predicates, and telemetry exporters are not implemented end to
-end. Requests/configuration for those features fail explicitly. Keep `worker.concurrency: 0` and
-`consolidation.enabled: false`.
+consolidation, retention, partition maintenance, and multi-node coordinator HA. Kafka ingestion,
+aggregation ingestion and telemetry exporters remain unavailable and fail explicitly. See the
+[Rust consolidation guide](rust-consolidation.md) for worker setup, policy parity, recovery, and
+operational limits. Integration tests validate the lifecycle; production throughput and a staged
+rollout still need validation against your workload.
 
 ## Build and run
 
 Install Rust 1.98.0 and `protoc` (proto3 optional support required). The checked-in lockfile fixes
 Rust dependency resolution. `make build` produces `target/release/metalog`. The Docker image uses
-the same Rust version, includes TLS trust certificates, and runs as UID 10001. `docker/start.sh -d`
+the same Rust version, includes TLS trust certificates and pinned CLP 0.14.1 `clp-s`, and runs as UID
+10001. Compose enables one consolidation worker per node; tables opt in separately. `docker/start.sh -d`
 starts the local MariaDB/ProxySQL/MinIO/Rust stack; `docker compose -f docker/docker-compose.yml up -d
 --scale coordinator-node=2` adds a second node. Use `docker compose ... port coordinator-node 9090`
 to discover the local gRPC port. Compose is a local test deployment with development credentials.
@@ -179,6 +180,67 @@ S3 version enumeration: versioned buckets need an appropriate bucket lifecycle f
 versions. Physical metadata partitions are provisioned ahead; old partitions are not compacted or
 dropped automatically by this Rust scope.
 
+## Per-field Bloom filters and dimension indexes
+
+Rust accepts per-file Bloom snapshots through `MetadataRecord.sketch` in unary and batch ingestion.
+Server-streaming queries can use them for pruning. Each entry contains a logical field name and a MessagePack map with
+`type: "parquet_sbbf_xxhash64"` and binary `data` (nonempty 32-byte blocks). Metalog stores these maps
+under `sketches` in the LZ4-framed `ext` column and allocates durable `_sketch_registry` slots. The
+server validates and stores snapshots; producers must build them from **every value in the complete
+file**. Values are UTF-8 bytes hashed with xxHash64 seed 0; case and Unicode normalization matter.
+A valid but incomplete snapshot cannot be detected by the server and can cause missed matches.
+
+Set `StreamSplitsRequest.sketch_expression`, for example:
+
+```text
+trace_id = 'abc-123'
+`user.id` IN ('alice', 'bob') AND trace_id = 'abc-123'
+```
+
+Equality and `IN` accept string literals, with `AND` and parentheses. Other operators, numeric
+literals, and combining sketches with `group_by` are rejected. Metadata predicates still belong in
+`filter_expression`. Bloom predicates reduce the candidate files returned; consumers must perform
+exact event-level filtering inside those files. `splits_scanned` counts examined candidates and
+`splits_matched` counts emitted files. Limits/cursors apply after pruning.
+
+Only `IR_CLOSED` and `ARCHIVE_CLOSED` rows are pruned. Missing, unreadable, oversized, unknown-format,
+or malformed filters keep the candidate; unregistered or invalidated fields also pass through.
+Each predicate also requires the current registry slot in that row’s `sketches` SET.
+Accepted newer updates replace all supplied snapshots;
+updates without sketches clear previous snapshots. Equal-timestamp forward closing transitions can
+attach the final snapshot; same-state replays and stale/protected updates cannot overwrite it.
+Existing files without snapshots remain queryable and receive no pruning benefit.
+
+There are 64 lifetime sketch slots per table. Each ingestion record accepts at most 64 fields and
+1 MiB of serialized snapshots. Sketch expressions are bounded to 16 KiB, 64 predicates, and 1024
+values. Queued raw snapshots share a 64 MiB budget per writer; decoded blobs have a 16 MiB limit.
+The legacy Go Bloom library uses modulo block selection and pair-swapped salts, unlike standard
+Parquet, under the same type name. Rust checks both interpretations before pruning, preserving both
+formats at the cost of additional false positives. See [sketch compatibility](../concepts/sketches.md#cross-language-compatibility)
+for reproducible cross-language fixtures.
+
+For dimensions that are constant within each file, configure ordinary database indexes by logical
+field name through the existing admin API:
+
+```bash
+target/release/metalog admin register-table --addr localhost:9090 --table web_logs \
+  --config-json '{"indexes":["service","region","latency"]}'
+```
+
+Up to 32 distinct fields can be configured. Coordinators reconcile indexes in the background at
+startup, after config reload, and every 60 seconds; fields not allocated yet wait until a later pass. Numeric/boolean
+columns receive full indexes. String indexes cover up to 191 characters, with exact SQL predicates
+checking the complete value. Full indexes qualify dimensions for the query API's indexed-sort
+check; prefix string indexes still require `allow_unindexed_sort` for full-string sorting.
+
+`{"indexes":[]}` removes only indexes under the reserved `idx_metalog_dim_fNN` names. Operational,
+primary, and manually named indexes remain intact. Reconciliation serializes with dimension
+allocation and uses online DDL (`ALGORITHM=INPLACE, LOCK=NONE`); unsupported online DDL fails visibly
+instead of falling back to a blocking rebuild. DDL may still briefly wait on metadata locks, and
+index construction consumes database resources and serializes new dimension allocation/widening.
+Existing compatible dimensions continue ingesting. Stored config is the desired state; inspect
+`information_schema.STATISTICS` and reconciliation logs to confirm it has been applied.
+
 ## Validation and rollout
 
 ```bash
@@ -191,7 +253,8 @@ make fmt              # requires nightly-2026-08-30 rustfmt
 ```
 
 Integration tests cover real MariaDB writes/queries, rejected writes and durable receipts,
-concurrent dimension allocation, cursor/type/null regressions, more than 100,000 streamed rows,
+concurrent dimension/sketch allocation, Bloom compatibility and pruning, configured-index query plans,
+cursor/type/null regressions, more than 100,000 streamed rows,
 retention failure/restart/cancellation/shared references, object retirement races, S3/MinIO object
 operations, and HA membership/lease/start-stop behavior. Process tests exercise gRPC across nodes,
 owner death, SIGTERM, and startup bind failure. These are regression checks, not long-running soak or
