@@ -96,11 +96,21 @@ impl TableRegistration {
             let mut merged: serde_json::Value =
                 serde_json::from_str(stored.as_deref().unwrap_or("{}"))
                     .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+            let original_reserves = metalog_metastore::decode_table_config(stored.as_deref())
+                .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?
+                .column_reserves;
             let patch = serde_json::from_str(patch)
                 .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
             merge_config(&mut merged, patch);
             let encoded = merged.to_string();
             validate_supported_config(&encoded)?;
+            let updated = metalog_metastore::decode_table_config(Some(&encoded))
+                .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+            if updated.column_reserves != original_reserves {
+                return Err(TableRegistrationError::InvalidConfig(
+                    "column_reserves is creation-only and cannot be changed or removed".into(),
+                ));
+            }
             sqlx::query("UPDATE _table_config SET config = ? WHERE table_name = ?")
                 .bind(encoded)
                 .bind(table_name)
@@ -219,6 +229,11 @@ fn merge_config(stored: &mut serde_json::Value, patch: serde_json::Value) {
 fn validate_supported_config(json: &str) -> Result<(), TableRegistrationError> {
     let cfg = metalog_metastore::decode_table_config(Some(json))
         .map_err(|e| TableRegistrationError::InvalidConfig(e.to_string()))?;
+    if let Some(reserves) = &cfg.column_reserves {
+        reserves
+            .validate()
+            .map_err(TableRegistrationError::InvalidConfig)?;
+    }
     cfg.validate_indexes()
         .map_err(TableRegistrationError::InvalidConfig)?;
     metalog_consolidation::build_policy(&cfg.consolidation)

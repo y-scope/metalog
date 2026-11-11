@@ -2603,6 +2603,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-sdk-s3",
+ "metalog-aggs",
  "metalog-config",
  "metalog-consolidation",
  "metalog-coordinator",

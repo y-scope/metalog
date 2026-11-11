@@ -40,7 +40,8 @@ enum AdminCommands {
         /// Display name (optional, defaults to table name).
         #[arg(long)]
         display_name: Option<String>,
-        /// JSON config blob (optional).
+        /// Table JSON config. New tables reserve columns by default;
+        /// set column_reserves to null to opt out, or supply typed pools.
         #[arg(long)]
         config_json: Option<String>,
     },

@@ -21,6 +21,7 @@ pub struct ColumnRegistry {
     cache: Arc<RwLock<RegistryCache>>,
     /// Serializes slow-path allocation (advisory lock + ALTER TABLE).
     alloc_lock: tokio::sync::Mutex<()>,
+    preallocated: bool,
 }
 
 struct RegistryCache {
@@ -60,6 +61,11 @@ impl RegistrySnapshot {
 /// Errors from column registry operations.
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
+    #[error(
+        "no reserved dimension column available for type {base_type} and width {width}; table \
+         capacity requires a planned migration"
+    )]
+    ReserveExhausted { base_type: String, width: i32 },
     #[error("invalid dimension definition: {0}")]
     InvalidDefinition(String),
 
@@ -93,6 +99,7 @@ impl ColumnRegistry {
         metalog_db::validate_sql_identifier(table_name)
             .map_err(|e| RegistryError::InvalidDefinition(e.to_string()))?;
         let entries = load_dim_entries(&db, table_name).await?;
+        let preallocated = metalog_metastore::has_column_reserves(&db, table_name).await?;
 
         let mut dim_cache = HashMap::new();
 
@@ -111,6 +118,7 @@ impl ColumnRegistry {
                 dim_entries: entries,
             })),
             alloc_lock: tokio::sync::Mutex::new(()),
+            preallocated,
         })
     }
 
@@ -198,6 +206,13 @@ impl ColumnRegistry {
             if matches!(base_type, "str" | "str_utf8")
                 && width > i32::from(entry.width.unwrap_or(0))
             {
+                if self.preallocated {
+                    return Err(RegistryError::InvalidDefinition(format!(
+                        "dimension {dim_key} exceeds reserved width {}; reserved tables cannot \
+                         widen columns during ingestion",
+                        entry.width.unwrap_or(0)
+                    )));
+                }
                 let effective_width = width.max(MIN_VARCHAR_WIDTH);
                 let sql_type = dim_sql_type(base_type, effective_width);
                 let alter = format!(
@@ -218,6 +233,51 @@ impl ColumnRegistry {
             self.replace_entries(entries);
             advisory.release().await?;
             return Ok(col_name);
+        }
+        if self.preallocated {
+            let required_width = if matches!(base_type, "str" | "str_utf8") {
+                width.max(MIN_VARCHAR_WIDTH)
+            } else {
+                0
+            };
+            let mut available: Vec<_> = fresh_entries
+                .iter()
+                .filter(|entry| {
+                    entry.status == "AVAILABLE"
+                        && entry.base_type == base_type
+                        && (!matches!(base_type, "str" | "str_utf8")
+                            || i32::from(entry.width.unwrap_or(0)) >= required_width)
+                })
+                .collect();
+            available.sort_by_key(|e| (e.width.unwrap_or(0), e.column_name.as_str()));
+            let entry = available
+                .first()
+                .ok_or_else(|| RegistryError::ReserveExhausted {
+                    base_type: base_type.into(),
+                    width: required_width,
+                })?;
+            let column = entry.column_name.clone();
+            sqlx::query(
+                "UPDATE _dim_registry SET dim_key = ?, state = 'ACTIVE' WHERE table_name = ? AND \
+                 column_name = ? AND state = 'AVAILABLE'",
+            )
+            .bind(dim_key)
+            .bind(&self.table_name)
+            .bind(&column)
+            .execute(advisory.connection())
+            .await?;
+            if available.len() <= 3 {
+                tracing::warn!(
+                    table = %self.table_name,
+                    base_type,
+                    remaining = available.len() - 1,
+                    "dimension column reserve is low"
+                );
+            }
+            let entries = load_dim_entries(advisory.connection(), &self.table_name).await?;
+            self.replace_entries(entries);
+            advisory.release().await?;
+            return Ok(column);
         }
         // ALTER TABLE commits independently of registry INSERT. A crash can
         // leave an unregistered physical column; never assign that column to
@@ -335,7 +395,7 @@ impl ColumnRegistry {
 }
 
 /// Returns the SQL type for a dimension column.
-fn dim_sql_type(base_type: &str, width: i32) -> String {
+pub(crate) fn dim_sql_type(base_type: &str, width: i32) -> String {
     match base_type {
         "str" => format!("VARCHAR({width}) CHARACTER SET ascii COLLATE ascii_bin"),
         "str_utf8" => format!("VARCHAR({width}) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"),

@@ -241,6 +241,14 @@ async fn start_coordinator(
         })?;
     // Do not accept a configured lifecycle until its archive/storage path is
     // available. Silently replacing these values with defaults loses user intent.
+    if let Some(reserves) = &table_cfg.column_reserves {
+        reserves
+            .validate()
+            .map_err(|message| NodeError::TableConfig {
+                table: table_name.into(),
+                message,
+            })?;
+    }
     table_cfg
         .validate_indexes()
         .map_err(|message| NodeError::TableConfig {

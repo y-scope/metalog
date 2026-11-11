@@ -7,7 +7,7 @@ use metalog_metastore::{
     TEMPLATE_TABLE,
 };
 use metalog_timeutil::epoch_nanos;
-use sqlx::MySqlPool;
+use sqlx::{Connection, MySqlPool};
 
 use crate::{
     ddl::{execute_ddl_statements, SCHEMA_SQL},
@@ -17,8 +17,8 @@ use crate::{
 
 /// Provisions a new table by:
 /// 1. Ensuring system tables exist (idempotent DDL)
-/// 2. Registering the table in `_table` + `_table_config` + `_table_assignment`
-/// 3. Cloning `_clp_template` as the table's data table
+/// 2. Recording its configuration and creating the physical table with its reserves
+/// 3. Publishing registry slots and the coordinator assignment atomically
 ///
 /// Returns `true` if the table was newly created, `false` if it already existed.
 pub async fn ensure_table(
@@ -34,8 +34,15 @@ pub async fn ensure_table(
                 .into(),
         ));
     }
-    metalog_metastore::decode_table_config(config_json)
+    let mut requested = metalog_metastore::decode_table_config(config_json)
         .map_err(|e| EnsureTableError::Validation(format!("invalid table configuration: {e}")))?;
+    if let Some(reserves) = &requested.column_reserves {
+        reserves.validate().map_err(EnsureTableError::Validation)?;
+    }
+    let explicit_reserves = config_json
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .is_some_and(|value| value.get("column_reserves").is_some());
 
     // 1. Ensure system tables.
     execute_ddl_statements(pool, SCHEMA_SQL)
@@ -47,10 +54,53 @@ pub async fn ensure_table(
     let mut lock =
         metalog_metastore::AdvisoryLock::acquire_scoped(pool, "provision", table_name, 30).await?;
 
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT config FROM _table_config WHERE table_name = ?")
+            .bind(table_name)
+            .fetch_optional(lock.connection())
+            .await
+            .map_err(EnsureTableError::Sql)?;
+    let physical_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND \
+         TABLE_NAME = ?",
+    )
+    .bind(table_name)
+    .fetch_one(lock.connection())
+    .await
+    .map_err(EnsureTableError::Sql)?;
+    let effective = if let Some(stored) = &stored {
+        let config = metalog_metastore::decode_table_config(stored.as_deref())
+            .map_err(|e| EnsureTableError::Validation(e.to_string()))?;
+        if explicit_reserves && requested.column_reserves != config.column_reserves {
+            return Err(EnsureTableError::Validation(
+                "column_reserves is creation-only and cannot be changed on an existing table"
+                    .into(),
+            ));
+        }
+        config
+    } else {
+        if physical_exists != 0 && requested.column_reserves.is_some() {
+            return Err(EnsureTableError::Validation(
+                "column_reserves can only be set when creating a new physical table".into(),
+            ));
+        }
+        // Apply defaults only when creating a physical table. Legacy configs
+        // remain dynamic, and explicit JSON null opts new tables out.
+        if physical_exists == 0 && !explicit_reserves {
+            requested.column_reserves = Some(Default::default());
+        }
+        requested
+    };
+    let reserved = effective
+        .column_reserves
+        .as_ref()
+        .map(crate::reserves::columns)
+        .unwrap_or_default();
+
     // 2. Register in _table (INSERT IGNORE for idempotency).
     let result = sqlx::query(&format!(
         "INSERT IGNORE INTO {TABLE_REGISTRY} (table_name, display_name, active) VALUES (?, ?, \
-         TRUE)"
+         FALSE)"
     ))
     .bind(table_name)
     .bind(table_name)
@@ -62,32 +112,43 @@ pub async fn ensure_table(
 
     {
         // Insert config.
-        let config_blob = config_json.unwrap_or("{}");
+        let config_blob = metalog_metastore::encode_table_config(&effective)
+            .map_err(|e| EnsureTableError::Validation(e.to_string()))?;
         sqlx::query(&format!(
             "INSERT IGNORE INTO {TABLE_REGISTRY_CONFIG} (table_name, config) VALUES (?, ?)"
         ))
         .bind(table_name)
-        .bind(config_blob)
-        .execute(lock.connection())
-        .await
-        .map_err(EnsureTableError::Sql)?;
-
-        // Insert assignment (unassigned).
-        sqlx::query(&format!(
-            "INSERT IGNORE INTO {TABLE_REGISTRY_ASSIGNMENT} (table_name) VALUES (?)"
-        ))
-        .bind(table_name)
+        .bind(&config_blob)
         .execute(lock.connection())
         .await
         .map_err(EnsureTableError::Sql)?;
 
         // 3. Clone template table.
-        let create_sql =
-            format!("CREATE TABLE IF NOT EXISTS `{table_name}` LIKE `{TEMPLATE_TABLE}`");
-        sqlx::query(&create_sql)
-            .execute(lock.connection())
-            .await
-            .map_err(EnsureTableError::Sql)?;
+        if physical_exists == 0 {
+            let create_sql = if reserved.is_empty() {
+                format!("CREATE TABLE `{table_name}` LIKE `{TEMPLATE_TABLE}`")
+            } else {
+                let (_, template): (String, String) =
+                    sqlx::query_as(&format!("SHOW CREATE TABLE `{TEMPLATE_TABLE}`"))
+                        .fetch_one(lock.connection())
+                        .await
+                        .map_err(EnsureTableError::Sql)?;
+                let prefix = format!("CREATE TABLE `{TEMPLATE_TABLE}` (");
+                let tail = template.strip_prefix(&prefix).ok_or_else(|| {
+                    EnsureTableError::Validation("unexpected template DDL".into())
+                })?;
+                let definitions = reserved
+                    .iter()
+                    .map(|c| format!("`{}` {} NULL", c.name, c.sql_type))
+                    .collect::<Vec<_>>()
+                    .join(",\n");
+                format!("CREATE TABLE `{table_name}` ({definitions},{tail}")
+            };
+            sqlx::query(&create_sql)
+                .execute(lock.connection())
+                .await
+                .map_err(EnsureTableError::Sql)?;
+        }
 
         // Pre-populate daily partitions for the next N days.
         create_lookahead_partitions_on(
@@ -98,8 +159,43 @@ pub async fn ensure_table(
         .await
         .map_err(|e| EnsureTableError::Validation(format!("partition provisioning failed: {e}")))?;
 
-        // Pre-populate sketch slots (s01..s64) as AVAILABLE.
+        // Publish registries and assignment atomically, after all DDL succeeds.
+        // Coordinators only discover active tables with an assignment row.
+        let mut tx = lock
+            .connection()
+            .begin()
+            .await
+            .map_err(EnsureTableError::Sql)?;
         let now = epoch_nanos();
+        for column in &reserved {
+            if column.aggregate {
+                sqlx::query(
+                    "INSERT IGNORE INTO _agg_registry (table_name, column_name, agg_key, \
+                     value_type, state, created_at) VALUES (?, ?, '', ?, 'AVAILABLE', ?)",
+                )
+                .bind(table_name)
+                .bind(&column.name)
+                .bind(&column.kind)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(EnsureTableError::Sql)?;
+            } else {
+                sqlx::query(
+                    "INSERT IGNORE INTO _dim_registry (table_name, column_name, base_type, width, \
+                     dim_key, state, created_at) VALUES (?, ?, ?, ?, '', 'AVAILABLE', ?)",
+                )
+                .bind(table_name)
+                .bind(&column.name)
+                .bind(&column.kind)
+                .bind(column.width)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(EnsureTableError::Sql)?;
+            }
+        }
+        // Pre-populate sketch slots (s01..s64) as AVAILABLE.
         for i in 1..=64 {
             let sketch_name = format!("s{i:02}");
             sqlx::query(
@@ -109,10 +205,26 @@ pub async fn ensure_table(
             .bind(table_name)
             .bind(&sketch_name)
             .bind(now)
-            .execute(lock.connection())
+            .execute(&mut *tx)
             .await
             .map_err(EnsureTableError::Sql)?;
         }
+
+        let assignment = sqlx::query(&format!(
+            "INSERT IGNORE INTO {TABLE_REGISTRY_ASSIGNMENT} (table_name) VALUES (?)"
+        ))
+        .bind(table_name)
+        .execute(&mut *tx)
+        .await
+        .map_err(EnsureTableError::Sql)?;
+        if assignment.rows_affected() > 0 {
+            sqlx::query("UPDATE _table SET active = TRUE WHERE table_name = ?")
+                .bind(table_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(EnsureTableError::Sql)?;
+        }
+        tx.commit().await.map_err(EnsureTableError::Sql)?;
 
         if created {
             tracing::info!(table_name, "provisioned new table");

@@ -90,7 +90,9 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(stored, cfg);
+        let decoded = metalog_metastore::decode_table_config(Some(&stored)).unwrap();
+        assert!(decoded.consolidation.enabled);
+        assert_eq!(decoded.column_reserves, Some(Default::default()));
     }
 
     // ── ColumnRegistry concurrent allocation ─────────────────────────────────

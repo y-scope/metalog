@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TableConfig {
+    /// Immutable creation-time pools. Missing on legacy tables means dynamic allocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_reserves: Option<ColumnReserves>,
     #[serde(default)]
     pub consolidation: ConsolidationConfig,
     #[serde(default)]
@@ -11,6 +14,128 @@ pub struct TableConfig {
     /// Logical dimension fields to index. Empty removes only Metalog-managed indexes.
     #[serde(default)]
     pub indexes: Vec<String>,
+}
+
+/// Typed nullable columns created before a table is published to coordinators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnReserves {
+    #[serde(default = "default_dimension_reserves")]
+    pub dimensions: Vec<DimensionReserve>,
+    #[serde(default = "default_aggregate_reserves")]
+    pub aggregates: Vec<AggregateReserve>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimensionReserve {
+    #[serde(rename = "type")]
+    pub base_type: String,
+    pub count: u32,
+    /// Character capacity for strings; omitted means 256. Invalid for numeric types.
+    #[serde(default)]
+    pub width: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateReserve {
+    /// int (BIGINT) or float (DOUBLE).
+    #[serde(rename = "type")]
+    pub value_type: String,
+    pub count: u32,
+}
+
+fn default_dimension_reserves() -> Vec<DimensionReserve> {
+    [
+        ("str", 16, Some(512)),
+        ("str_utf8", 8, Some(512)),
+        ("int", 8, None),
+        ("float", 4, None),
+        ("bool", 4, None),
+    ]
+    .into_iter()
+    .map(|(base_type, count, width)| DimensionReserve {
+        base_type: base_type.into(),
+        count,
+        width,
+    })
+    .collect()
+}
+
+fn default_aggregate_reserves() -> Vec<AggregateReserve> {
+    [("int", 16), ("float", 8)]
+        .into_iter()
+        .map(|(value_type, count)| AggregateReserve {
+            value_type: value_type.into(),
+            count,
+        })
+        .collect()
+}
+
+impl Default for ColumnReserves {
+    fn default() -> Self {
+        Self {
+            dimensions: default_dimension_reserves(),
+            aggregates: default_aggregate_reserves(),
+        }
+    }
+}
+
+impl ColumnReserves {
+    pub fn validate(&self) -> Result<(), String> {
+        use crate::column::{MAX_AGG_SLOTS, MAX_DIM_SLOTS, MIN_VARCHAR_WIDTH};
+        let mut dims = 0u64;
+        // Leave headroom for the base metadata columns within the SQL row-size limit.
+        let mut declared_bytes = 0u64;
+        for group in &self.dimensions {
+            if group.count == 0 {
+                return Err("dimension reserve counts must be positive".into());
+            }
+            dims += u64::from(group.count);
+            let bytes =
+                match group.base_type.as_str() {
+                    "str" | "str_utf8" => {
+                        let width = group.width.unwrap_or(MIN_VARCHAR_WIDTH as u16);
+                        if !(MIN_VARCHAR_WIDTH as u16..=16383).contains(&width) {
+                            return Err("reserved string widths must be between 256 and 16383 \
+                                        characters"
+                                .into());
+                        }
+                        u64::from(width) * if group.base_type == "str_utf8" { 4 } else { 1 } + 2
+                    }
+                    "int" | "float" | "bool" if group.width.is_none() => 8,
+                    _ => {
+                        return Err("dimension reserves require str, str_utf8, int, float or \
+                                    bool; only strings accept width"
+                            .into())
+                    }
+                };
+            declared_bytes += bytes * u64::from(group.count);
+        }
+        let mut aggs = 0u64;
+        for group in &self.aggregates {
+            if group.count == 0 || !matches!(group.value_type.as_str(), "int" | "float") {
+                return Err(
+                    "aggregate reserves require type int or float and a positive count".into(),
+                );
+            }
+            aggs += u64::from(group.count);
+        }
+        if dims > u64::from(MAX_DIM_SLOTS) || aggs > u64::from(MAX_AGG_SLOTS) {
+            return Err(
+                "column reserves allow at most 99 dimensions and 99 aggregates per table".into(),
+            );
+        }
+        if declared_bytes + aggs * 8 > 48_000 {
+            return Err(
+                "column reserves exceed the 48000-byte declared capacity budget; reduce string \
+                 widths or counts"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 impl TableConfig {
@@ -144,11 +269,27 @@ mod tests {
         let cfg: TableConfig = serde_json::from_str("{}").unwrap();
         assert!(!cfg.consolidation.enabled);
         assert!(!cfg.retention.enabled);
+        // Legacy stored configs must not acquire creation-time defaults on read.
+        assert!(cfg.column_reserves.is_none());
+    }
+
+    #[test]
+    fn reserve_defaults_and_partial_overrides() {
+        let defaults = ColumnReserves::default();
+        defaults.validate().unwrap();
+        assert_eq!(defaults.dimensions.iter().map(|g| g.count).sum::<u32>(), 40);
+        assert_eq!(defaults.aggregates.iter().map(|g| g.count).sum::<u32>(), 24);
+        let override_config: ColumnReserves = serde_json::from_str(r#"{"dimensions":[]}"#).unwrap();
+        assert!(override_config.dimensions.is_empty());
+        assert_eq!(override_config.aggregates, defaults.aggregates);
+        let opt_out: TableConfig = serde_json::from_str(r#"{"column_reserves":null}"#).unwrap();
+        assert!(opt_out.column_reserves.is_none());
     }
 
     #[test]
     fn roundtrip_serde() {
         let cfg = TableConfig {
+            column_reserves: None,
             indexes: vec![],
             consolidation: ConsolidationConfig {
                 enabled: true,

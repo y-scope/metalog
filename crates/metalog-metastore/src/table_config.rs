@@ -19,6 +19,23 @@ pub fn encode_table_config(cfg: &TableConfig) -> Result<String, serde_json::Erro
     serde_json::to_string(cfg)
 }
 
+/// Creation-time allocation mode is immutable through the registration API.
+pub async fn has_column_reserves(
+    db: &sqlx::MySqlPool,
+    table_name: &str,
+) -> Result<bool, sqlx::Error> {
+    let blob: Option<String> =
+        sqlx::query_scalar("SELECT config FROM _table_config WHERE table_name = ?")
+            .bind(table_name)
+            .fetch_optional(db)
+            .await?
+            .flatten();
+    Ok(decode_table_config(blob.as_deref())
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+        .column_reserves
+        .is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

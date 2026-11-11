@@ -32,18 +32,25 @@ pub struct AggRegistry {
     db: MySqlPool,
     table_name: String,
     inner: Arc<RwLock<AggInner>>,
+    preallocated: bool,
 }
 
 struct AggInner {
     /// Composite cache key → physical column name.
     cache: HashMap<String, String>,
     entries: Vec<AggRegistryEntry>,
-    next_slot: u32,
 }
 
 /// Errors from agg registry operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AggRegistryError {
+    #[error("invalid aggregation definition: {0}")]
+    InvalidDefinition(String),
+
+    #[error(
+        "no reserved {0} aggregation column available; table capacity requires a planned migration"
+    )]
+    ReserveExhausted(String),
     #[error("agg slot exhausted: all {MAX_AGG_SLOTS} slots in use")]
     SlotExhausted,
 
@@ -57,10 +64,12 @@ pub enum AggRegistryError {
 impl AggRegistry {
     /// Creates a new `AggRegistry`, loading all ACTIVE entries.
     pub async fn new(db: MySqlPool, table_name: &str) -> Result<Self, AggRegistryError> {
+        metalog_db::validate_sql_identifier(table_name)
+            .map_err(|e| AggRegistryError::InvalidDefinition(e.to_string()))?;
         let entries = load_agg_entries(&db, table_name).await?;
+        let preallocated = metalog_metastore::has_column_reserves(&db, table_name).await?;
 
         let mut cache = HashMap::new();
-        let mut max_slot: u32 = 0;
 
         for entry in &entries {
             let key = agg_cache_key(
@@ -69,19 +78,13 @@ impl AggRegistry {
                 &entry.aggregation_type,
             );
             cache.insert(key, entry.column_name.clone());
-            if let Some(slot) = parse_agg_slot(&entry.column_name) {
-                max_slot = max_slot.max(slot);
-            }
         }
 
         Ok(Self {
             db,
             table_name: table_name.to_string(),
-            inner: Arc::new(RwLock::new(AggInner {
-                cache,
-                entries,
-                next_slot: max_slot + 1,
-            })),
+            inner: Arc::new(RwLock::new(AggInner { cache, entries })),
+            preallocated,
         })
     }
 
@@ -105,22 +108,50 @@ impl AggRegistry {
         agg_type: &str,
         value_type: &str,
     ) -> Result<String, AggRegistryError> {
+        if agg_key.is_empty()
+            || agg_key.chars().count() > 1024
+            || agg_value.chars().count() > 1024
+            || !matches!(
+                agg_type,
+                "EQ" | "GTE" | "GT" | "LTE" | "LT" | "SUM" | "AVG" | "MIN" | "MAX"
+            )
+            || !matches!(value_type, "INT" | "FLOAT")
+        {
+            return Err(AggRegistryError::InvalidDefinition(
+                "invalid key, aggregation type or value type".into(),
+            ));
+        }
         let cache_key = agg_cache_key(agg_key, agg_value, agg_type);
 
         // Fast path.
         {
             let inner = self.inner.read().await;
             if let Some(col) = inner.cache.get(&cache_key) {
+                if inner
+                    .entries
+                    .iter()
+                    .any(|e| e.column_name == *col && e.value_type != value_type)
+                {
+                    return Err(AggRegistryError::InvalidDefinition(
+                        "aggregation value type cannot change".into(),
+                    ));
+                }
                 return Ok(col.clone());
             }
         }
 
         // Slow path: advisory lock + allocate.
-        let lock_name = format!("metalog_agg_alloc_{}", self.table_name);
-        let mut advisory = AdvisoryLock::acquire(&self.db, &lock_name, 10).await?;
+        let mut advisory =
+            AdvisoryLock::acquire_scoped(&self.db, "agg_alloc", &self.table_name, 10).await?;
 
         // Re-check after lock.
-        let fresh = load_agg_entries(&self.db, &self.table_name).await?;
+        let fresh: Vec<AggRegistryEntry> = sqlx::query_as(
+            "SELECT table_name, column_name, agg_key, agg_value, aggregation_type, value_type, \
+             alias_column, state FROM _agg_registry WHERE table_name = ? ORDER BY column_name",
+        )
+        .bind(&self.table_name)
+        .fetch_all(advisory.connection())
+        .await?;
         let found = fresh
             .iter()
             .find(|entry| {
@@ -129,21 +160,74 @@ impl AggRegistry {
                     entry.agg_value.as_deref().unwrap_or(""),
                     &entry.aggregation_type,
                 );
-                k == cache_key
+                entry.status == "ACTIVE" && k == cache_key
             })
             .map(|e| e.column_name.clone());
 
         if let Some(col_name) = found {
-            let mut inner = self.inner.write().await;
-            inner.cache.insert(cache_key, col_name.clone());
-            inner.entries = fresh;
+            if fresh
+                .iter()
+                .any(|e| e.column_name == col_name && e.value_type != value_type)
+            {
+                return Err(AggRegistryError::InvalidDefinition(
+                    "aggregation value type cannot change".into(),
+                ));
+            }
+            self.replace_entries(fresh).await;
+            advisory.release().await?;
+            return Ok(col_name);
+        }
+
+        if self.preallocated {
+            let available: Vec<_> = fresh
+                .iter()
+                .filter(|entry| entry.status == "AVAILABLE" && entry.value_type == value_type)
+                .collect();
+            let entry = available
+                .first()
+                .ok_or_else(|| AggRegistryError::ReserveExhausted(value_type.into()))?;
+            let col_name = entry.column_name.clone();
+            sqlx::query(
+                "UPDATE _agg_registry SET agg_key = ?, agg_value = ?, aggregation_type = ?, state \
+                 = 'ACTIVE' WHERE table_name = ? AND column_name = ? AND state = 'AVAILABLE'",
+            )
+            .bind(agg_key)
+            .bind((!agg_value.is_empty()).then_some(agg_value))
+            .bind(agg_type)
+            .bind(&self.table_name)
+            .bind(&col_name)
+            .execute(advisory.connection())
+            .await?;
+            if available.len() <= 3 {
+                tracing::warn!(
+                    table = %self.table_name,
+                    value_type,
+                    remaining = available.len() - 1,
+                    "aggregation column reserve is low"
+                );
+            }
+            self.replace_entries(load_agg_entries(advisory.connection(), &self.table_name).await?)
+                .await;
             advisory.release().await?;
             return Ok(col_name);
         }
 
         // Allocate new slot.
-        let mut inner = self.inner.write().await;
-        let slot = inner.next_slot;
+        let physical: Vec<String> = sqlx::query_scalar(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() \
+             AND TABLE_NAME = ?",
+        )
+        .bind(&self.table_name)
+        .fetch_all(advisory.connection())
+        .await?;
+        let slot = fresh
+            .iter()
+            .map(|e| e.column_name.as_str())
+            .chain(physical.iter().map(String::as_str))
+            .filter_map(parse_agg_slot)
+            .max()
+            .unwrap_or(0)
+            + 1;
         if slot > MAX_AGG_SLOTS {
             advisory.release().await?;
             return Err(AggRegistryError::SlotExhausted);
@@ -161,7 +245,7 @@ impl AggRegistry {
             "ALTER TABLE `{}` ADD COLUMN `{col_name}` {sql_type} NULL",
             self.table_name
         );
-        match sqlx::query(&alter).execute(&self.db).await {
+        match sqlx::query(&alter).execute(advisory.connection()).await {
             Ok(_) => {}
             Err(e) if metalog_db::is_duplicate_column(&e) => {}
             Err(e) => {
@@ -188,12 +272,11 @@ impl AggRegistry {
         .bind(agg_type)
         .bind(value_type)
         .bind(now)
-        .execute(&self.db)
+        .execute(advisory.connection())
         .await?;
 
-        inner.cache.insert(cache_key, col_name.clone());
-        inner.next_slot = slot + 1;
-        inner.entries = load_agg_entries(&self.db, &self.table_name).await?;
+        self.replace_entries(load_agg_entries(advisory.connection(), &self.table_name).await?)
+            .await;
 
         advisory.release().await?;
 
@@ -207,6 +290,27 @@ impl AggRegistry {
         );
 
         Ok(col_name)
+    }
+
+    async fn replace_entries(&self, entries: Vec<AggRegistryEntry>) {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|e| e.status == "ACTIVE")
+            .collect();
+        let cache = entries
+            .iter()
+            .map(|e| {
+                (
+                    agg_cache_key(
+                        &e.agg_key,
+                        e.agg_value.as_deref().unwrap_or(""),
+                        &e.aggregation_type,
+                    ),
+                    e.column_name.clone(),
+                )
+            })
+            .collect();
+        *self.inner.write().await = AggInner { cache, entries };
     }
 
     /// Returns all active agg entries.
@@ -237,8 +341,8 @@ impl AggRegistry {
     }
 }
 
-async fn load_agg_entries(
-    db: &MySqlPool,
+async fn load_agg_entries<'e, E: sqlx::Executor<'e, Database = sqlx::MySql>>(
+    db: E,
     table_name: &str,
 ) -> Result<Vec<AggRegistryEntry>, sqlx::Error> {
     sqlx::query_as::<_, AggRegistryEntry>(

@@ -7,6 +7,12 @@ aggregation ingestion and telemetry exporters remain unavailable and fail explic
 operational limits. Integration tests validate the lifecycle; production throughput and a staged
 rollout still need validation against your workload.
 
+New tables reserve 40 dimension columns and 24 aggregate columns by default.
+Configure their types and capacities at creation, or opt out with
+`{"column_reserves":null}`. See [column reserves](rust-column-reserves.md) for the
+defaults, creation examples, and capacity management. Existing tables retain
+their allocation mode.
+
 ## Build and run
 
 Install Rust 1.98.0 and `protoc` (proto3 optional support required). The checked-in lockfile fixes

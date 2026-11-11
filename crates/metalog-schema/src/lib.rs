@@ -2,6 +2,7 @@ mod column_registry;
 mod ddl;
 mod partition_manager;
 mod provisioner;
+mod reserves;
 
 pub use column_registry::{
     validate_dim_base_type,

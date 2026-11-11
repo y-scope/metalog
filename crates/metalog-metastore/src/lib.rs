@@ -21,7 +21,12 @@ pub use metalog_types::{
     sketch::SketchData,
 };
 pub use storage_guard::{StorageMutationError, StorageMutationGuard};
-pub use table_config::{decode_table_config, default_table_config, encode_table_config};
+pub use table_config::{
+    decode_table_config,
+    default_table_config,
+    encode_table_config,
+    has_column_reserves,
+};
 pub use upsert_builder::{
     build_guard_expression,
     build_guarded_update,

@@ -77,7 +77,11 @@ mod tests {
 
 #[tokio::test]
 async fn independent_registries_and_crash_orphans_never_reuse_a_slot() {
-    let (pool, _container) = metalog_it::helpers::setup_db_with_table("registry_race").await;
+    let (pool, _container) = metalog_it::helpers::setup_db().await;
+    // This regression covers the legacy dynamic-DDL path and crash orphans.
+    metalog_schema::ensure_table(&pool, "registry_race", Some(r#"{"column_reserves":null}"#))
+        .await
+        .unwrap();
     let a = metalog_schema::ColumnRegistry::new(pool.clone(), "registry_race")
         .await
         .unwrap();

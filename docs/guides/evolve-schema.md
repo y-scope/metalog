@@ -2,6 +2,12 @@
 
 [← Back to docs](../README.md)
 
+> **Rust:** New tables now use configurable nullable column reserves by default.
+> See [Rust column reserves](../operations/rust-column-reserves.md) for current
+> allocation, capacity, and opt-out behavior. The procedures below describe the
+> original Go implementation. `INPLACE` can rebuild tables; it does not guarantee
+> cheap or interruption-free column additions on MariaDB.
+
 How to manage dynamic schema evolution for metadata tables — adding new dimensions and aggregates, handling string width expansion, and understanding the online DDL behavior.
 
 ## Overview

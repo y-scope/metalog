@@ -59,6 +59,7 @@ Task-oriented how-to guides for specific operations.
 - [Deploy HA](guides/deploy-ha.md) — Coordinator HA setup, heartbeat vs lease, graceful migration
 - [Scale Workers](guides/scale-workers.md) — Worker pool scaling, Docker Compose
 - [Evolve Schema](guides/evolve-schema.md) — Online DDL, adding dimensions and aggregates
+- [Rust Column Reserves](operations/rust-column-reserves.md) — Default nullable pools, creation-time configuration, and capacity
 - [Integrate CLP](guides/integrate-clp.md) — Worker-CLP binary integration
 - [Write Transformers](guides/write-transformers.md) — Normalizing Kafka producer schemas
 - [Extending Metalog](guides/extending.md) — All extension points for enterprise deployments
