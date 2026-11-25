@@ -72,7 +72,6 @@ async fn main() {
 async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     use std::time::Duration;
 
-    use tokio_stream::wrappers::TcpListenerStream;
     use tokio_util::sync::CancellationToken;
 
     // Install handlers before advertising readiness, including signals arriving during startup.
@@ -213,7 +212,7 @@ async fn run_server(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
                 .add_optional_service(query_svc)
                 .add_optional_service(metadata_svc)
                 .serve_with_incoming_shutdown(
-                    TcpListenerStream::new(listener),
+                    metalog_grpc::GrpcServer::incoming(listener),
                     shutdown.cancelled_owned(),
                 )
                 .await

@@ -116,6 +116,18 @@ These policies follow ProxySQL's [multiplexing rules](https://proxysql.com/docum
 
 ## Network and storage configuration
 
+The gRPC listener enables `TCP_NODELAY` on every accepted connection before passing it to Tonic.
+This prevents Nagle's algorithm and delayed acknowledgments from adding a pause between small
+HTTP/2 response writes. Tonic does not configure this socket option for a caller-supplied incoming
+stream. No client setting or protocol change is required.
+
+On a local 32-split query, changing only this socket option reduced the complete RPC median from
+43.49ms to 2.49ms. Restoring the original setting restored the delay (43.31ms). The test used the
+same release executable and database, an established connection, and 21 repetitions per setting.
+`TCP_NODELAY` can produce more small packets and increase network/CPU overhead for fragmented
+writes. Applications should still batch messages where appropriate. Bulk throughput and packet
+rates under high concurrency were not measured in this test.
+
 The server currently exposes plaintext, unauthenticated gRPC. Deploy it on a private network behind
 an authenticated TLS ingress/service mesh with authorization for admin and ingestion access. Do not
 expose the raw listener to untrusted clients. Filesystem storage requires an absolute administrator-
